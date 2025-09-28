@@ -49,6 +49,7 @@ private slots:
     void handleUpdateSpectrumPlot( const QVector<quint64>& spectrum ); // сигнал от воркера
     void handleUpdateSpectrumPTE(  const QVector<quint64>& spectrum );
     void handleError(const QString& message);
+    void handleGPUnotFound();
     void handleFinished();
     void handleUpdateRemainingMinutes(int);
 
@@ -60,19 +61,17 @@ private:
     Worker         *workerPtr        = nullptr;
     QThread        *workerThreadPtr  = nullptr;
     SettingsDialog *settings         = nullptr;
-    QTimer         *remainingTimer   = nullptr;
     int             remainingMinutes = -1;
+
     // состояние выполнения: Idle / Running / Paused
     enum class RunState { Idle, Running, Paused };
     RunState runState = RunState::Idle;
 
-    // Кеш текущего/последнего снимка (GUI-поток)
-    //QVector<quint64> pendingSpectrum; // последний полученный снимок от воркера
-    //bool havePendingSpectrum = false;
 
-    int requestIntervalMs = 1000; // default 1s
-    int plotIntervalMs    = 200;  // default 200 ms
-    int pteIntervalMs     = 500;  // default 500 ms
+
+    int progressBarMs     = 1000;
+    int plotIntervalMs    = 1000;
+    int pteIntervalMs     = 1000;
 
     // Plot caches and state (optimize updatePlot)
     QCPBars* spectrumBars = nullptr;

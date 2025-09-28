@@ -41,13 +41,6 @@
      <layout class="QVBoxLayout" name="verticalLayout">
       <item>
        <layout class="QGridLayout" name="gridLayout">
-        <item row="3" column="0">
-         <widget class="QLabel" name="histoColorLBL">
-          <property name="text">
-           <string>Цвет гистограммы</string>
-          </property>
-         </widget>
-        </item>
         <item row="3" column="2">
          <widget class="QComboBox" name="histoColorCMB">
           <item>
@@ -80,10 +73,105 @@
           </property>
          </spacer>
         </item>
-        <item row="5" column="0">
-         <widget class="QLabel" name="stringsLBL">
+        <item row="3" column="0">
+         <widget class="QLabel" name="histoColorLBL">
           <property name="text">
-           <string>Максимальное количество объединяемых строк</string>
+           <string>Цвет гистограммы</string>
+          </property>
+         </widget>
+        </item>
+        <item row="5" column="0">
+         <widget class="QLabel" name="distinctThreadLBL">
+          <property name="text">
+           <string>Выделить отдельный поток под GUI</string>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="0">
+         <widget class="QLabel" name="refreshTextLBL">
+          <property name="text">
+           <string>Частота обновления текста</string>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="2">
+         <widget class="QComboBox" name="refreshTextCMB">
+          <item>
+           <property name="text">
+            <string>10 мс</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>100 мс</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>1 с</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>10 с</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>1 м</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>10 м</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>1 ч</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+        <item row="6" column="2">
+         <widget class="QComboBox" name="stringsCMB">
+          <property name="currentText">
+           <string>2</string>
+          </property>
+          <property name="currentIndex">
+           <number>0</number>
+          </property>
+          <item>
+           <property name="text">
+            <string>2</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>3</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>4</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>5</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Все</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+        <item row="2" column="0">
+         <widget class="QLabel" name="refreshHistoLBL">
+          <property name="text">
+           <string>Частота обновления гистограммы</string>
           </property>
          </widget>
         </item>
@@ -148,6 +236,13 @@
           </item>
          </widget>
         </item>
+        <item row="6" column="0">
+         <widget class="QLabel" name="stringsLBL">
+          <property name="text">
+           <string>Максимальное количество объединяемых строк</string>
+          </property>
+         </widget>
+        </item>
         <item row="1" column="0">
          <widget class="QLabel" name="refreshProgressbarLBL">
           <property name="text">
@@ -155,108 +250,30 @@
           </property>
          </widget>
         </item>
-        <item row="0" column="2">
-         <widget class="QComboBox" name="refreshTextCMB">
-          <item>
-           <property name="text">
-            <string>10 мс</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>100 мс</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>1 с</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>10 с</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>1 м</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>10 м</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>1 ч</string>
-           </property>
-          </item>
-         </widget>
-        </item>
-        <item row="0" column="0">
-         <widget class="QLabel" name="refreshTextLBL">
-          <property name="text">
-           <string>Частота обновления текста</string>
-          </property>
-         </widget>
-        </item>
         <item row="5" column="2">
-         <widget class="QComboBox" name="stringsCMB">
-          <property name="currentText">
-           <string>2</string>
-          </property>
-          <property name="currentIndex">
-           <number>0</number>
-          </property>
-          <item>
-           <property name="text">
-            <string>2</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>3</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>4</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>5</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>Все</string>
-           </property>
-          </item>
-         </widget>
-        </item>
-        <item row="2" column="0">
-         <widget class="QLabel" name="refreshHistoLBL">
-          <property name="text">
-           <string>Частота обновления гистограммы</string>
-          </property>
-         </widget>
-        </item>
-        <item row="4" column="0">
-         <widget class="QLabel" name="distinctThreadLBL">
-          <property name="text">
-           <string>Выделить отдельный поток под GUI</string>
-          </property>
-         </widget>
-        </item>
-        <item row="4" column="2">
          <widget class="QCheckBox" name="distinctThreadCHB">
           <property name="text">
            <string/>
           </property>
           <property name="checked">
            <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="4" column="0">
+         <widget class="QLabel" name="transparencyLBL">
+          <property name="text">
+           <string>Прозрачность гистограммы</string>
+          </property>
+         </widget>
+        </item>
+        <item row="4" column="2">
+         <widget class="QSpinBox" name="transparencySPB">
+          <property name="maximum">
+           <number>100</number>
+          </property>
+          <property name="value">
+           <number>50</number>
           </property>
          </widget>
         </item>

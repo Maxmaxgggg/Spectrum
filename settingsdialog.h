@@ -3,7 +3,7 @@
 
 #include <QDialog>
 #include <QColor>
-
+#include "defines.h"
 namespace Ui { class SettingsDialog; }
 
 class SettingsDialog : public QDialog

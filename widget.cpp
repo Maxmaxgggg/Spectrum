@@ -6,19 +6,10 @@
 #include <QDateTime>
 #include <QDebug>
 #include "qcustomplot.h"
-
-// --- константы ключей QSettings
-static const char* KEY_REQUEST_MS     =     "refreshRequestMs";
-static const char* KEY_PLOT_MS        =     "refreshPlotMs";
-static const char* KEY_PTE_MS         =     "refreshPteMs";
-static const char* KEY_SPECTRUM_COLOR =     "spectrumColor";
-static const char* WIDGET_GEOMETRY    =     "geometry";
-static const char* SPLITTER_STATE     =     "splitterState";
-static const char* CODE_MATRIX        =     "matrix";
-static const char* SPECTRUM_TEXT      =     "spectrumText";
-static const char* SPECTRUM_VALUES    =     "spectrumValues";
-
+#include "defines.h"
 QStringList Colors{ "Blue", "Green", "Red" };
+
+
 
 Widget::Widget(QWidget *parent)
     : QWidget(parent),
@@ -73,7 +64,7 @@ Widget::~Widget()
         delete workerPtr;
         workerPtr = nullptr;
     }
-    this->setWindowTitle("Расчет спектра кодовых слов");
+    this->setWindowTitle(MAIN_TITLE);
     delete ui;
 }
 
@@ -89,69 +80,73 @@ void Widget::setWorker(Worker* worker, QThread* workerThread)
     connect( workerPtr,       &Worker::updateSpectrumPTE,      this, &Widget::handleUpdateSpectrumPTE,      Qt::QueuedConnection );
     connect( workerPtr,       &Worker::updateRemainingMinutes, this, &Widget::handleUpdateRemainingMinutes, Qt::QueuedConnection );
     connect( workerPtr,       &Worker::errorOccurred,          this, &Widget::handleError,                  Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::GPUnotFound,            this, &Widget::handleGPUnotFound,            Qt::QueuedConnection );
     connect( workerPtr,       &Worker::finished,               this, &Widget::handleFinished,               Qt::QueuedConnection );
 }
 
-//
-// UI handlers
-//
 
 void Widget::on_executePBN_clicked()
 {
-    if (runState == RunState::Idle) {
-        settings->setStringsCMBEnabled(false);
-        settings->setDThreadCHBEnabled(false);
-        ui->matrixPTE->setReadOnly(true);
-        ui->infoLBL->setText("");
-        ui->infoLBL->show();
-        ui->infoPBR->setValue( 0 );
-        QStringList rows = ui->matrixPTE->toPlainText().split('\n', Qt::SkipEmptyParts);
-        if (rows.isEmpty()) {
-            QMessageBox::warning(this, "Ошибка", "Матрица пустая");
-            return;
-        }
-        qint64 maxComb = 0;
-        if (settings) maxComb = settings->stringData();
-        if (maxComb <= 0 || maxComb > rows.size()) maxComb = rows.size();
-        if (!workerPtr) {
-            QMessageBox::warning(this, "Ошибка", "Worker не подключён");
-            return;
-        }
-        int maxThreads = omp_get_max_threads();
-        int workerThreads = std::max(1, maxThreads - 1);
-        if( settings->isDThreadCHBChecked() )
-            omp_set_num_threads(workerThreads);
-        else
-            omp_set_num_threads(maxThreads);
-        workerThreadPtr->start();
-        QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection,
-                                  Q_ARG(QStringList, rows), Q_ARG(quint64, (qulonglong)maxComb));
+    switch (runState) {
+        case RunState::Idle: {
+            settings->setStringsCMBEnabled(false);
+            settings->setDThreadCHBEnabled(false);
+            ui->matrixPTE->setReadOnly(true);
+            ui->infoLBL->setText("");
+            ui->infoLBL->show();
+            ui->infoPBR->setValue(0);
+            QStringList rows = ui->matrixPTE->toPlainText().split('\n', Qt::SkipEmptyParts);
+            if (rows.isEmpty()) {
+                QMessageBox::warning(this, "Ошибка", "Матрица пустая");
+                return;
+            }
+            qint64 maxComb = 0;
+            if (settings) maxComb = settings->stringData();
+            if (maxComb <= 0 || maxComb > rows.size()) maxComb = rows.size();
+            if (!workerPtr) {
+                QMessageBox::warning(this, "Ошибка", "Worker не подключён");
+                return;
+            }
+            int maxThreads = omp_get_max_threads();
+            int workerThreads = std::max(1, maxThreads - 1);
+            if (settings) {
+                if (settings->isDThreadCHBChecked())
+                    omp_set_num_threads(workerThreads);
+                else
+                    omp_set_num_threads(maxThreads);
+            }
 
-        runState = RunState::Running;
-        ui->executePBN->setText("Пауза");
+            workerThreadPtr->start();
+            QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection,
+                Q_ARG(QStringList, rows), Q_ARG(quint64, (qulonglong)maxComb));
 
-    } else if (runState == RunState::Running) {
-        // Pause
-        if (workerPtr)
-            workerPtr->pause();
+            runState = RunState::Running;
+            ui->executePBN->setText(PAUSE_TEXT);
+        } break;
 
-        runState = RunState::Paused;
-        this->setWindowTitle("Пауза");
-        ui->executePBN->setText("Продолжить");
+        case RunState::Running: {
+            if (workerPtr)
+                workerPtr->pause();
+
+            runState = RunState::Paused;
+            this->setWindowTitle(PAUSE_TEXT);
+            ui->executePBN->setText(CONTINUE_TEXT);
+        } break;
+
+        case RunState::Paused: {
+            if (workerPtr)
+                workerPtr->resume();
+
+            runState = RunState::Running;
+            ui->executePBN->setText(PAUSE_TEXT);
+            if (remainingMinutes != -1)
+                this->setWindowTitle(formatRemainingTime(remainingMinutes));
+            else
+                this->setWindowTitle(MAIN_TITLE);
+        } break;
 
 
-    } else if (runState == RunState::Paused) {
-        // Resume
-        if (workerPtr)
-            workerPtr->resume();
-
-        runState = RunState::Running;
-        ui->executePBN->setText("Пауза");
-        if(remainingMinutes != -1)
-            this->setWindowTitle(formatRemainingTime(remainingMinutes));
-        else
-            this->setWindowTitle("Расчет спектра кодовых слов");
-    }
+    } 
 }
 
 void Widget::on_exitPBN_clicked()
@@ -181,9 +176,9 @@ void Widget::handleSettingsApplied()
 {
     if(workerPtr){
         QSettings s;
-        quint64 refreshProgressbarMs    = s.value( "refreshProgressbarMs", 1000 ).toULongLong();
-        quint64 refreshPlotMs           = s.value( "refreshPlotMs",        1000 ).toULongLong();
-        quint64 refreshPteMs            = s.value( "refreshPteMs",         1000 ).toULongLong();
+        quint64 refreshProgressbarMs    = s.value( PROGRESSBAR_MS, 1000 ).toULongLong();
+        quint64 refreshPlotMs           = s.value( PLOT_MS,        1000 ).toULongLong();
+        quint64 refreshPteMs            = s.value( PTE_MS,         1000 ).toULongLong();
         workerPtr->refreshPlotMs        = refreshPlotMs;
         workerPtr->refreshProgressbarMs = refreshProgressbarMs;
         workerPtr->refreshPteMs         = refreshPteMs;
@@ -200,7 +195,7 @@ void Widget::handleStrValChanged()
     }
     runState = RunState::Idle;
     ui->infoPBR->setValue(0);
-    ui->executePBN->setText("Старт");
+    ui->executePBN->setText(START_TEXT);
 
 }
 
@@ -246,9 +241,12 @@ void Widget::handleError(const QString& message)
     QMessageBox::critical(this, "Ошибка", message);
     // reset UI
     runState = RunState::Idle;
-    ui->executePBN->setText("Старт");
+    ui->executePBN->setText(START_TEXT);
 }
-
+void Widget::handleGPUnotFound()
+{
+    QMessageBox::warning(this, "Предупреждение", "GPU не найдено. Расчеты будут производиться на CPU");
+}
 void Widget::handleFinished()
 {
     runState = RunState::Idle;
@@ -257,12 +255,13 @@ void Widget::handleFinished()
         workerThreadPtr->wait();
     }
 
-    settings->setStringsCMBEnabled(true);
-    settings->setDThreadCHBEnabled(true);
-    ui->executePBN->setText("Старт");
-    ui->matrixPTE->setReadOnly(false);
-    ui->infoLBL->setText("Готово");
-    this->setWindowTitle("Расчет спектра кодовых слов");
+    settings->setStringsCMBEnabled(   true        );
+    settings->setDThreadCHBEnabled(   true        );
+    ui->matrixPTE->setReadOnly(       false       );
+
+    ui->executePBN->setText(          START_TEXT  );
+    ui->infoLBL->setText(             READY_TEXT  );
+    this->setWindowTitle(             MAIN_TITLE  );
 }
 
 
@@ -334,9 +333,9 @@ void Widget::updatePlotFast(const QVector<quint64>& spectrum)
             // color from settings
             QSettings s;
             QColor c = Qt::blue;
-            if (s.contains(KEY_SPECTRUM_COLOR))
-                c = QColor(Colors[s.value(KEY_SPECTRUM_COLOR).toInt()]);
-            c.setAlpha( 128 );
+            if (s.contains(SPECTRUM_COLOR))
+                c = QColor(Colors[s.value(SPECTRUM_COLOR).toInt()]);
+            c.setAlpha( ( 100-s.value(TRANSPARENCY_VALUE).toInt() )*255/100 );
             bars->setBrush(QBrush(c));
             bars->setPen(QPen(Qt::black));
         }
@@ -370,9 +369,10 @@ QVector<QString> Widget::buildAxisLabels(int size, int step) const
 void Widget::applySettings()
 {
     QSettings s;
-    requestIntervalMs = s.value( KEY_REQUEST_MS, requestIntervalMs ).toInt();
-    plotIntervalMs    = s.value( KEY_PLOT_MS,    plotIntervalMs    ).toInt();
-    pteIntervalMs     = s.value( KEY_PTE_MS,     pteIntervalMs     ).toInt();
+    
+    progressBarMs     = s.value( PROGRESSBAR_MS, progressBarMs     ).toInt();
+    plotIntervalMs    = s.value( PLOT_MS,        plotIntervalMs    ).toInt();
+    pteIntervalMs     = s.value( PTE_MS,         pteIntervalMs     ).toInt();
 
     applySpectrumColor();
 }
@@ -382,8 +382,8 @@ void Widget::applySpectrumColor()
     QSettings s;
     QColor c = Qt::blue;
 
-    if (s.contains(KEY_SPECTRUM_COLOR)) c = QColor(Colors[s.value(KEY_SPECTRUM_COLOR).toInt()]);
-    c.setAlpha( 128 );
+    if (s.contains(SPECTRUM_COLOR)) c = QColor(Colors[s.value(SPECTRUM_COLOR).toInt()]);
+    c.setAlpha( (100-s.value(TRANSPARENCY_VALUE).toInt())*255/100);
     if ( ui->spectrumCPT->plottableCount() > 0 ) {
         QCPBars *bars = qobject_cast<QCPBars*>(ui->spectrumCPT->plottable());
         if (bars) {
@@ -402,9 +402,9 @@ void Widget::saveSettings()
     s.setValue(     CODE_MATRIX,     ui->matrixPTE->toPlainText()   );
     s.setValue(     SPECTRUM_TEXT,   ui->spectrumPTE->toPlainText() );
     s.setValue(     WIDGET_GEOMETRY, this->saveGeometry()           );
-    s.setValue(     KEY_REQUEST_MS,  requestIntervalMs              );
-    s.setValue(     KEY_PLOT_MS,     plotIntervalMs                 );
-    s.setValue(     KEY_PTE_MS,      pteIntervalMs                  );
+    s.setValue(     PROGRESSBAR_MS,  progressBarMs                  );
+    s.setValue(     PLOT_MS,         plotIntervalMs                 );
+    s.setValue(     PTE_MS,          pteIntervalMs                  );
     QVariantList values;
     for (double v : std::as_const(yCache))
         values << v;
@@ -417,25 +417,23 @@ void Widget::loadSettings()
 {
     QSettings s;
 
-    this->restoreGeometry(         s.value( WIDGET_GEOMETRY ).toByteArray()   );
-    if( splitter )
-        splitter->restoreState(    s.value( SPLITTER_STATE  ).toByteArray()   );
-    ui->spectrumPTE->setPlainText( s.value( SPECTRUM_TEXT).toString()         );
-    ui->matrixPTE->setPlainText(   s.value( CODE_MATRIX     ).toString());
-    requestIntervalMs =            s.value( KEY_REQUEST_MS, requestIntervalMs ).toInt();
-    plotIntervalMs    =            s.value( KEY_PLOT_MS,    plotIntervalMs    ).toInt();
-    pteIntervalMs     =            s.value( KEY_PTE_MS,     pteIntervalMs     ).toInt();
+    this->restoreGeometry(                    s.value( WIDGET_GEOMETRY                ).toByteArray()       );
+    if( splitter ) splitter->restoreState(    s.value( SPLITTER_STATE                 ).toByteArray()       );
+    ui->spectrumPTE->setPlainText(            s.value( SPECTRUM_TEXT                  ).toString()          );
+    ui->matrixPTE->setPlainText(              s.value( CODE_MATRIX                    ).toString()          );
+    progressBarMs     =                       s.value( PROGRESSBAR_MS, progressBarMs  ).toInt();
+    plotIntervalMs    =                       s.value( PLOT_MS,        plotIntervalMs ).toInt();
+    pteIntervalMs     =                       s.value( PTE_MS,         pteIntervalMs  ).toInt();
 
     if (s.contains(SPECTRUM_VALUES)) {
         QVariantList values = s.value(SPECTRUM_VALUES).toList();
         QVector<quint64> spectrum;
         spectrum.reserve(values.size());
         for (const QVariant &v : values)
-            spectrum.append(v.toULongLong()); // или toDouble(), если значения не целые
+            spectrum.append(v.toULongLong());
         // сразу передаём в updatePlotFast
         updatePlotFast(spectrum);
     }
-    //applySpectrumColor();
 }
 
 QString Widget::formatRemainingTime(int minutesTotal)

@@ -30,22 +30,24 @@ signals:
     void errorOccurred(       const QString& message            );
     void finished();
     void updateRemainingMinutes(int minutesLeft);
+    void GPUnotFound();
 
 private:
-    // helpers for combination counting / unranking
-    static quint64 combin(unsigned int n, unsigned int k);
-    static quint64 generateBitMask(unsigned k, unsigned r, quint64 idx);
-    static quint64 sumCombinations(quint64 k, quint64 maxComb);
+    quint64 generateBitMask(unsigned k, unsigned r, quint64 idx, quint64** C);
+    static  quint64 sumCombinations(quint64 k, quint64 maxComb);
+    void    freeBinomTable(quint64** C, unsigned maxN);
 
+    quint64**                                binomTable;
 public:
-    std::atomic<quint64>     refreshProgressbarMs;
-    std::atomic<quint64>     refreshPlotMs;
-    std::atomic<quint64>     refreshPteMs;
+    std::atomic<quint64>                     refreshProgressbarMs;
+    std::atomic<quint64>                     refreshPlotMs;
+    std::atomic<quint64>                     refreshPteMs;
+    
 
 private:
     std::atomic<int> paused    { 0 };
     std::atomic<int> cancelled { 0 };
-
+    quint64** buildBinomTable(unsigned maxN);
     quint64 lastDoneOps = 0;
 
 };
