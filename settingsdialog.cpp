@@ -21,20 +21,15 @@ SettingsDialog::SettingsDialog(QWidget *parent)
         int idx = ui->refreshProgressbarCMB->findData(s.value(PROGRESSBAR_MS));
         ui->refreshProgressbarCMB->setCurrentIndex( idx );
     }
-    if ( s.contains(PLOT_MS) ) {
-        int idx = ui->refreshHistoCMB->findData(s.value(PLOT_MS));
-        ui->refreshHistoCMB->setCurrentIndex( idx );
-    }
-    if ( s.contains(PTE_MS) ) {
-        int idx = ui->refreshTextCMB->findData(s.value(PTE_MS));
-        ui->refreshTextCMB->setCurrentIndex( idx );
+    if (s.contains(SPECTRUM_MS)) {
+        int idx = ui->refreshSpectrumCMB->findData(s.value(SPECTRUM_MS));
+        ui->refreshSpectrumCMB->setCurrentIndex(idx);
     }
     if ( s.contains(STRING_VALUE) ) {
-        int idx = ui->stringsCMB->findData(s.value(STRING_VALUE));
-        ui->stringsCMB->setCurrentIndex( idx );
+        ui->stringsSPB->setValue( s.value( STRING_VALUE ).toInt() );
     }
-    if (s.contains(D_THREAD_CHECKED)) {
-        ui->distinctThreadCHB->setChecked(s.value(D_THREAD_CHECKED).toBool());
+    if (s.contains(USE_GPU_CHECKED)) {
+        ui->useGpuCHB->setChecked(s.value(USE_GPU_CHECKED).toBool());
     }
     if (s.contains(TRANSPARENCY_VALUE)) {
         ui->transparencySPB->setValue(s.value(TRANSPARENCY_VALUE).toInt());
@@ -52,39 +47,44 @@ int SettingsDialog::spectrumColorIndex() const
     return ui->histoColorCMB->currentIndex();
 }
 
-int SettingsDialog::refreshRequestIndex() const
+int SettingsDialog::refreshSpectrumIndex() const
 {
-    return ui->refreshProgressbarCMB->currentIndex();
+    return ui->refreshSpectrumCMB->currentIndex();
 }
 
-int SettingsDialog::refreshPlotIndex() const
+int SettingsDialog::stringValue() const
 {
-    return ui->refreshHistoCMB->currentIndex();
+    return ui->stringsSPB->value();
 }
 
-int SettingsDialog::refreshPteIndex() const
+void SettingsDialog::setUseGpuCHBChecked(bool b)
 {
-    return ui->refreshTextCMB->currentIndex();
+    ui->useGpuCHB->setChecked(b);
 }
 
-int SettingsDialog::stringData() const
+void SettingsDialog::setUseGpuCHBEnabled(bool b)
 {
-    return ui->stringsCMB->currentData().toInt();
+    ui->useGpuCHB->setEnabled(b);
 }
 
-void SettingsDialog::setDThreadCHBEnabled(bool b)
+
+void SettingsDialog::setStringsSPBEnabled(bool b)
 {
-    ui->distinctThreadCHB->setEnabled(b);
+    ui->stringsSPB->setEnabled( b );
 }
 
-void SettingsDialog::setStringsCMBEnabled(bool b)
+void SettingsDialog::setStringsSPBMaxValue(int v)
 {
-    ui->stringsCMB->setEnabled( b );
+    int val = v;
+    if (val == 0 || val > MAX_K)
+        val = MAX_K;
+    ui->stringsSPB->setMaximum(val);
+    ui->stringsSPB->setValue(val);
 }
 
-bool SettingsDialog::isDThreadCHBChecked() const
+bool SettingsDialog::isUseGpuCHBChecked() const
 {
-    return ui->distinctThreadCHB->isChecked();
+    return ui->useGpuCHB->isChecked();
 }
 
 void SettingsDialog::on_buttonBox_accepted()
@@ -95,19 +95,17 @@ void SettingsDialog::on_buttonBox_accepted()
 
     QVariant colVal            =    ui->histoColorCMB->currentData();
     QVariant barVal            =    ui->refreshProgressbarCMB->currentData();
-    QVariant plotVal           =    ui->refreshHistoCMB->currentData();
-    QVariant pteVal            =    ui->refreshTextCMB->currentData();
-    QVariant strVal            =    ui->stringsCMB->currentData();
-    QVariant dThrChecked       =    ui->distinctThreadCHB->isChecked();
+    QVariant sptrVal           =    ui->refreshSpectrumCMB->currentData();
+    QVariant strVal            =    ui->stringsSPB->value();
+    QVariant useGPUChecked     =    ui->useGpuCHB->isChecked();
     QVariant trpVal            =    ui->transparencySPB->value();
 
-    if (colVal.isValid() )          s.setValue( SPECTRUM_COLOR,         colVal.toInt()       );
-    if (barVal.isValid() )          s.setValue( PROGRESSBAR_MS,         barVal.toInt()       );
-    if (plotVal.isValid())          s.setValue( PLOT_MS,                plotVal.toInt()      );
-    if (pteVal.isValid() )          s.setValue( PTE_MS,                 pteVal.toInt()       );
-    if (strVal.isValid() )          s.setValue( STRING_VALUE,           strVal.toInt()       );
-    if (dThrChecked.isValid())      s.setValue( D_THREAD_CHECKED,       dThrChecked.toBool() );
-    if (trpVal.isValid())           s.setValue( TRANSPARENCY_VALUE,     trpVal.toInt()       );
+    if (colVal.isValid() )          s.setValue( SPECTRUM_COLOR,         colVal.toInt()         );
+    if (barVal.isValid() )          s.setValue( PROGRESSBAR_MS,         barVal.toInt()         );
+    if (sptrVal.isValid())          s.setValue( SPECTRUM_MS,            sptrVal.toInt()        );
+    if (strVal.isValid() )          s.setValue( STRING_VALUE,           strVal.toInt()         );
+    if (useGPUChecked.isValid())    s.setValue( USE_GPU_CHECKED,        useGPUChecked.toBool() );
+    if (trpVal.isValid())           s.setValue( TRANSPARENCY_VALUE,     trpVal.toInt()         );
     // Записываем в реестр
     s.sync();
     emit settingsApplied();
@@ -123,10 +121,9 @@ void SettingsDialog::on_buttonBox_rejected()
     // Читаем сохранённые значения. Второй аргумент — значение по умолчанию
     int  spectrumColor          = s.value( SPECTRUM_COLOR,     0    ).toInt();
     int  refreshProgressbarMs   = s.value( PROGRESSBAR_MS,     1000 ).toInt();
-    int  refreshPlotMs          = s.value( PLOT_MS,            1000 ).toInt();
-    int  refreshPteMs           = s.value( PTE_MS,             1000 ).toInt();
-    int  strVal                 = s.value( STRING_VALUE,       -1   ).toInt();
-    bool dThrChecked            = s.value( D_THREAD_CHECKED,   1    ).toBool();
+    int  refreshSpectrumMs      = s.value( SPECTRUM_MS,        1000 ).toInt();
+    int  strVal                 = s.value( STRING_VALUE,       1    ).toInt();
+    bool useGPUChecked          = s.value( USE_GPU_CHECKED,    1    ).toBool();
     int  trpVal                 = s.value( TRANSPARENCY_VALUE, 50   ).toInt();
     // Устанавливаем их в соответствующие элементы UI
     ui->histoColorCMB->setCurrentIndex(
@@ -135,53 +132,41 @@ void SettingsDialog::on_buttonBox_rejected()
     ui->refreshProgressbarCMB->setCurrentIndex(
         ui->refreshProgressbarCMB->findData(refreshProgressbarMs)
         );
-    ui->refreshHistoCMB->setCurrentIndex(
-        ui->refreshHistoCMB->findData(refreshPlotMs)
+    ui->stringsSPB->setValue(
+        strVal
         );
-    ui->refreshTextCMB->setCurrentIndex(
-        ui->refreshTextCMB->findData(refreshPteMs)
-        );
-    ui->stringsCMB->setCurrentIndex(
-        ui->stringsCMB->findData(strVal)
-        );
-    ui->distinctThreadCHB->setChecked(
-        dThrChecked
+    ui->useGpuCHB->setChecked(
+        useGPUChecked
         );
     ui->transparencySPB->setValue(
         trpVal
+        );
+    ui->refreshSpectrumCMB->setCurrentIndex(
+        ui->refreshSpectrumCMB->findData(refreshSpectrumMs)
         );
 }
 
 void SettingsDialog::setData()
 {
-    ui->refreshTextCMB->setItemData( 0, 10      );
-    ui->refreshTextCMB->setItemData( 1, 100     );
-    ui->refreshTextCMB->setItemData( 2, 1000    );
-    ui->refreshTextCMB->setItemData( 3, 10000   );
-    ui->refreshTextCMB->setItemData( 4, 60000   );
-    ui->refreshTextCMB->setItemData( 5, 600000  );
-    ui->refreshTextCMB->setItemData( 6, 3600000 );
 
-    ui->refreshProgressbarCMB->setItemData( 0, 1000  );
-    ui->refreshProgressbarCMB->setItemData( 1, 10000 );
-    ui->refreshProgressbarCMB->setItemData( 2, 60000 );
+    ui->refreshProgressbarCMB->setItemData( 0, 100   );
+    ui->refreshProgressbarCMB->setItemData( 1, 500   );
+    ui->refreshProgressbarCMB->setItemData( 2, 1000  );
+    ui->refreshProgressbarCMB->setItemData( 3, 5000  );
+    ui->refreshProgressbarCMB->setItemData( 4, 10000 );
+    ui->refreshProgressbarCMB->setItemData( 5, 60000 );
 
-    ui->refreshHistoCMB->setItemData( 0, 10      );
-    ui->refreshHistoCMB->setItemData( 1, 100     );
-    ui->refreshHistoCMB->setItemData( 2, 1000    );
-    ui->refreshHistoCMB->setItemData( 3, 10000   );
-    ui->refreshHistoCMB->setItemData( 4, 60000   );
-    ui->refreshHistoCMB->setItemData( 5, 600000  );
-    ui->refreshHistoCMB->setItemData( 6, 3600000 );
+    ui->refreshSpectrumCMB->setItemData( 0, 100     );
+    ui->refreshSpectrumCMB->setItemData( 1, 500     );
+    ui->refreshSpectrumCMB->setItemData( 2, 1000    );
+    ui->refreshSpectrumCMB->setItemData( 3, 5000    );
+    ui->refreshSpectrumCMB->setItemData( 4, 10000   );
+    ui->refreshSpectrumCMB->setItemData( 5, 60000   );
+    ui->refreshSpectrumCMB->setItemData( 6, 600000  );
+    ui->refreshSpectrumCMB->setItemData( 7, 3600000 );
 
     ui->histoColorCMB->setItemData( 0, 0 );
     ui->histoColorCMB->setItemData( 1, 1 );
     ui->histoColorCMB->setItemData( 2, 2 );
-
-    ui->stringsCMB->setItemData( 0,  2 );
-    ui->stringsCMB->setItemData( 1,  3 );
-    ui->stringsCMB->setItemData( 2,  4 );
-    ui->stringsCMB->setItemData( 3,  5 );
-    ui->stringsCMB->setItemData( 4, -1 );
 }
 

@@ -102,6 +102,11 @@ void Worker::cancel()
     cancelled.store(1);
 }
 
+void Worker::useGPU(bool b)
+{
+    this->USE_GPU = b;
+}
+
 void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
 {
     // Обработка матрицы
@@ -119,18 +124,13 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
             return;
         }
     }
-
-    // Проверка наличия GPU
-    bool GPUfound = true;
     int count = 0;
     cudaError_t err = cudaGetDeviceCount(&count);
-    if (err != cudaSuccess || count == 0) {
-        GPUfound = false;
+    if ( USE_GPU && ( err != cudaSuccess || count == 0 ) ) {
+        USE_GPU = false;
         emit GPUnotFound();
     }
-    // Пока захардим CPU-ветку
-    //GPUfound = false;
-    if (GPUfound) {
+    if (USE_GPU) {
 
         cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, 0);
@@ -169,12 +169,26 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
         quint64 totalOps = sumCombinations(k, maxComb);
         quint64 doneOps  = 0;
         copyMatrixAndTableToSymbol(h_matrix, binomTable, wordsNeeded);
-        quint64* h_spectrum = (quint64*)calloc(n + 1, sizeof(quint64));
 
-        quint64* d_spectrum;
-        cudaMalloc((void**)&d_spectrum, (n + 1) * sizeof(quint64));
+        quint64* h_spectrum = nullptr;
+        quint64* d_spectrum = nullptr;
+        cudaMallocHost((void**) & h_spectrum, (n + 1) * sizeof(quint64));
+        cudaMalloc((void**) &d_spectrum, (n + 1) * sizeof(quint64));
         cudaMemset(d_spectrum, 0, (n + 1) * sizeof(quint64));
+        cudaStream_t stream;
+        cudaStreamCreate(&stream);
+        cudaEvent_t ev;
+        cudaEventCreate(&ev);
+        
 
+        auto startTime = steady_clock::now();
+        auto lastTimeSpectrum = startTime;
+        auto lastTimeBar = startTime;
+        auto lastEstimateTime = startTime;
+        bool copy = false;
+        QSettings s;
+        refreshSpectrumMs    = s.value(SPECTRUM_MS).toULongLong();
+        refreshProgressbarMs = s.value(PROGRESSBAR_MS).toULongLong();
         for (int r = 0; r <= maxComb; r++)
         {
             quint64 curOps = binomTable[k][r];
@@ -182,12 +196,19 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
             for (quint64 offset = 0; offset < curOps; offset += chunkSize)
             {
                 quint64 thisChunkSize = qMin(chunkSize, curOps - offset); // последний чанк может быть меньше
-
+                while (paused.load() != 0) {
+                    QThread::msleep(50);
+                    if (cancelled.load()) break;
+                }
+                if (cancelled.load()) {
+                    break;
+                }
 
                 // Запуск ядра
                 launchSpectrumKernel(
                         maxBlocks,             // Число блоков
                         threadsPerBlock,       // Число нитей на блок
+                        stream,
                         d_spectrum,            // Копия спектра в глобальной памяти
                         n,                     // Длина строки матрицы в битах
                         k,                     // Число строк матрицы
@@ -196,23 +217,63 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
                         thisChunkSize,         // Размер чанка
                         r                      // Число единиц в битовой маске (число складываемых строк)
                 );
-
-                //cudaDeviceSynchronize();
                 doneOps += thisChunkSize;
-                cudaMemcpy(h_spectrum, d_spectrum, (n+1)*sizeof(quint64), cudaMemcpyDeviceToHost);
-                QVector<quint64> spectrumCopy(n + 1);
-                for (quint64 w = 0; w <= n; ++w) spectrumCopy[w] = h_spectrum[w];
-                emit updateSpectrumPTE(spectrumCopy);
-                emit updateSpectrumPlot(spectrumCopy);
-                emit updateInfoPBR(doneOps * 100 / totalOps);
+                std::chrono::duration<quint64, std::milli> spectrumMs{ refreshSpectrumMs.load() };
+                std::chrono::duration<quint64, std::milli> barMs{      refreshProgressbarMs.load()   };
+                auto now = steady_clock::now();
+                if (now - lastEstimateTime >= std::chrono::seconds(10)) {
+                    lastEstimateTime = now;
+                    double elapsedSec = duration_cast<seconds>(now - startTime).count();
+                    double speed = 1.0;
+
+                    if (doneOps != 0)
+                        speed = double(doneOps) / elapsedSec;
+
+                    quint64 remainingOps = totalOps > doneOps ? totalOps - doneOps : 0;
+                    double estSec = speed > 0 ? remainingOps / speed : 0.0;
+
+                    int minutesLeft = int(std::ceil(estSec / 60.0));
+                    emit updateRemainingMinutes(minutesLeft);
+
+                }
+                if (now - lastTimeSpectrum >  spectrumMs ) {
+                    copy = true;
+                    lastTimeSpectrum = now;
+                    cudaMemcpyAsync(h_spectrum, d_spectrum, (n + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream);
+                    cudaEventRecord(ev, stream);
+                }
+                if ( cudaEventQuery(ev) == cudaSuccess && copy ) {
+                    copy = false;
+                    QVector<quint64> spectrumCopy(n + 1);
+                    for (quint64 w = 0; w <= n; ++w) spectrumCopy[w] = h_spectrum[w];
+                    emit updateSpectrumPTE(spectrumCopy);
+                    emit updateSpectrumPlot(spectrumCopy);
+                }
+                if (now - lastTimeBar > barMs ) {
+                    lastTimeBar = now;
+                    emit updateInfoPBR(doneOps * 100 / totalOps);
+                }
+                
+            }
+            if (cancelled.load()) {
+                break;
             }
         }
+        if (cancelled.load()) {
+            emit updateInfoPBR(0);
+            emit finished();
+        }
+        emit updateInfoPBR(100);
+        cudaDeviceSynchronize();
+        cudaMemcpy(h_spectrum, d_spectrum, (n + 1) * sizeof(quint64), cudaMemcpyDeviceToHost);
+        QVector<quint64> spectrumCopy(n + 1);
+        for (quint64 w = 0; w <= n; ++w) spectrumCopy[w] = h_spectrum[w];
+        emit updateSpectrumPTE(spectrumCopy);
+        emit updateSpectrumPlot(spectrumCopy);
         emit finished();
-        free(h_matrix);
-        free(h_spectrum);
         freeBinomTable(binomTable, MAX_K);
         cudaFree(d_spectrum);
-
+        cudaFreeHost(h_spectrum);
 
 
 
@@ -263,15 +324,13 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
         QSettings s;
 
 
-        refreshPlotMs        = s.value( PLOT_MS        ).toULongLong();
-        refreshPteMs         = s.value( PTE_MS         ).toULongLong();
+        refreshSpectrumMs    = s.value( SPECTRUM_MS    ).toULongLong();
         refreshProgressbarMs = s.value( PROGRESSBAR_MS ).toULongLong();
 
-        auto startTime = steady_clock::now();
-        auto lastTimePte = startTime;
-        auto lastTimePlot = startTime;
-        auto lastTimeBar = startTime;
-        auto lastEstimateTime = startTime;
+        auto startTime         = steady_clock::now();
+        auto lastTimeSpectrum  = startTime;
+        auto lastTimeBar       = startTime;
+        auto lastEstimateTime  = startTime;
 
         binomTable = buildBinomTable(MAX_K);
         for (unsigned r = 0; r <= maxComb; ++r) {
@@ -319,27 +378,18 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
                     ++doneOps;
 
                     if (omp_get_thread_num() == 0) {
-                        std::chrono::duration<quint64, std::milli> pteMs{  refreshPteMs.load()         };
-                        std::chrono::duration<quint64, std::milli> plotMs{ refreshPlotMs.load()        };
-                        std::chrono::duration<quint64, std::milli> barMs{  refreshProgressbarMs.load() };
+                        std::chrono::duration<quint64, std::milli> spectrumMs{  refreshSpectrumMs.load()  };
+                        std::chrono::duration<quint64, std::milli> barMs{  refreshProgressbarMs.load()    };
 
                         auto now = steady_clock::now();
-                        if (now - lastTimePte >= pteMs) {
-                            lastTimePte = now;
+                        if (now - lastTimeSpectrum >= spectrumMs) {
+                            lastTimeSpectrum = now;
                             QVector<quint64> spectrumCopy(n + 1);
                             #pragma omp critical
                             {
                                 for (quint64 w = 0; w <= n; ++w) spectrumCopy[(int)w] = spectrum[(quint64)w];
                             }
                             emit updateSpectrumPTE(spectrumCopy);
-                        }
-                        if (now - lastTimePlot >= plotMs) {
-                            lastTimePlot = now;
-                            QVector<quint64> spectrumCopy(n + 1);
-                            #pragma omp critical
-                            {
-                                for (quint64 w = 0; w <= n; ++w) spectrumCopy[(int)w] = spectrum[(quint64)w];
-                            }
                             emit updateSpectrumPlot(spectrumCopy);
                         }
                         if (now - lastTimeBar >= barMs) {
@@ -398,5 +448,5 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
         freeBinomTable(binomTable, MAX_K);
         free(spectrum);
         free(packed);
-    } //if (!GPUfound)
+    } //if (!USE_GPU)
 }

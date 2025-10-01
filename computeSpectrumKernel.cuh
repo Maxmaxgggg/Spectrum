@@ -7,7 +7,7 @@ __host__ void copyMatrixAndTableToSymbol(quint64* h_matrix,
     quint64** h_binomTable,
     quint64 wordsNeeded
 );
-__global__ void computeSpectrumChunkKernel(
+__global__ void computeSpectrumKernel(
     quint64* d_spectrum,
     int n,
     int k,
@@ -19,6 +19,7 @@ __global__ void computeSpectrumChunkKernel(
 __host__ void launchSpectrumKernel(
     int numOfBlocks,
     int threadsPerBlock,
+    cudaStream_t stream,
     quint64* d_spectrum,
     int n,
     int k,

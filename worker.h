@@ -21,6 +21,7 @@ public slots:
     void pause();
     void resume();
     void cancel();
+    void useGPU(bool);
 
 
 signals:
@@ -40,15 +41,14 @@ private:
     quint64**                                binomTable;
 public:
     std::atomic<quint64>                     refreshProgressbarMs;
-    std::atomic<quint64>                     refreshPlotMs;
-    std::atomic<quint64>                     refreshPteMs;
+    std::atomic<quint64>                     refreshSpectrumMs;
     
 
 private:
     std::atomic<int> paused    { 0 };
     std::atomic<int> cancelled { 0 };
     quint64** buildBinomTable(unsigned maxN);
-    quint64 lastDoneOps = 0;
+    bool USE_GPU = true;
 
 };
 

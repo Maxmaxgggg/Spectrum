@@ -13,15 +13,15 @@ public:
     explicit SettingsDialog(QWidget *parent = nullptr);
     ~SettingsDialog() override;
 
-    int      spectrumColorIndex()  const;
-    int      refreshRequestIndex() const;
-    int      refreshPlotIndex()    const;
-    int      refreshPteIndex()     const;
-    int      stringData()          const;
-    bool     isDThreadCHBChecked() const;
+    int      spectrumColorIndex()   const;
+    int      refreshSpectrumIndex() const;
+    int      stringValue()          const;
+    bool     isUseGpuCHBChecked()   const;
 
-    void     setDThreadCHBEnabled(bool);
-    void     setStringsCMBEnabled(bool);
+    void     setUseGpuCHBChecked( bool);
+    void     setUseGpuCHBEnabled( bool);
+    void     setStringsSPBEnabled(bool);
+    void     setStringsSPBMaxValue(int);
     
 public: signals:
     void     settingsApplied();

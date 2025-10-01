@@ -69,6 +69,7 @@ __host__ void copyMatrixAndTableToSymbol( quint64* h_matrix,
 __host__ void launchSpectrumKernel(
     int numOfBlocks,
     int threadsPerBlock,
+    cudaStream_t stream,
     quint64* d_spectrum,
     int n,
     int k,
@@ -78,7 +79,7 @@ __host__ void launchSpectrumKernel(
     quint64 r
 )
 {
-    computeSpectrumChunkKernel<<<numOfBlocks, threadsPerBlock>>>(
+    computeSpectrumKernel<<<numOfBlocks, threadsPerBlock, (n + 1) * sizeof(quint64), stream >>>(
         d_spectrum,
         n,
         k,
@@ -88,7 +89,7 @@ __host__ void launchSpectrumKernel(
         r
     );
 }
-__global__ void computeSpectrumChunkKernel(
+__global__ void computeSpectrumKernel(
                     quint64* d_spectrum,
                     int n,
                     int k,

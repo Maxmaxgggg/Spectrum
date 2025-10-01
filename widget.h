@@ -44,7 +44,7 @@ private slots:
     void handleSettingsApplied();
     void handleStrValChanged();
 
-    // слоты от воркера
+    // Обарботка сигналова воркера
     void handleUpdateInfoPBR(int percent);
     void handleUpdateSpectrumPlot( const QVector<quint64>& spectrum ); // сигнал от воркера
     void handleUpdateSpectrumPTE(  const QVector<quint64>& spectrum );
@@ -52,6 +52,8 @@ private slots:
     void handleGPUnotFound();
     void handleFinished();
     void handleUpdateRemainingMinutes(int);
+
+    void handleMatrixChanged();
 
     bool eventFilter(QObject *watched, QEvent *event) override;
 
@@ -70,8 +72,7 @@ private:
 
 
     int progressBarMs     = 1000;
-    int plotIntervalMs    = 1000;
-    int pteIntervalMs     = 1000;
+    int spectrumMs        = 1000;
 
     // Plot caches and state (optimize updatePlot)
     QCPBars* spectrumBars = nullptr;
