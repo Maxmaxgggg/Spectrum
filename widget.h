@@ -71,8 +71,8 @@ private:
 
 
 
-    int progressBarMs     = 1000;
-    int spectrumMs        = 1000;
+    int progressBarMs     = 100;
+    int spectrumMs        = 100;
 
     // Plot caches and state (optimize updatePlot)
     QCPBars* spectrumBars = nullptr;

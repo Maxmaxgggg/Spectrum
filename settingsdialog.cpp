@@ -25,8 +25,15 @@ SettingsDialog::SettingsDialog(QWidget *parent)
         int idx = ui->refreshSpectrumCMB->findData(s.value(SPECTRUM_MS));
         ui->refreshSpectrumCMB->setCurrentIndex(idx);
     }
+    if (s.contains(USE_GRAY_CODE_CHECKED)) {
+        ui->useGrayCodeCHB->blockSignals(true); 
+        ui->useGrayCodeCHB->setChecked(s.value(USE_GRAY_CODE_CHECKED).toBool());
+        ui->stringsSPB->setEnabled(!s.value(USE_GRAY_CODE_CHECKED).toBool());
+        ui->useGrayCodeCHB->blockSignals(false);
+    }
     if ( s.contains(STRING_VALUE) ) {
-        ui->stringsSPB->setValue( s.value( STRING_VALUE ).toInt() );
+        int val = s.value(STRING_VALUE).toInt();
+        ui->stringsSPB->setValue( val );
     }
     if (s.contains(USE_GPU_CHECKED)) {
         ui->useGpuCHB->setChecked(s.value(USE_GPU_CHECKED).toBool());
@@ -34,6 +41,9 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     if (s.contains(TRANSPARENCY_VALUE)) {
         ui->transparencySPB->setValue(s.value(TRANSPARENCY_VALUE).toInt());
     }
+    int val = ui->stringsSPB->value();
+    int t = 5;
+
 
 }
 
@@ -67,6 +77,16 @@ void SettingsDialog::setUseGpuCHBEnabled(bool b)
     ui->useGpuCHB->setEnabled(b);
 }
 
+void SettingsDialog::setUseGrayCodeCHBEnabled(bool b)
+{
+    ui->useGrayCodeCHB->setEnabled(b);
+}
+
+void SettingsDialog::setUseGrayCodeCHBChecked(bool b)
+{
+    ui->useGrayCodeCHB->setChecked(b);
+}
+
 
 void SettingsDialog::setStringsSPBEnabled(bool b)
 {
@@ -82,9 +102,19 @@ void SettingsDialog::setStringsSPBMaxValue(int v)
     ui->stringsSPB->setValue(val);
 }
 
+void SettingsDialog::setStringsSPBValue(int v)
+{
+    ui->stringsSPB->setValue(v);
+}
+
 bool SettingsDialog::isUseGpuCHBChecked() const
 {
     return ui->useGpuCHB->isChecked();
+}
+
+bool SettingsDialog::isUseGrayCodeCHBChecked() const
+{
+    return ui->useGrayCodeCHB->isChecked();
 }
 
 void SettingsDialog::on_buttonBox_accepted()
@@ -93,19 +123,21 @@ void SettingsDialog::on_buttonBox_accepted()
 
     s.setValue( SETTINGS_GEOMETRY, this->saveGeometry() );
 
-    QVariant colVal            =    ui->histoColorCMB->currentData();
-    QVariant barVal            =    ui->refreshProgressbarCMB->currentData();
-    QVariant sptrVal           =    ui->refreshSpectrumCMB->currentData();
-    QVariant strVal            =    ui->stringsSPB->value();
-    QVariant useGPUChecked     =    ui->useGpuCHB->isChecked();
-    QVariant trpVal            =    ui->transparencySPB->value();
+    QVariant colVal              =    ui->histoColorCMB->currentData();
+    QVariant barVal              =    ui->refreshProgressbarCMB->currentData();
+    QVariant sptrVal             =    ui->refreshSpectrumCMB->currentData();
+    QVariant strVal              =    ui->stringsSPB->value();
+    QVariant useGPUChecked       =    ui->useGpuCHB->isChecked();
+    QVariant useGrayCodeChecked  =    ui->useGrayCodeCHB->isChecked();
+    QVariant trpVal              =    ui->transparencySPB->value();
 
-    if (colVal.isValid() )          s.setValue( SPECTRUM_COLOR,         colVal.toInt()         );
-    if (barVal.isValid() )          s.setValue( PROGRESSBAR_MS,         barVal.toInt()         );
-    if (sptrVal.isValid())          s.setValue( SPECTRUM_MS,            sptrVal.toInt()        );
-    if (strVal.isValid() )          s.setValue( STRING_VALUE,           strVal.toInt()         );
-    if (useGPUChecked.isValid())    s.setValue( USE_GPU_CHECKED,        useGPUChecked.toBool() );
-    if (trpVal.isValid())           s.setValue( TRANSPARENCY_VALUE,     trpVal.toInt()         );
+    if (colVal.isValid() )            s.setValue( SPECTRUM_COLOR,         colVal.toInt()              );
+    if (barVal.isValid() )            s.setValue( PROGRESSBAR_MS,         barVal.toInt()              );
+    if (sptrVal.isValid())            s.setValue( SPECTRUM_MS,            sptrVal.toInt()             );
+    if (useGrayCodeChecked.isValid()) s.setValue( USE_GRAY_CODE_CHECKED,  useGrayCodeChecked.toBool());
+    if (strVal.isValid() )            s.setValue( STRING_VALUE,           strVal.toInt()              );
+    if (useGPUChecked.isValid())      s.setValue( USE_GPU_CHECKED,        useGPUChecked.toBool()      );
+    if (trpVal.isValid())             s.setValue( TRANSPARENCY_VALUE,     trpVal.toInt()              );
     // Записываем в реестр
     s.sync();
     emit settingsApplied();
@@ -119,12 +151,13 @@ void SettingsDialog::on_buttonBox_rejected()
 
 
     // Читаем сохранённые значения. Второй аргумент — значение по умолчанию
-    int  spectrumColor          = s.value( SPECTRUM_COLOR,     0    ).toInt();
-    int  refreshProgressbarMs   = s.value( PROGRESSBAR_MS,     1000 ).toInt();
-    int  refreshSpectrumMs      = s.value( SPECTRUM_MS,        1000 ).toInt();
-    int  strVal                 = s.value( STRING_VALUE,       1    ).toInt();
-    bool useGPUChecked          = s.value( USE_GPU_CHECKED,    1    ).toBool();
-    int  trpVal                 = s.value( TRANSPARENCY_VALUE, 50   ).toInt();
+    int  spectrumColor          = s.value( SPECTRUM_COLOR,        0    ).toInt();
+    int  refreshProgressbarMs   = s.value( PROGRESSBAR_MS,        100  ).toInt();
+    int  refreshSpectrumMs      = s.value( SPECTRUM_MS,           100  ).toInt();
+    int  strVal                 = s.value( STRING_VALUE,          1    ).toInt();
+    bool useGPUChecked          = s.value( USE_GPU_CHECKED,       1    ).toBool();
+    bool useGrayCodeChecked     = s.value( USE_GRAY_CODE_CHECKED, 0    ).toBool();
+    int  trpVal                 = s.value( TRANSPARENCY_VALUE,    50   ).toInt();
     // Устанавливаем их в соответствующие элементы UI
     ui->histoColorCMB->setCurrentIndex(
         ui->histoColorCMB->findData(spectrumColor)
@@ -138,12 +171,30 @@ void SettingsDialog::on_buttonBox_rejected()
     ui->useGpuCHB->setChecked(
         useGPUChecked
         );
+    ui->useGrayCodeCHB->setChecked(
+        useGrayCodeChecked
+        );
     ui->transparencySPB->setValue(
         trpVal
         );
     ui->refreshSpectrumCMB->setCurrentIndex(
         ui->refreshSpectrumCMB->findData(refreshSpectrumMs)
         );
+}
+
+void SettingsDialog::on_useGrayCodeCHB_toggled(bool checked)
+{
+    QSettings s;
+    if (checked) {
+        s.setValue(STRING_VALUE, ui->stringsSPB->value());
+        ui->stringsSPB->setValue(ui->stringsSPB->maximum());
+        ui->stringsSPB->setEnabled(false);
+        return;
+    }
+    int val = s.value(STRING_VALUE).toInt();
+    ui->stringsSPB->setValue(val);
+    ui->stringsSPB->setEnabled(true);
+    
 }
 
 void SettingsDialog::setData()

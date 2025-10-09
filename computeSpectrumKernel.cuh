@@ -28,3 +28,22 @@ __host__ void launchSpectrumKernel(
     quint64 chunkSize,
     quint64 r
 );
+__global__ void computeSpectrumKernelGray(
+    quint64* d_spectrum,
+    int n,
+    int k,
+    int blockCount,
+    quint64 chunkOffset,
+    quint64 chunkSize
+);
+__host__ void launchSpectrumKernelGray(
+    int numOfBlocks,
+    int threadsPerBlock,
+    cudaStream_t stream,
+    quint64* d_spectrum,
+    int n,
+    int k,
+    int blockCount,
+    quint64 chunkOffset,
+    quint64 chunkSize
+);

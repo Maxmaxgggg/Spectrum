@@ -24,6 +24,7 @@ Widget::Widget(QWidget *parent)
         ui->verticalLayout->insertWidget( 3, splitter );
         ui->verticalLayout->setStretch(1, 1);
         ui->verticalLayout->setStretch(3, 1);
+        splitter->setSizes({ 1, 1 });
     /********                      ********/
     if( settings == nullptr )
         settings = new SettingsDialog(this);
@@ -47,8 +48,15 @@ Widget::Widget(QWidget *parent)
     Worker*  worker       = new Worker;
     QThread* workerThread = new QThread(this);
     setWorker( worker,workerThread );
-    settings->setStringsSPBEnabled( true );
+
+    settings->setStringsSPBEnabled(!settings->isUseGrayCodeCHBChecked());
     settings->setUseGpuCHBEnabled(  true );
+    settings->setUseGrayCodeCHBEnabled( true );
+    QSettings s;
+    if (!s.contains(USE_GPU_CHECKED))
+        settings->setUseGpuCHBChecked(true);
+    if (!s.contains(TRANSPARENCY_VALUE))
+        s.setValue(TRANSPARENCY_VALUE, 50);
 }
 
 Widget::~Widget()
@@ -92,13 +100,20 @@ void Widget::on_executePBN_clicked()
         case RunState::Idle: {
             settings->setStringsSPBEnabled( false );
             settings->setUseGpuCHBEnabled(  false );
+            settings->setUseGrayCodeCHBEnabled( false );
             ui->matrixPTE->setReadOnly(true);
             ui->infoLBL->setText("");
             ui->infoLBL->show();
             ui->infoPBR->setValue(0);
+            workerPtr->useGPU(settings->isUseGpuCHBChecked());
+            workerPtr->useGrayCode(settings->isUseGrayCodeCHBChecked());
             QStringList rows = ui->matrixPTE->toPlainText().split('\n', Qt::SkipEmptyParts);
             if (rows.isEmpty()) {
                 QMessageBox::warning(this, ERROR_TITLE, "Матрица пустая");
+                return;
+            }
+            if ( rows.size() > MAX_K ) {
+                QMessageBox::warning(this, ERROR_TITLE, QString("Число строк матрицы больше чем %1").arg(MAX_K));
                 return;
             }
             qint64 maxComb = 0;
@@ -108,9 +123,7 @@ void Widget::on_executePBN_clicked()
                 QMessageBox::warning(this, ERROR_TITLE, "Worker не подключён");
                 return;
             }
-            int maxThreads = omp_get_max_threads();
-            int workerThreads = std::max(1, maxThreads - 1);
-            omp_set_num_threads(maxThreads);
+            
 
             workerThreadPtr->start();
             QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection,
@@ -156,6 +169,7 @@ void Widget::on_exitPBN_clicked()
     }
     settings->setStringsSPBEnabled(true);
     settings->setUseGpuCHBEnabled(true);
+    settings->setUseGrayCodeCHBEnabled(true);
     saveSettings();
     ui->matrixPTE->setReadOnly(false);
     qApp->exit();
@@ -163,7 +177,7 @@ void Widget::on_exitPBN_clicked()
 
 void Widget::on_settingsPBN_clicked()
 {
-
+    settings->setStringsSPBEnabled(!settings->isUseGrayCodeCHBChecked());
     settings->exec();
     applySettings();
 }
@@ -172,10 +186,12 @@ void Widget::handleSettingsApplied()
 {
     if(workerPtr){
         QSettings s;
-        quint64 refreshProgressbarMs    = s.value( PROGRESSBAR_MS,     1000 ).toULongLong();
-        quint64 refreshSpectrumMs       = s.value( SPECTRUM_MS,        1000 ).toULongLong();
-        bool    USE_GPU                 = s.value( USE_GPU_CHECKED,    true ).toBool();
-        workerPtr->useGPU( USE_GPU );
+        quint64 refreshProgressbarMs    = s.value( PROGRESSBAR_MS,        100   ).toULongLong();
+        quint64 refreshSpectrumMs       = s.value( SPECTRUM_MS,           100   ).toULongLong();
+        bool    USE_GPU                 = s.value( USE_GPU_CHECKED,       false ).toBool();
+        bool    USE_GRAY_CODE           = s.value( USE_GRAY_CODE_CHECKED, false ).toBool();
+        workerPtr->useGPU(      USE_GPU       );
+        workerPtr->useGrayCode( USE_GRAY_CODE );
         workerPtr->refreshSpectrumMs    = refreshSpectrumMs;
         workerPtr->refreshProgressbarMs = refreshProgressbarMs;
         
@@ -237,6 +253,15 @@ void Widget::handleMatrixChanged()
 {
     QStringList rows = ui->matrixPTE->toPlainText().split('\n', Qt::SkipEmptyParts);
     settings->setStringsSPBMaxValue(rows.size());
+    
+    if (rows.size() > MAX_K) {
+        settings->setUseGrayCodeCHBEnabled(false);
+        settings->setUseGrayCodeCHBChecked(false);
+    }
+    else {
+        settings->setUseGrayCodeCHBEnabled(true);
+    }
+    settings->setStringsSPBEnabled(!settings->isUseGrayCodeCHBChecked());
 }
 void Widget::handleError(const QString& message)
 {
@@ -249,6 +274,7 @@ void Widget::handleGPUnotFound()
 {
     QMessageBox::warning(this, WARNING_TITLE, "GPU не найдено. Расчеты будут производиться на CPU");
     settings->setUseGpuCHBChecked( false );
+    workerPtr->useGPU( false );
 }
 void Widget::handleFinished()
 {
@@ -258,9 +284,10 @@ void Widget::handleFinished()
         workerThreadPtr->wait();
     }
 
-    settings->setStringsSPBEnabled(   true        );
-    settings->setUseGpuCHBEnabled (   true        );
-    ui->matrixPTE->setReadOnly(       false       );
+    settings->setStringsSPBEnabled(     true        );
+    settings->setUseGpuCHBEnabled (     true        );
+    settings->setUseGrayCodeCHBEnabled( true        );
+    ui->matrixPTE->setReadOnly(         false       );
 
     ui->executePBN->setText(          START_TEXT  );
     ui->infoLBL->setText(             READY_TEXT  );
@@ -300,8 +327,8 @@ void Widget::updatePlotFast(const QVector<quint64>& spectrum)
 
     int step = 1;
     int width = ui->spectrumCPT->width();
-    if (width < 200) step = 10;
-    else if (width < 800) step = 5;
+    double pixelsPerBar = double(width) / double(size);
+    step = int(ceil(30.0 / pixelsPerBar));
 
     if (tickerStepCache != step || tickerCache.isNull()) {
         tickerStepCache = step;
@@ -421,6 +448,8 @@ void Widget::loadSettings()
     if( splitter ) splitter->restoreState(    s.value( SPLITTER_STATE                 ).toByteArray()       );
     ui->spectrumPTE->setPlainText(            s.value( SPECTRUM_TEXT                  ).toString()          );
     ui->matrixPTE->setPlainText(              s.value( CODE_MATRIX                    ).toString()          );
+    int val = s.value(STRING_VALUE).toInt();
+    settings->setStringsSPBValue(val);
     progressBarMs     =                       s.value( PROGRESSBAR_MS, progressBarMs  ).toInt();
     spectrumMs        =                       s.value( SPECTRUM_MS,    spectrumMs     ).toInt();
 
@@ -440,7 +469,7 @@ QString Widget::formatRemainingTime(int minutesTotal)
     if (minutesTotal <= 0) {
         return QObject::tr("Меньше минуты");
     }
-
+    
     int days    = minutesTotal / (60 * 24);
     int hours   = (minutesTotal % (60 * 24)) / 60;
     int minutes = minutesTotal % 60;

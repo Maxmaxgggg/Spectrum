@@ -7,6 +7,7 @@
 #include <cuda_runtime.h>
 #include "defines.h"
 #include "computeSpectrumKernel.cuh"
+#include <iostream>
 using namespace std::chrono;
 
 
@@ -107,8 +108,16 @@ void Worker::useGPU(bool b)
     this->USE_GPU = b;
 }
 
+void Worker::useGrayCode(bool b)
+{
+    this->USE_GRAY_CODE = b;
+}
+
 void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
 {
+    int maxThreads = omp_get_max_threads();
+    int workerThreads = std::max(1, maxThreads - 1);
+    omp_set_num_threads(workerThreads);
     // Обработка матрицы
     if (rows.isEmpty()) {
         emit errorOccurred("Матрица пуста");
@@ -134,17 +143,17 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
 
         cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, 0);
-        int mem = prop.totalConstMem;
-        // Максимальное число блоков, ограниченное количеством разделяемой памяти
-        int maxBlocksByShared = prop.multiProcessorCount * prop.sharedMemPerMultiprocessor /
-            ((n + 1) * sizeof(quint64));
+        //int mem = prop.totalConstMem;
+        //// Максимальное число блоков, ограниченное количеством разделяемой памяти
+        //int maxBlocksByShared = prop.multiProcessorCount * prop.sharedMemPerMultiprocessor /
+        //    ((n + 1) * sizeof(quint64));
 
         int maxBlocks       = prop.multiProcessorCount;
         int threadsPerBlock = prop.maxThreadsPerBlock;
       
         // Разделяем расчет на чанки
         quint64 chunkSize = (quint64) threadsPerBlock * maxBlocks;
-        chunkSize <<= 1;
+        chunkSize <<= 2;
         quint64 blockCount = (n + 63) / 64;
         quint64 wordsNeeded = k * blockCount;
 
@@ -177,35 +186,113 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
         cudaMemset(d_spectrum, 0, (n + 1) * sizeof(quint64));
         cudaStream_t stream;
         cudaStreamCreate(&stream);
+
+
+
+        bool copyPending = false;
         cudaEvent_t ev;
-        cudaEventCreate(&ev);
+        cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
         
 
         auto startTime = steady_clock::now();
         auto lastTimeSpectrum = startTime;
         auto lastTimeBar = startTime;
         auto lastEstimateTime = startTime;
-        bool copy = false;
         QSettings s;
         refreshSpectrumMs    = s.value(SPECTRUM_MS).toULongLong();
         refreshProgressbarMs = s.value(PROGRESSBAR_MS).toULongLong();
-        for (int r = 0; r <= maxComb; r++)
-        {
-            quint64 curOps = binomTable[k][r];
-            // Разбиваем на чанки
-            for (quint64 offset = 0; offset < curOps; offset += chunkSize)
-            {
-                quint64 thisChunkSize = qMin(chunkSize, curOps - offset); // последний чанк может быть меньше
-                while (paused.load() != 0) {
-                    QThread::msleep(50);
-                    if (cancelled.load()) break;
-                }
-                if (cancelled.load()) {
-                    break;
-                }
+        if (USE_GRAY_CODE) {
+                const quint64 totalComb = 1ULL << k;
+                for (quint64 offset = 0; offset < totalComb; offset += chunkSize) {
+                    quint64 thisChunkSize = qMin(chunkSize, totalComb - offset);
+                    while (paused.load() != 0) {
+                        QThread::msleep(50);
+                        if (cancelled.load()) break;
+                    }
+                    if (cancelled.load()) {
+                        break;
+                    }
+                    launchSpectrumKernelGray(
+                        maxBlocks,
+                        threadsPerBlock,
+                        stream,
+                        d_spectrum,
+                        n,
+                        k,
+                        (int)blockCount,
+                        offset,            // chunkOffset interpreted as Gray-index
+                        thisChunkSize
+                    );
 
-                // Запуск ядра
-                launchSpectrumKernel(
+                    doneOps += thisChunkSize;
+                    std::chrono::duration<quint64, std::milli> spectrumMs{ refreshSpectrumMs.load() };
+                    std::chrono::duration<quint64, std::milli> barMs{ refreshProgressbarMs.load() };
+                    auto now = steady_clock::now();
+                    if (now - lastEstimateTime >= std::chrono::seconds(10)) {
+                        lastEstimateTime = now;
+                        double elapsedSec = duration_cast<seconds>(now - startTime).count();
+                        double speed = 1.0;
+
+                        if (doneOps != 0)
+                            speed = double(doneOps) / elapsedSec;
+
+                        quint64 remainingOps = totalOps > doneOps ? totalOps - doneOps : 0;
+                        double estSec = speed > 0 ? remainingOps / speed : 0.0;
+
+                        int minutesLeft = int(std::ceil(estSec / 60.0));
+                        emit updateRemainingMinutes(minutesLeft);
+
+                    }
+                    if (!copyPending && (now - lastTimeSpectrum > spectrumMs)) {
+                        lastTimeSpectrum = now;
+                        cudaMemcpyAsync(h_spectrum, d_spectrum, (n + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream);
+                        cudaEventRecord(ev, stream);
+                        copyPending = true;
+                    }
+                    if ( copyPending ) {
+                        cudaError_t q = cudaEventQuery(ev);
+                        if (q == cudaSuccess) {
+                            // копия точно завершена — читаем h_spectrum безопасно
+                            copyPending = false;
+
+                            QVector<quint64> spectrumCopy(n + 1);
+                            bool spectrumEmpty = true;
+                            for (quint64 w = 0; w <= n; ++w) {
+                                spectrumCopy[w] = h_spectrum[w];
+                                if (h_spectrum[w] != 0) spectrumEmpty = false;
+                            }
+                            if (!spectrumEmpty) {
+                                emit updateSpectrumPTE(spectrumCopy);
+                                emit updateSpectrumPlot(spectrumCopy);
+                            }
+                        }
+                    }
+                    if (now - lastTimeBar > barMs) {
+                        lastTimeBar = now;
+                        emit updateInfoPBR(doneOps * 100 / totalOps);
+                    }
+
+                }
+                
+                
+        } else {
+            for (int r = 0; r <= maxComb; r++)
+            {
+                quint64 curOps = binomTable[k][r];
+                // Разбиваем на чанки
+                for (quint64 offset = 0; offset < curOps; offset += chunkSize)
+                {
+                    quint64 thisChunkSize = qMin(chunkSize, curOps - offset); // последний чанк может быть меньше
+                    while (paused.load() != 0) {
+                        QThread::msleep(50);
+                        if (cancelled.load()) break;
+                    }
+                    if (cancelled.load()) {
+                        break;
+                    }
+
+                    // Запуск ядра
+                    launchSpectrumKernel(
                         maxBlocks,             // Число блоков
                         threadsPerBlock,       // Число нитей на блок
                         stream,
@@ -216,47 +303,59 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
                         offset,                // Смещение в комбинациях на каждом шаге
                         thisChunkSize,         // Размер чанка
                         r                      // Число единиц в битовой маске (число складываемых строк)
-                );
-                doneOps += thisChunkSize;
-                std::chrono::duration<quint64, std::milli> spectrumMs{ refreshSpectrumMs.load() };
-                std::chrono::duration<quint64, std::milli> barMs{      refreshProgressbarMs.load()   };
-                auto now = steady_clock::now();
-                if (now - lastEstimateTime >= std::chrono::seconds(10)) {
-                    lastEstimateTime = now;
-                    double elapsedSec = duration_cast<seconds>(now - startTime).count();
-                    double speed = 1.0;
+                    );
+                    doneOps += thisChunkSize;
+                    std::chrono::duration<quint64, std::milli> spectrumMs{ refreshSpectrumMs.load() };
+                    std::chrono::duration<quint64, std::milli> barMs{ refreshProgressbarMs.load() };
+                    auto now = steady_clock::now();
+                    if (now - lastEstimateTime >= std::chrono::seconds(10)) {
+                        lastEstimateTime = now;
+                        double elapsedSec = duration_cast<seconds>(now - startTime).count();
+                        double speed = 1.0;
 
-                    if (doneOps != 0)
-                        speed = double(doneOps) / elapsedSec;
+                        if (doneOps != 0)
+                            speed = double(doneOps) / elapsedSec;
 
-                    quint64 remainingOps = totalOps > doneOps ? totalOps - doneOps : 0;
-                    double estSec = speed > 0 ? remainingOps / speed : 0.0;
+                        quint64 remainingOps = totalOps > doneOps ? totalOps - doneOps : 0;
+                        double estSec = speed > 0 ? remainingOps / speed : 0.0;
 
-                    int minutesLeft = int(std::ceil(estSec / 60.0));
-                    emit updateRemainingMinutes(minutesLeft);
+                        int minutesLeft = int(std::ceil(estSec / 60.0));
+                        emit updateRemainingMinutes(minutesLeft);
+
+                    }
+                    if (!copyPending && (now - lastTimeSpectrum > spectrumMs)) {
+                        lastTimeSpectrum = now;
+                        cudaMemcpyAsync(h_spectrum, d_spectrum, (n + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream);
+                        cudaEventRecord(ev, stream);
+                        copyPending = true;
+                    }
+                    if ( copyPending ) {
+                        cudaError_t q = cudaEventQuery(ev);
+                        if (q == cudaSuccess) {
+                            // копия точно завершена — читаем h_spectrum безопасно
+                            copyPending = false;
+
+                            QVector<quint64> spectrumCopy(n + 1);
+                            bool spectrumEmpty = true;
+                            for (quint64 w = 0; w <= n; ++w) {
+                                spectrumCopy[w] = h_spectrum[w];
+                                if (h_spectrum[w] != 0) spectrumEmpty = false;
+                            }
+                            if (!spectrumEmpty) {
+                                emit updateSpectrumPTE(spectrumCopy);
+                                emit updateSpectrumPlot(spectrumCopy);
+                            }
+                        }
+                    }
+                    if (now - lastTimeBar > barMs) {
+                        lastTimeBar = now;
+                        emit updateInfoPBR(doneOps * 100 / totalOps);
+                    }
 
                 }
-                if (now - lastTimeSpectrum >  spectrumMs ) {
-                    copy = true;
-                    lastTimeSpectrum = now;
-                    cudaMemcpyAsync(h_spectrum, d_spectrum, (n + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream);
-                    cudaEventRecord(ev, stream);
+                if (cancelled.load()) {
+                    break;
                 }
-                if ( cudaEventQuery(ev) == cudaSuccess && copy ) {
-                    copy = false;
-                    QVector<quint64> spectrumCopy(n + 1);
-                    for (quint64 w = 0; w <= n; ++w) spectrumCopy[w] = h_spectrum[w];
-                    emit updateSpectrumPTE(spectrumCopy);
-                    emit updateSpectrumPlot(spectrumCopy);
-                }
-                if (now - lastTimeBar > barMs ) {
-                    lastTimeBar = now;
-                    emit updateInfoPBR(doneOps * 100 / totalOps);
-                }
-                
-            }
-            if (cancelled.load()) {
-                break;
             }
         }
         if (cancelled.load()) {
@@ -272,18 +371,11 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
         emit updateSpectrumPlot(spectrumCopy);
         emit finished();
         freeBinomTable(binomTable, MAX_K);
+
         cudaFree(d_spectrum);
         cudaFreeHost(h_spectrum);
-
-
-
-
-
-
-
-
-
     } else {
+
         quint64* spectrum = (quint64*)calloc(n + 1, sizeof(quint64));
         if (!spectrum) {
             emit errorOccurred("Ошибка выделения памяти");
@@ -333,93 +425,218 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
         auto lastEstimateTime  = startTime;
 
         binomTable = buildBinomTable(MAX_K);
-        for (unsigned r = 0; r <= maxComb; ++r) {
-            if (cancelled.load()) break;
+        if (USE_GRAY_CODE) {
+            // Gray-code path: iterate over all 2^k subsets in Gray order.
+            if (k >= 64) {
+                emit errorOccurred("Gray-path поддерживается только для k <= 63");
+                return;
+            }
+            else {
+                const quint64 totalComb = 1ULL << k; // 2^k
+                // разделение работы между потоками OpenMP
+                #pragma omp parallel
+                {
+                    int tid = omp_get_thread_num();
+                    int nthreads = omp_get_num_threads();
 
-            quint64 combCount = binomTable[k][r];
-            if (combCount == 0) continue;
-            #pragma omp parallel
-            {
-                std::vector<quint64> localCodeword(blockCount, 0);
-
-                #pragma omp for schedule(dynamic)
-                for (qint64 idx = 0; idx < combCount; ++idx) {
-                    if (cancelled.load()) {
-                        continue;
+                    quint64 combosPerThread = (totalComb + nthreads - 1) / nthreads;
+                    quint64 startIdx = (quint64)tid * combosPerThread;
+                    quint64 endIdx = startIdx + combosPerThread;
+                    if (endIdx > totalComb) endIdx = totalComb;
+                    if (startIdx >= endIdx) {
+                        // нет работы для этого потока
                     }
+                    else {
+                        // локальный codeword в виде вектора слов
+                        std::vector<quint64> localCodeword(blockCount, 0);
 
-                    while (paused.load() != 0) {
-                        QThread::msleep(50);
-                        if (cancelled.load()) break;
-                    }
-                    if (cancelled.load()) {
-                        continue;
-                    }
+                        // получить Gray-маску для startIdx
+                        auto gray = [](quint64 i)->quint64 { return (i ^ (i >> 1)); };
 
-                    quint64 mask = generateBitMask(k, r, idx, binomTable);
-                    std::fill(localCodeword.begin(), localCodeword.end(), 0);
+                        // формируем codeword для начальной маски
+                        quint64 g = gray(startIdx);
 
-                    for (quint64 i = 0; i < k; ++i) {
-                        if (mask & (1ULL << i)) {
-                            quint64* rowData = packed + i * blockCount;
+                        // полный XOR по установленным битам в g
+                        quint64 tmp = g;
+                        while (tmp) {
+                            quint64 single = tmp & (~tmp + 1ULL);
+                            unsigned long pos;
+                            single == 0ULL ? pos = 64UL : _BitScanForward64(&pos, single);
+                            tmp &= (tmp - 1);
+                            quint64* rowData = packed + (quint64)pos * blockCount;
                             for (quint64 b = 0; b < blockCount; ++b) localCodeword[b] ^= rowData[b];
                         }
-                    }
 
-                    quint64 weight = 0;
-                    for (quint64 b = 0; b < blockCount; ++b)
+                        // если начальная маска удовлетворяет по попаунту (в этом варианте maxComb == k, значит всегда),
+                        // учитываем в спектр
+                        if (__popcnt64(g) <= (unsigned)maxComb) {
+                            // считаем вес
+                            quint64 weight = 0;
+                            for (quint64 b = 0; b < blockCount; ++b) weight += __popcnt64(localCodeword[b]);
+                        #pragma omp atomic
+                            ++spectrum[weight];
+                        #pragma omp atomic
+                            ++doneOps;
+                        }
 
-                        weight += __popcnt64(localCodeword[b]);
-
-                    #pragma omp atomic
-                    ++spectrum[weight];
-
-                    #pragma omp atomic
-                    ++doneOps;
-
-                    if (omp_get_thread_num() == 0) {
-                        std::chrono::duration<quint64, std::milli> spectrumMs{  refreshSpectrumMs.load()  };
-                        std::chrono::duration<quint64, std::milli> barMs{  refreshProgressbarMs.load()    };
-
-                        auto now = steady_clock::now();
-                        if (now - lastTimeSpectrum >= spectrumMs) {
-                            lastTimeSpectrum = now;
-                            QVector<quint64> spectrumCopy(n + 1);
-                            #pragma omp critical
-                            {
-                                for (quint64 w = 0; w <= n; ++w) spectrumCopy[(int)w] = spectrum[(quint64)w];
+                        // Теперь идём по последовательности i = startIdx+1 .. endIdx-1
+                        for (quint64 i = startIdx + 1; i < endIdx; ++i) {
+                            if (cancelled.load()) break;
+                            while (paused.load() != 0) {
+                                QThread::msleep(50);
+                                if (cancelled.load()) break;
                             }
-                            emit updateSpectrumPTE(spectrumCopy);
-                            emit updateSpectrumPlot(spectrumCopy);
+                            if (cancelled.load()) break;
+
+                            quint64 g_next = gray(i);
+                            quint64 diff = g ^ g_next; 
+                            unsigned long pos;
+                            diff == 0ULL ? pos = 64 : _BitScanForward64(&pos, diff);
+                            // xor'им соответствующую строку (toggle)
+                            quint64* rowData = packed + (quint64)pos * blockCount;
+                            for (quint64 b = 0; b < blockCount; ++b) localCodeword[b] ^= rowData[b];
+
+                            // теперь g = g_next
+                            g = g_next;
+
+                            // если popcount(g) <= maxComb => учитываем (в вашем случае maxComb==k, всегда true)
+                            if (__popcnt64(g) <= (unsigned)maxComb) {
+                                quint64 weight = 0;
+                                for (quint64 b = 0; b < blockCount; ++b) weight += __popcnt64(localCodeword[b]);
+                                #pragma omp atomic
+                                ++spectrum[weight];
+                                #pragma omp atomic
+                                ++doneOps;
+                            }
+
+                            // Только один поток обновляет GUI/таймеры/события, как раньше (thread 0)
+                            if (omp_get_thread_num() == 0) {
+                                std::chrono::duration<quint64, std::milli> spectrumMs{ refreshSpectrumMs.load() };
+                                std::chrono::duration<quint64, std::milli> barMs{ refreshProgressbarMs.load() };
+                                auto now = steady_clock::now();
+
+                                if (now - lastTimeSpectrum >= spectrumMs) {
+                                    lastTimeSpectrum = now;
+                                    QVector<quint64> spectrumCopy(n + 1);
+                                    #pragma omp critical
+                                    {
+                                        for (quint64 w = 0; w <= n; ++w) spectrumCopy[(int)w] = spectrum[(quint64)w];
+                                    }
+                                    emit updateSpectrumPTE(spectrumCopy);
+                                    emit updateSpectrumPlot(spectrumCopy);
+                                }
+                                if (now - lastTimeBar >= barMs) {
+                                    lastTimeBar = now;
+                                    int percent = int(100.0 * double(doneOps) / double(totalOps));
+                                    emit updateInfoPBR(percent);
+                                }
+                                // estimate
+                                if (now - lastEstimateTime >= std::chrono::seconds(10)) {
+                                    lastEstimateTime = now;
+                                    double elapsedSec = duration_cast<seconds>(now - startTime).count();
+                                    double speed = 1.0;
+                                    if (doneOps != 0) speed = double(doneOps) / elapsedSec;
+                                    quint64 remainingOps = totalOps > doneOps ? totalOps - doneOps : 0;
+                                    double estSec = speed > 0 ? remainingOps / speed : 0.0;
+                                    int minutesLeft = int(std::ceil(estSec / 60.0));
+                                    emit updateRemainingMinutes(minutesLeft);
+                                }
+                            } // thread 0 GUI updates
+                        } // for i in thread range
+                    } // else start<end
+                } // #pragma omp parallel
+            } // else k >= 64
+        } else {
+            for (unsigned r = 0; r <= maxComb; ++r) {
+                if (cancelled.load()) break;
+
+                quint64 combCount = binomTable[k][r];
+                if (combCount == 0) continue;
+                #pragma omp parallel
+                {
+                    std::vector<quint64> localCodeword(blockCount, 0);
+
+                    #pragma omp for schedule(dynamic)
+                    for (qint64 idx = 0; idx < combCount; ++idx) {
+                        if (cancelled.load()) {
+                            continue;
                         }
-                        if (now - lastTimeBar >= barMs) {
-                            lastTimeBar = now;
-                            int percent = int(100.0 * double(doneOps) / double(totalOps));
-                            emit updateInfoPBR(percent);
+
+                        while (paused.load() != 0) {
+                            QThread::msleep(50);
+                            if (cancelled.load()) break;
                         }
-                        if (now - lastEstimateTime >= std::chrono::seconds(10)) {
-                            lastEstimateTime = now;
-                            double elapsedSec = duration_cast<seconds>(now - startTime).count();
-                            double speed = 1.0;
-
-                            if (doneOps != 0)
-                                speed = double(doneOps) / elapsedSec;
-
-                            quint64 remainingOps = totalOps > doneOps ? totalOps - doneOps : 0;
-                            double estSec = speed > 0 ? remainingOps / speed : 0.0;
-
-                            int minutesLeft = int(std::ceil(estSec / 60.0));
-                            emit updateRemainingMinutes(minutesLeft);
-
+                        if (cancelled.load()) {
+                            continue;
                         }
 
-                    } // if (omp_get_thread_num() == 0)
+                        quint64 mask = generateBitMask(k, r, idx, binomTable);
+                        std::fill(localCodeword.begin(), localCodeword.end(), 0);
 
-                } // for (quint64 idx = 0; idx < combCount; ++idx)
+                        for (quint64 i = 0; i < k; ++i) {
+                            if (mask & (1ULL << i)) {
+                                quint64* rowData = packed + i * blockCount;
+                                for (quint64 b = 0; b < blockCount; ++b) localCodeword[b] ^= rowData[b];
+                            }
+                        }
 
-            } // #pragma omp parallel
+                        quint64 weight = 0;
+                        for (quint64 b = 0; b < blockCount; ++b)
 
-        } // for (unsigned r = 1; r <= maxComb; ++r)
+                            weight += __popcnt64(localCodeword[b]);
+
+                        #pragma omp atomic
+                        ++spectrum[weight];
+
+                        #pragma omp atomic
+                        ++doneOps;
+
+                        if (omp_get_thread_num() == 0) {
+                            std::chrono::duration<quint64, std::milli> spectrumMs{ refreshSpectrumMs.load() };
+                            std::chrono::duration<quint64, std::milli> barMs{ refreshProgressbarMs.load() };
+
+                            auto now = steady_clock::now();
+                            if (now - lastTimeSpectrum >= spectrumMs) {
+                                lastTimeSpectrum = now;
+                                QVector<quint64> spectrumCopy(n + 1);
+                                #pragma omp critical
+                                {
+                                    for (quint64 w = 0; w <= n; ++w) spectrumCopy[(int)w] = spectrum[(quint64)w];
+                                }
+                                emit updateSpectrumPTE(spectrumCopy);
+                                emit updateSpectrumPlot(spectrumCopy);
+                            }
+                            if (now - lastTimeBar >= barMs) {
+                                lastTimeBar = now;
+                                int percent = int(100.0 * double(doneOps) / double(totalOps));
+                                emit updateInfoPBR(percent);
+                            }
+                            if (now - lastEstimateTime >= std::chrono::seconds(10)) {
+                                lastEstimateTime = now;
+                                double elapsedSec = duration_cast<seconds>(now - startTime).count();
+                                double speed = 1.0;
+
+                                if (doneOps != 0)
+                                    speed = double(doneOps) / elapsedSec;
+
+                                quint64 remainingOps = totalOps > doneOps ? totalOps - doneOps : 0;
+                                double estSec = speed > 0 ? remainingOps / speed : 0.0;
+
+                                int minutesLeft = int(std::ceil(estSec / 60.0));
+                                emit updateRemainingMinutes(minutesLeft);
+
+                            }
+
+                        } // if (omp_get_thread_num() == 0)
+
+                    } // for (quint64 idx = 0; idx < combCount; ++idx)
+
+                } // #pragma omp parallel
+
+            } // for (unsigned r = 1; r <= maxComb; ++r)
+
+        } // if( !USE_GRAY_CODE )
+        
 
         if (cancelled.load()) {
             free( packed );

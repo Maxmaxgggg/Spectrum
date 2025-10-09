@@ -22,6 +22,7 @@ public slots:
     void resume();
     void cancel();
     void useGPU(bool);
+    void useGrayCode(bool);
 
 
 signals:
@@ -48,8 +49,9 @@ private:
     std::atomic<int> paused    { 0 };
     std::atomic<int> cancelled { 0 };
     quint64** buildBinomTable(unsigned maxN);
-    bool USE_GPU = true;
 
+    bool USE_GPU = true;
+    bool USE_GRAY_CODE = false;
 };
 
 #endif // WORKER_H
