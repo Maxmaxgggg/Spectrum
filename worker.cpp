@@ -103,14 +103,33 @@ void Worker::cancel()
     cancelled.store(1);
 }
 
-void Worker::useGPU(bool b)
+void Worker::handleRefreshSpectrumValueChanged(int v)
+{
+    refreshSpectrumMs = v;
+}
+
+void Worker::handleRefreshProgressbarValueChanged(int v)
+{
+    refreshProgressbarMs = v;
+}
+
+void Worker::handleUseGpuToggled(bool b)
 {
     this->USE_GPU = b;
 }
 
-void Worker::useGrayCode(bool b)
+void Worker::handleUseGrayCodeToggled(bool b)
 {
     this->USE_GRAY_CODE = b;
+}
+
+void Worker::setInitialSettings(bool useGpu, bool useGrayCode, int spectrumMs, int progressbarMs)
+{
+    USE_GPU              = useGpu;
+    USE_GRAY_CODE        = useGrayCode;
+    refreshSpectrumMs    = spectrumMs;
+    refreshProgressbarMs = progressbarMs;
+
 }
 
 void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
@@ -198,9 +217,8 @@ void Worker::computeSpectrum( QStringList rows, quint64 maxComb )
         auto lastTimeSpectrum = startTime;
         auto lastTimeBar = startTime;
         auto lastEstimateTime = startTime;
+
         QSettings s;
-        refreshSpectrumMs    = s.value(SPECTRUM_MS).toULongLong();
-        refreshProgressbarMs = s.value(PROGRESSBAR_MS).toULongLong();
         if (USE_GRAY_CODE) {
                 const quint64 totalComb = 1ULL << k;
                 for (quint64 offset = 0; offset < totalComb; offset += chunkSize) {

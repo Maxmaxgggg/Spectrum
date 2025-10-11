@@ -212,7 +212,7 @@
         <item row="0" column="0">
          <widget class="QLabel" name="refreshSpectrumLBL">
           <property name="text">
-           <string>Частота обновления спектра</string>
+           <string>Желаемая частота обновления спектра</string>
           </property>
          </widget>
         </item>

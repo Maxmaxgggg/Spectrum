@@ -7,6 +7,7 @@
 #include <QDebug>
 #include "qcustomplot.h"
 #include "defines.h"
+
 QStringList Colors{ "Blue", "Green", "Red" };
 
 
@@ -41,22 +42,15 @@ Widget::Widget(QWidget *parent)
         spectrumBars->setPen(QPen(Qt::black));
         spectrumBars->setBrush(QBrush(Qt::blue));
     }
-    connect( settings,      &SettingsDialog::settingsApplied,  this, &Widget::handleSettingsApplied   );
     connect( ui->matrixPTE, &FilterPlainTextEdit::textChanged, this,  &Widget::handleMatrixChanged    );
     loadSettings();
     ui->spectrumCPT->installEventFilter(this);
     Worker*  worker       = new Worker;
     QThread* workerThread = new QThread(this);
-    setWorker( worker,workerThread );
 
-    settings->setStringsSPBEnabled(!settings->isUseGrayCodeCHBChecked());
-    settings->setUseGpuCHBEnabled(  true );
-    settings->setUseGrayCodeCHBEnabled( true );
-    QSettings s;
-    if (!s.contains(USE_GPU_CHECKED))
-        settings->setUseGpuCHBChecked(true);
-    if (!s.contains(TRANSPARENCY_VALUE))
-        s.setValue(TRANSPARENCY_VALUE, 50);
+    setWorker( worker, workerThread );
+    connectSettingsDialog();
+    emit requestInitialSettings();
 }
 
 Widget::~Widget()
@@ -84,13 +78,39 @@ void Widget::setWorker(Worker* worker, QThread* workerThread)
     workerThreadPtr = workerThread;
     workerPtr->moveToThread(workerThread);
 
-    connect( workerPtr,       &Worker::updateInfoPBR,          this, &Widget::handleUpdateInfoPBR,          Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::updateSpectrumPlot,     this, &Widget::handleUpdateSpectrumPlot,     Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::updateSpectrumPTE,      this, &Widget::handleUpdateSpectrumPTE,      Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::updateRemainingMinutes, this, &Widget::handleUpdateRemainingMinutes, Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::errorOccurred,          this, &Widget::handleError,                  Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::GPUnotFound,            this, &Widget::handleGPUnotFound,            Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::finished,               this, &Widget::handleFinished,               Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::updateInfoPBR,                  this,      &Widget::handleUpdateInfoPBR,                  Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::updateSpectrumPlot,             this,      &Widget::handleUpdateSpectrumPlot,             Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::updateSpectrumPTE,              this,      &Widget::handleUpdateSpectrumPTE,              Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::updateRemainingMinutes,         this,      &Widget::handleUpdateRemainingMinutes,         Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::errorOccurred,                  this,      &Widget::handleError,                          Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::GPUnotFound,                    this,      &Widget::handleGPUnotFound,                    Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::finished,                       this,      &Widget::handleFinished,                       Qt::QueuedConnection );
+
+    connect( this,            &Widget::useGpuToggled,                  workerPtr, &Worker::handleUseGpuToggled,                  Qt::QueuedConnection );
+    connect( this,            &Widget::useGrayCodeToggled,             workerPtr, &Worker::handleUseGrayCodeToggled,             Qt::QueuedConnection );
+    connect( this,            &Widget::sendInitialSettingsToWorker,    workerPtr, &Worker::setInitialSettings,                   Qt::QueuedConnection );
+
+    // DirectConnection для того, чтобы частоту обновления можно было изменять в реальном времени
+    connect( this,            &Widget::refreshProgressbarValueChanged, workerPtr, &Worker::handleRefreshProgressbarValueChanged, Qt::DirectConnection );
+    connect( this,            &Widget::refreshSpectrumValueChanged,    workerPtr, &Worker::handleRefreshSpectrumValueChanged,    Qt::DirectConnection );
+}
+
+void Widget::connectSettingsDialog()
+{
+    if (!settings) return;
+
+    connect( this,     &Widget::gpuNotFound,                            settings, &SettingsDialog::disableGpu                   );
+    connect( this,     &Widget::toggleStringsSPB,                       settings, &SettingsDialog::toggleStringsSPB             );
+    connect( this,     &Widget::toggleUseGpuCHB,                        settings, &SettingsDialog::toggleUseGpuCHB              );
+    connect( this,     &Widget::toggleUseGrayCodeCHB,                   settings, &SettingsDialog::toggleUseGrayCodeCHB         );
+    connect( this,     &Widget::matrixChanged,                          settings, &SettingsDialog::handleMatrixChanged          );
+    connect( this,     &Widget::requestInitialSettings,                 settings, &SettingsDialog::handleRequestInitialSettings );
+
+    connect( settings, &SettingsDialog::useGpuToggled,                  this,     &Widget::useGpuToggled                        );
+    connect( settings, &SettingsDialog::useGrayCodeToggled,             this,     &Widget::useGrayCodeToggled                   );
+    connect( settings, &SettingsDialog::refreshSpectrumValueChanged,    this,     &Widget::refreshSpectrumValueChanged          );
+    connect( settings, &SettingsDialog::refreshProgressbarValueChanged, this,     &Widget::refreshProgressbarValueChanged       );
+    connect( settings, &SettingsDialog::sendInitialSettingsToWorker,    this,     &Widget::sendInitialSettingsToWorker          );
 }
 
 
@@ -98,15 +118,19 @@ void Widget::on_executePBN_clicked()
 {
     switch (runState) {
         case RunState::Idle: {
-            settings->setStringsSPBEnabled( false );
-            settings->setUseGpuCHBEnabled(  false );
-            settings->setUseGrayCodeCHBEnabled( false );
-            ui->matrixPTE->setReadOnly(true);
+            
+            emit toggleStringsSPB(      false );
+            emit toggleUseGpuCHB(       false );
+            emit toggleUseGrayCodeCHB(  false );
+            ui->matrixPTE->setReadOnly( true  );
             ui->infoLBL->setText("");
             ui->infoLBL->show();
             ui->infoPBR->setValue(0);
-            workerPtr->useGPU(settings->isUseGpuCHBChecked());
-            workerPtr->useGrayCode(settings->isUseGrayCodeCHBChecked());
+
+            if (!workerPtr) {
+                QMessageBox::warning(this, ERROR_TITLE, "Worker не подключён");
+                return;
+            }
             QStringList rows = ui->matrixPTE->toPlainText().split('\n', Qt::SkipEmptyParts);
             if (rows.isEmpty()) {
                 QMessageBox::warning(this, ERROR_TITLE, "Матрица пустая");
@@ -117,12 +141,10 @@ void Widget::on_executePBN_clicked()
                 return;
             }
             qint64 maxComb = 0;
-            if (settings) maxComb = settings->stringValue();
+            if (settings) maxComb = settings->getStringsValue();
             if (maxComb <= 0 || maxComb > rows.size()) maxComb = rows.size();
-            if (!workerPtr) {
-                QMessageBox::warning(this, ERROR_TITLE, "Worker не подключён");
-                return;
-            }
+
+            
             
 
             workerThreadPtr->start();
@@ -167,9 +189,11 @@ void Widget::on_exitPBN_clicked()
         workerThreadPtr->quit();
         workerThreadPtr->wait();
     }
-    settings->setStringsSPBEnabled(true);
-    settings->setUseGpuCHBEnabled(true);
-    settings->setUseGrayCodeCHBEnabled(true);
+    
+    emit toggleUseGpuCHB(true);
+    emit toggleUseGrayCodeCHB(true);
+    if ( !settings->isGrayCodeUsed() )
+        emit toggleStringsSPB(true);
     saveSettings();
     ui->matrixPTE->setReadOnly(false);
     qApp->exit();
@@ -177,25 +201,8 @@ void Widget::on_exitPBN_clicked()
 
 void Widget::on_settingsPBN_clicked()
 {
-    settings->setStringsSPBEnabled(!settings->isUseGrayCodeCHBChecked());
     settings->exec();
     applySettings();
-}
-
-void Widget::handleSettingsApplied()
-{
-    if(workerPtr){
-        QSettings s;
-        quint64 refreshProgressbarMs    = s.value( PROGRESSBAR_MS,        100   ).toULongLong();
-        quint64 refreshSpectrumMs       = s.value( SPECTRUM_MS,           100   ).toULongLong();
-        bool    USE_GPU                 = s.value( USE_GPU_CHECKED,       false ).toBool();
-        bool    USE_GRAY_CODE           = s.value( USE_GRAY_CODE_CHECKED, false ).toBool();
-        workerPtr->useGPU(      USE_GPU       );
-        workerPtr->useGrayCode( USE_GRAY_CODE );
-        workerPtr->refreshSpectrumMs    = refreshSpectrumMs;
-        workerPtr->refreshProgressbarMs = refreshProgressbarMs;
-        
-    }
 }
 
 void Widget::handleStrValChanged()
@@ -223,7 +230,7 @@ void Widget::handleUpdateInfoPBR(int percent)
 
 void Widget::handleUpdateSpectrumPlot(const QVector<quint64>& spectrum)
 {
-    updatePlotFast(spectrum);
+    updatePlot(spectrum);
 }
 
 void Widget::handleUpdateSpectrumPTE(const QVector<quint64> &spectrum)
@@ -252,16 +259,11 @@ void Widget::handleUpdateRemainingMinutes(int minutesLeft)
 void Widget::handleMatrixChanged()
 {
     QStringList rows = ui->matrixPTE->toPlainText().split('\n', Qt::SkipEmptyParts);
-    settings->setStringsSPBMaxValue(rows.size());
-    
-    if (rows.size() > MAX_K) {
-        settings->setUseGrayCodeCHBEnabled(false);
-        settings->setUseGrayCodeCHBChecked(false);
+    if( rows.size() != 0)
+        emit matrixChanged(rows.size());    
+    if ( rows.size() > MAX_K ) {
+        emit toggleUseGrayCodeCHB( false );
     }
-    else {
-        settings->setUseGrayCodeCHBEnabled(true);
-    }
-    settings->setStringsSPBEnabled(!settings->isUseGrayCodeCHBChecked());
 }
 void Widget::handleError(const QString& message)
 {
@@ -273,8 +275,8 @@ void Widget::handleError(const QString& message)
 void Widget::handleGPUnotFound()
 {
     QMessageBox::warning(this, WARNING_TITLE, "GPU не найдено. Расчеты будут производиться на CPU");
-    settings->setUseGpuCHBChecked( false );
-    workerPtr->useGPU( false );
+    emit gpuNotFound();
+
 }
 void Widget::handleFinished()
 {
@@ -283,11 +285,11 @@ void Widget::handleFinished()
         workerThreadPtr->quit();
         workerThreadPtr->wait();
     }
-
-    settings->setStringsSPBEnabled(     true        );
-    settings->setUseGpuCHBEnabled (     true        );
-    settings->setUseGrayCodeCHBEnabled( true        );
-    ui->matrixPTE->setReadOnly(         false       );
+    emit toggleUseGpuCHB(       true  );
+    emit toggleUseGrayCodeCHB(  true  );
+    if (!settings->isGrayCodeUsed() )
+        emit toggleStringsSPB(true);
+    ui->matrixPTE->setReadOnly( false );
 
     ui->executePBN->setText(          START_TEXT  );
     ui->infoLBL->setText(             READY_TEXT  );
@@ -303,7 +305,7 @@ bool Widget::eventFilter(QObject *watched, QEvent *event)
         for (int i = 0; i < yCache.size(); ++i) {
             vec[i] = (quint64) yCache.at(i);
         }
-        updatePlotFast(vec);
+        updatePlot(vec);
         return false;
     }
 
@@ -311,7 +313,7 @@ bool Widget::eventFilter(QObject *watched, QEvent *event)
     return QWidget::eventFilter(watched, event);
 }
 
-void Widget::updatePlotFast(const QVector<quint64>& spectrum)
+void Widget::updatePlot(const QVector<quint64>& spectrum)
 {
     if (spectrum.isEmpty()) return;
 
@@ -360,12 +362,10 @@ void Widget::updatePlotFast(const QVector<quint64>& spectrum)
         QCPBars *bars = qobject_cast<QCPBars*>(ui->spectrumCPT->plottable());
         if (bars) {
             bars->setData(xCache, yCache);
-            // color from settings
-            QSettings s;
-            QColor c = Qt::blue;
-            if (s.contains(SPECTRUM_COLOR))
-                c = QColor(Colors[s.value(SPECTRUM_COLOR).toInt()]);
-            c.setAlpha( ( 100-s.value(TRANSPARENCY_VALUE).toInt() )*255/100 );
+
+            QColor c = Colors[DEFAULT_SPECTRUM_COLOR];
+            c = QColor(Colors[settings->getHistoColorValue()]);
+            c.setAlpha( ( 100- settings->getTransparencyValue() )*255/100 );
             bars->setBrush(QBrush(c));
             bars->setPen(QPen(Qt::black));
         }
@@ -398,10 +398,6 @@ QVector<QString> Widget::buildAxisLabels(int size, int step) const
 // Применить настройки
 void Widget::applySettings()
 {
-    QSettings s;
-    
-    progressBarMs     = s.value( PROGRESSBAR_MS, progressBarMs     ).toInt();
-    spectrumMs        = s.value( SPECTRUM_MS,    spectrumMs        ).toInt();
     applySpectrumColor();
 }
 // Применить цвет спектра
@@ -410,13 +406,14 @@ void Widget::applySpectrumColor()
     QSettings s;
     QColor c = Qt::blue;
 
-    if (s.contains(SPECTRUM_COLOR)) c = QColor(Colors[s.value(SPECTRUM_COLOR).toInt()]);
-    c.setAlpha( (100-s.value(TRANSPARENCY_VALUE).toInt())*255/100);
+    
+    c = QColor(Colors[settings->getHistoColorValue()]);
+    c.setAlpha( ( 100-settings->getTransparencyValue() )*255/100);
     if ( ui->spectrumCPT->plottableCount() > 0 ) {
         QCPBars *bars = qobject_cast<QCPBars*>(ui->spectrumCPT->plottable());
         if (bars) {
             bars->setBrush(QBrush(c));
-            bars->setPen(QPen(Qt::black));
+            //bars->setPen(QPen(Qt::black));
             ui->spectrumCPT->replot();
         }
     }
@@ -430,12 +427,10 @@ void Widget::saveSettings()
     s.setValue(     CODE_MATRIX,     ui->matrixPTE->toPlainText()   );
     s.setValue(     SPECTRUM_TEXT,   ui->spectrumPTE->toPlainText() );
     s.setValue(     WIDGET_GEOMETRY, this->saveGeometry()           );
-    s.setValue(     PROGRESSBAR_MS,  progressBarMs                  );
-    s.setValue(     SPECTRUM_MS,     spectrumMs                     );
     QVariantList values;
     for (double v : std::as_const(yCache))
         values << v;
-    s.setValue( SPECTRUM_VALUES, values);
+    s.setValue(    SPECTRUM_VALUES, values);
     s.sync();
 }
 
@@ -448,19 +443,13 @@ void Widget::loadSettings()
     if( splitter ) splitter->restoreState(    s.value( SPLITTER_STATE                 ).toByteArray()       );
     ui->spectrumPTE->setPlainText(            s.value( SPECTRUM_TEXT                  ).toString()          );
     ui->matrixPTE->setPlainText(              s.value( CODE_MATRIX                    ).toString()          );
-    int val = s.value(STRING_VALUE).toInt();
-    settings->setStringsSPBValue(val);
-    progressBarMs     =                       s.value( PROGRESSBAR_MS, progressBarMs  ).toInt();
-    spectrumMs        =                       s.value( SPECTRUM_MS,    spectrumMs     ).toInt();
-
     if (s.contains(SPECTRUM_VALUES)) {
         QVariantList values = s.value(SPECTRUM_VALUES).toList();
         QVector<quint64> spectrum;
         spectrum.reserve(values.size());
         for (const QVariant &v : values)
             spectrum.append(v.toULongLong());
-        // сразу передаём в updatePlotFast
-        updatePlotFast(spectrum);
+        updatePlot(spectrum);
     }
 }
 

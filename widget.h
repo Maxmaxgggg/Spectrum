@@ -26,7 +26,7 @@ public:
     ~Widget() override;
 
     // Подключаем воркера (после создания worker и workerThread)
-    void setWorker(Worker* worker, QThread* workerThread);
+    
 protected:
     void resizeEvent(QResizeEvent *event) override {
         QWidget::resizeEvent(event);
@@ -34,17 +34,29 @@ protected:
         for (int i = 0; i < yCache.size(); ++i) {
             vec[i] = (quint64) yCache.at(i);
         }
-        updatePlotFast(vec);               // ваша быстрая функция обновления
+        updatePlot(vec);               // ваша быстрая функция обновления
     }
+
+public: signals:
+    void toggleStringsSPB(bool);
+    void toggleUseGpuCHB(bool);
+    void toggleUseGrayCodeCHB(bool);
+    void matrixChanged(int);
+    void gpuNotFound();
+
+    void useGpuToggled(bool);
+    void useGrayCodeToggled(bool);
+    void refreshSpectrumValueChanged(int);
+    void refreshProgressbarValueChanged(int);
+    void sendInitialSettingsToWorker(bool, bool, int, int);
+    void requestInitialSettings();
+
 private slots:
-    // UI handlers (имя кнопки ожидается "executePBN" в .ui)
     void on_executePBN_clicked();
     void on_exitPBN_clicked();
     void on_settingsPBN_clicked();
-    void handleSettingsApplied();
-    void handleStrValChanged();
 
-    // Обарботка сигналова воркера
+    void handleStrValChanged();
     void handleUpdateInfoPBR(int percent);
     void handleUpdateSpectrumPlot( const QVector<quint64>& spectrum ); // сигнал от воркера
     void handleUpdateSpectrumPTE(  const QVector<quint64>& spectrum );
@@ -58,23 +70,18 @@ private slots:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+
     Ui::Widget     *ui;
     QSplitter      *splitter         = nullptr;
     Worker         *workerPtr        = nullptr;
     QThread        *workerThreadPtr  = nullptr;
     SettingsDialog *settings         = nullptr;
-    int             remainingMinutes = -1;
 
     // состояние выполнения: Idle / Running / Paused
     enum class RunState { Idle, Running, Paused };
     RunState runState = RunState::Idle;
 
-
-
-    int progressBarMs     = 100;
-    int spectrumMs        = 100;
-
-    // Plot caches and state (optimize updatePlot)
+    // Сохраняем старые значения при обновлении
     QCPBars* spectrumBars = nullptr;
     QVector<double> xCache;
     QVector<double> yCache;
@@ -82,16 +89,17 @@ private:
     int tickerStepCache = -1;
     int sizeCache = 0;
 
+    int remainingMinutes = -1;
 
 
-    // helpers
-    void updatePlotFast(const QVector<quint64>& spectrum);
+    void updatePlot(const QVector<quint64>& spectrum);
     QVector<QString> buildAxisLabels(int size, int step) const;
-    // settings helpers
-    void applySettings(); // читает QSettings и применяет (timers, color)
-    void applySpectrumColor(); // применяет цвет к QCPBars
-    void saveSettings(); // сохраняет текущие интервалы/цветы в QSettings
-    void loadSettings(); // загружает и применяет (вызывается в ctor)
+    void setWorker(Worker* worker, QThread* workerThread);
+    void connectSettingsDialog();
+    void applySettings();
+    void applySpectrumColor(); 
+    void saveSettings(); 
+    void loadSettings(); 
     QString formatRemainingTime(int minutesTotal);
 
 

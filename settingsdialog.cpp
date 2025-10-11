@@ -7,196 +7,70 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     : QDialog(parent), ui(new Ui::SettingsDialog)
 {
     ui->setupUi(this);
-    this->setData();
 
-    QSettings s;
+    setData();
+    loadSettings();
+    updateUiFromSettings();
+    
+    // Отключаем кнопку помощи
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
-    this->restoreGeometry( s.value(SETTINGS_GEOMETRY).toByteArray() );
-    if ( s.contains(SPECTRUM_COLOR) ){
-        int idx = ui->histoColorCMB->findData(s.value(SPECTRUM_COLOR));
-        ui->histoColorCMB->setCurrentIndex( idx );
-    }
-
-    if ( s.contains(PROGRESSBAR_MS) ) {
-        int idx = ui->refreshProgressbarCMB->findData(s.value(PROGRESSBAR_MS));
-        ui->refreshProgressbarCMB->setCurrentIndex( idx );
-    }
-    if (s.contains(SPECTRUM_MS)) {
-        int idx = ui->refreshSpectrumCMB->findData(s.value(SPECTRUM_MS));
-        ui->refreshSpectrumCMB->setCurrentIndex(idx);
-    }
-    if (s.contains(USE_GRAY_CODE_CHECKED)) {
-        ui->useGrayCodeCHB->blockSignals(true); 
-        ui->useGrayCodeCHB->setChecked(s.value(USE_GRAY_CODE_CHECKED).toBool());
-        ui->stringsSPB->setEnabled(!s.value(USE_GRAY_CODE_CHECKED).toBool());
-        ui->useGrayCodeCHB->blockSignals(false);
-    }
-    if ( s.contains(STRING_VALUE) ) {
-        int val = s.value(STRING_VALUE).toInt();
-        ui->stringsSPB->setValue( val );
-    }
-    if (s.contains(USE_GPU_CHECKED)) {
-        ui->useGpuCHB->setChecked(s.value(USE_GPU_CHECKED).toBool());
-    }
-    if (s.contains(TRANSPARENCY_VALUE)) {
-        ui->transparencySPB->setValue(s.value(TRANSPARENCY_VALUE).toInt());
-    }
-    int val = ui->stringsSPB->value();
-    int t = 5;
-
-
+    
 }
 
 SettingsDialog::~SettingsDialog()
 {
-
+    saveSettings();
 }
 
-int SettingsDialog::spectrumColorIndex() const
-{
-    return ui->histoColorCMB->currentIndex();
+void SettingsDialog::handleRequestInitialSettings() {
+    emit sendInitialSettingsToWorker(settings[USE_GPU_CHECKED], settings[USE_GRAY_CODE_CHECKED], settings[SPECTRUM_MS], settings[PROGRESSBAR_MS] );
 }
-
-int SettingsDialog::refreshSpectrumIndex() const
-{
-    return ui->refreshSpectrumCMB->currentIndex();
-}
-
-int SettingsDialog::stringValue() const
-{
-    return ui->stringsSPB->value();
-}
-
-void SettingsDialog::setUseGpuCHBChecked(bool b)
-{
-    ui->useGpuCHB->setChecked(b);
-}
-
-void SettingsDialog::setUseGpuCHBEnabled(bool b)
-{
-    ui->useGpuCHB->setEnabled(b);
-}
-
-void SettingsDialog::setUseGrayCodeCHBEnabled(bool b)
-{
-    ui->useGrayCodeCHB->setEnabled(b);
-}
-
-void SettingsDialog::setUseGrayCodeCHBChecked(bool b)
-{
-    ui->useGrayCodeCHB->setChecked(b);
-}
-
-
-void SettingsDialog::setStringsSPBEnabled(bool b)
-{
-    ui->stringsSPB->setEnabled( b );
-}
-
-void SettingsDialog::setStringsSPBMaxValue(int v)
-{
-    int val = v;
-    if (val == 0 || val > MAX_K)
-        val = MAX_K;
-    ui->stringsSPB->setMaximum(val);
-    ui->stringsSPB->setValue(val);
-}
-
-void SettingsDialog::setStringsSPBValue(int v)
-{
-    ui->stringsSPB->setValue(v);
-}
-
-bool SettingsDialog::isUseGpuCHBChecked() const
-{
-    return ui->useGpuCHB->isChecked();
-}
-
-bool SettingsDialog::isUseGrayCodeCHBChecked() const
-{
-    return ui->useGrayCodeCHB->isChecked();
-}
-
 void SettingsDialog::on_buttonBox_accepted()
 {
-    QSettings s;
-
-    s.setValue( SETTINGS_GEOMETRY, this->saveGeometry() );
-
-    QVariant colVal              =    ui->histoColorCMB->currentData();
-    QVariant barVal              =    ui->refreshProgressbarCMB->currentData();
-    QVariant sptrVal             =    ui->refreshSpectrumCMB->currentData();
-    QVariant strVal              =    ui->stringsSPB->value();
-    QVariant useGPUChecked       =    ui->useGpuCHB->isChecked();
-    QVariant useGrayCodeChecked  =    ui->useGrayCodeCHB->isChecked();
-    QVariant trpVal              =    ui->transparencySPB->value();
-
-    if (colVal.isValid() )            s.setValue( SPECTRUM_COLOR,         colVal.toInt()              );
-    if (barVal.isValid() )            s.setValue( PROGRESSBAR_MS,         barVal.toInt()              );
-    if (sptrVal.isValid())            s.setValue( SPECTRUM_MS,            sptrVal.toInt()             );
-    if (useGrayCodeChecked.isValid()) s.setValue( USE_GRAY_CODE_CHECKED,  useGrayCodeChecked.toBool());
-    if (strVal.isValid() )            s.setValue( STRING_VALUE,           strVal.toInt()              );
-    if (useGPUChecked.isValid())      s.setValue( USE_GPU_CHECKED,        useGPUChecked.toBool()      );
-    if (trpVal.isValid())             s.setValue( TRANSPARENCY_VALUE,     trpVal.toInt()              );
-    // Записываем в реестр
-    s.sync();
-    emit settingsApplied();
+    updateSettingsFromUi();
+    saveSettings();
 }
 
 void SettingsDialog::on_buttonBox_rejected()
 {
-    QSettings s;
-
-    s.setValue( SETTINGS_GEOMETRY, this->saveGeometry() );
-
-
-    // Читаем сохранённые значения. Второй аргумент — значение по умолчанию
-    int  spectrumColor          = s.value( SPECTRUM_COLOR,        0    ).toInt();
-    int  refreshProgressbarMs   = s.value( PROGRESSBAR_MS,        100  ).toInt();
-    int  refreshSpectrumMs      = s.value( SPECTRUM_MS,           100  ).toInt();
-    int  strVal                 = s.value( STRING_VALUE,          1    ).toInt();
-    bool useGPUChecked          = s.value( USE_GPU_CHECKED,       1    ).toBool();
-    bool useGrayCodeChecked     = s.value( USE_GRAY_CODE_CHECKED, 0    ).toBool();
-    int  trpVal                 = s.value( TRANSPARENCY_VALUE,    50   ).toInt();
-    // Устанавливаем их в соответствующие элементы UI
-    ui->histoColorCMB->setCurrentIndex(
-        ui->histoColorCMB->findData(spectrumColor)
-        );
-    ui->refreshProgressbarCMB->setCurrentIndex(
-        ui->refreshProgressbarCMB->findData(refreshProgressbarMs)
-        );
-    ui->stringsSPB->setValue(
-        strVal
-        );
-    ui->useGpuCHB->setChecked(
-        useGPUChecked
-        );
-    ui->useGrayCodeCHB->setChecked(
-        useGrayCodeChecked
-        );
-    ui->transparencySPB->setValue(
-        trpVal
-        );
-    ui->refreshSpectrumCMB->setCurrentIndex(
-        ui->refreshSpectrumCMB->findData(refreshSpectrumMs)
-        );
+    loadSettings();
+    updateUiFromSettings();
 }
 
 void SettingsDialog::on_useGrayCodeCHB_toggled(bool checked)
 {
     QSettings s;
     if (checked) {
-        s.setValue(STRING_VALUE, ui->stringsSPB->value());
+        setStringsValue(ui->stringsSPB->value());
         ui->stringsSPB->setValue(ui->stringsSPB->maximum());
         ui->stringsSPB->setEnabled(false);
         return;
     }
-    int val = s.value(STRING_VALUE).toInt();
-    ui->stringsSPB->setValue(val);
+    ui->stringsSPB->setValue(getStringsValue());
     ui->stringsSPB->setEnabled(true);
-    
 }
 
+void SettingsDialog::disableGpu()
+{
+    setUseGpu(false);
+    saveSettings();
+    ui->useGpuCHB->setChecked(false);
+}
+void SettingsDialog::toggleStringsSPB(bool b) {
+    ui->stringsSPB->setEnabled(b);
+}
+void SettingsDialog::toggleUseGpuCHB(bool b) {
+    ui->useGpuCHB->setEnabled(b);
+}
+void SettingsDialog::toggleUseGrayCodeCHB(bool b) {
+    ui->useGrayCodeCHB->setEnabled(b);
+}
+void SettingsDialog::handleMatrixChanged(int v)
+{
+    settings[STRINGS_MAX_VALUE] = v;
+    ui->stringsSPB->setMaximum(v);
+    ui->stringsSPB->setValue(v);
+}
 void SettingsDialog::setData()
 {
 
@@ -221,3 +95,193 @@ void SettingsDialog::setData()
     ui->histoColorCMB->setItemData( 2, 2 );
 }
 
+void SettingsDialog::saveSettings() {
+
+    QSettings s;
+
+    s.setValue( SPECTRUM_COLOR,        settings[ SPECTRUM_COLOR        ].get<int>()  );
+    s.setValue( PROGRESSBAR_MS,        settings[ PROGRESSBAR_MS        ].get<int>()  );
+    s.setValue( SPECTRUM_MS,           settings[ SPECTRUM_MS           ].get<int>()  );
+    s.setValue( USE_GPU_CHECKED,       settings[ USE_GPU_CHECKED       ].get<bool>() );
+    s.setValue( USE_GRAY_CODE_CHECKED, settings[ USE_GRAY_CODE_CHECKED ].get<bool>() );
+    s.setValue( STRINGS_VALUE,         settings[ STRINGS_VALUE         ].get<int>()  );
+    s.setValue( STRINGS_MAX_VALUE,     settings[ STRINGS_MAX_VALUE     ].get<int>()  );
+    s.setValue( TRANSPARENCY_VALUE,    settings[ TRANSPARENCY_VALUE    ].get<int>()  );
+    s.setValue( SETTINGS_GEOMETRY,     this->saveGeometry()    );
+    s.sync();
+
+}
+void SettingsDialog::loadSettings() {
+
+    QSettings s;
+
+    if ( s.contains( SETTINGS_GEOMETRY ) ) this->restoreGeometry( s.value( SETTINGS_GEOMETRY ).toByteArray() );
+
+    settings[ SPECTRUM_COLOR        ] = s.value( SPECTRUM_COLOR,        DEFAULT_SPECTRUM_COLOR     ).toInt();
+    settings[ PROGRESSBAR_MS        ] = s.value( PROGRESSBAR_MS,        DEFAULT_PROGRESSBAR_MS     ).toInt();
+    settings[ SPECTRUM_MS           ] = s.value( SPECTRUM_MS,           DEFAULT_SPECTRUM_MS        ).toInt();
+    settings[ USE_GPU_CHECKED       ] = s.value( USE_GPU_CHECKED,       DEFAULT_USE_GPU            ).toBool();
+    settings[ USE_GRAY_CODE_CHECKED ] = s.value( USE_GRAY_CODE_CHECKED, DEFAULT_USE_GRAY_CODE      ).toBool();
+    settings[ STRINGS_VALUE         ] = s.value( STRINGS_VALUE,         DEFAULT_STRINGS_VALUE      ).toInt();
+    settings[ STRINGS_MAX_VALUE     ] = s.value( STRINGS_MAX_VALUE,     DEFAULT_STRINGS_MAX_VALUE  ).toInt();
+    settings[ TRANSPARENCY_VALUE    ] = s.value( TRANSPARENCY_VALUE,    DEFAULT_TRANSPARENCY_VALUE ).toInt();
+
+}
+
+void SettingsDialog::updateUiFromSettings()
+{
+    int  spectrumColor        = getHistoColorValue();
+    int  refreshProgressbarMs = getRefreshProgressbarValue();
+    int  refreshSpectrumMs    = getRefreshSpectrumValue();
+    int  strVal               = getStringsValue();
+    int  strMaxVal            = getStringsMaxValue();
+    bool useGPUChecked        = isGpuUsed();
+    bool useGrayCodeChecked   = isGrayCodeUsed();
+    int  trpVal               = getTransparencyValue();
+
+    ui->histoColorCMB->setCurrentIndex(
+        ui->histoColorCMB->findData(spectrumColor)
+    );
+    ui->refreshProgressbarCMB->setCurrentIndex(
+        ui->refreshProgressbarCMB->findData(refreshProgressbarMs)
+    );
+    ui->stringsSPB->setValue(
+        strVal
+    );
+    ui->stringsSPB->setMaximum(
+        strMaxVal
+    );
+    ui->useGpuCHB->setChecked(
+        useGPUChecked
+    );
+    ui->useGrayCodeCHB->setChecked(
+        useGrayCodeChecked
+    );
+    ui->transparencySPB->setValue(
+        trpVal
+    );
+    ui->refreshSpectrumCMB->setCurrentIndex(
+        ui->refreshSpectrumCMB->findData(refreshSpectrumMs)
+    );
+    if (useGrayCodeChecked) {
+        ui->stringsSPB->setEnabled(false);
+        ui->stringsSPB->setValue(ui->stringsSPB->maximum());
+    }
+}
+
+void SettingsDialog::updateSettingsFromUi()
+{
+    QSettings s;
+    s.setValue(SETTINGS_GEOMETRY, this->saveGeometry());
+
+    int colVal = ui->histoColorCMB->currentData().toInt();
+    int barVal = ui->refreshProgressbarCMB->currentData().toInt();
+    int sptrVal = ui->refreshSpectrumCMB->currentData().toInt();
+    int strVal = ui->stringsSPB->value();
+    bool useGPUChecked = ui->useGpuCHB->isChecked();
+    bool useGrayCodeChecked = ui->useGrayCodeCHB->isChecked();
+    int trpVal = ui->transparencySPB->value();
+
+    if (isGpuUsed() != useGPUChecked)
+        emit useGpuToggled(useGPUChecked);
+
+    if (isGrayCodeUsed() != useGrayCodeChecked)
+        emit useGrayCodeToggled(useGrayCodeChecked);
+
+    if (getRefreshProgressbarValue() != barVal)
+        emit refreshProgressbarValueChanged(barVal);
+    
+    if (getRefreshSpectrumValue() != sptrVal)
+        emit refreshSpectrumValueChanged(sptrVal);
+
+    setHistoColorValue(colVal);
+    setRefreshProgressbarValue(barVal);
+    
+    setRefreshSpectrumValue(sptrVal);
+    setUseGpu(useGPUChecked);
+    setUseGrayCode(useGrayCodeChecked);
+    if(!useGrayCodeChecked)
+        setStringsValue(strVal);
+    setTransparencyValue(trpVal);
+
+}
+
+int SettingsDialog::getHistoColorValue() const
+{
+    return settings[SPECTRUM_COLOR];
+}
+
+int SettingsDialog::getRefreshProgressbarValue() const
+{
+    return settings[PROGRESSBAR_MS];
+}
+
+int SettingsDialog::getRefreshSpectrumValue() const
+{
+    return settings[SPECTRUM_MS];
+}
+
+int SettingsDialog::getStringsValue() const
+{
+    return settings[STRINGS_VALUE];
+}
+
+int SettingsDialog::getStringsMaxValue() const
+{
+    return settings[STRINGS_MAX_VALUE];
+}
+
+bool SettingsDialog::isGpuUsed() const
+{
+    return settings[USE_GPU_CHECKED];
+}
+
+bool SettingsDialog::isGrayCodeUsed() const
+{
+    return settings[USE_GRAY_CODE_CHECKED];
+}
+
+int SettingsDialog::getTransparencyValue() const
+{
+    return settings[TRANSPARENCY_VALUE];
+}
+
+void SettingsDialog::setHistoColorValue(int v)
+{
+    settings[SPECTRUM_COLOR] = v;
+}
+
+void SettingsDialog::setRefreshProgressbarValue(int v)
+{
+    settings[PROGRESSBAR_MS] = v;
+}
+
+void SettingsDialog::setRefreshSpectrumValue(int v)
+{
+    settings[SPECTRUM_MS] = v;
+}
+
+void SettingsDialog::setStringsValue(int v)
+{
+    settings[STRINGS_VALUE] = v;
+}
+
+void SettingsDialog::setStringsMaxValue(int v)
+{
+    settings[STRINGS_MAX_VALUE] = v;
+}
+
+void SettingsDialog::setUseGpu(bool b)
+{
+    settings[USE_GPU_CHECKED] = b;
+}
+
+void SettingsDialog::setUseGrayCode(bool b)
+{
+    settings[USE_GRAY_CODE_CHECKED] = b;
+}
+
+void SettingsDialog::setTransparencyValue(int v)
+{
+    settings[TRANSPARENCY_VALUE] = v;
+}

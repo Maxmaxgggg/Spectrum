@@ -8,6 +8,7 @@
 #include <QSettings>
 #include <atomic>
 #include <omp.h>
+#include "defines.h"
 
 class Worker : public QObject
 {
@@ -21,8 +22,13 @@ public slots:
     void pause();
     void resume();
     void cancel();
-    void useGPU(bool);
-    void useGrayCode(bool);
+
+    
+    void handleRefreshSpectrumValueChanged(int);
+    void handleRefreshProgressbarValueChanged(int);
+    void handleUseGpuToggled(bool);
+    void handleUseGrayCodeToggled(bool);
+    void setInitialSettings(bool, bool, int, int);
 
 
 signals:
@@ -40,18 +46,15 @@ private:
     void    freeBinomTable(quint64** C, unsigned maxN);
 
     quint64**                                binomTable;
-public:
-    std::atomic<quint64>                     refreshProgressbarMs;
-    std::atomic<quint64>                     refreshSpectrumMs;
-    
 
 private:
     std::atomic<int> paused    { 0 };
     std::atomic<int> cancelled { 0 };
     quint64** buildBinomTable(unsigned maxN);
-
-    bool USE_GPU = true;
-    bool USE_GRAY_CODE = false;
+    std::atomic<quint64> refreshProgressbarMs = DEFAULT_PROGRESSBAR_MS;
+    std::atomic<quint64> refreshSpectrumMs    = DEFAULT_SPECTRUM_MS;
+    bool                 USE_GPU              = DEFAULT_USE_GPU;
+    bool                 USE_GRAY_CODE        = DEFAULT_USE_GRAY_CODE;
 };
 
 #endif // WORKER_H
