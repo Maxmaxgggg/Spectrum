@@ -1,15 +1,18 @@
 #ifndef WORKER_H
 #define WORKER_H
 
-#include <QObject>
-#include <QVector>
-#include <QAtomicInteger>
-#include <QMutex>
-#include <QSettings>
 #include <atomic>
+#include <QThread>
+#include <cmath>
 #include <omp.h>
-#include "defines.h"
 #include <cuda_runtime.h>
+#include <qjsonobject.h>
+
+#include "defines.h"
+#include "dualcode.h"
+#include "computeSpectrumKernel.cuh"
+
+using namespace std::chrono;
 
 class Worker : public QObject
 {
@@ -24,19 +27,23 @@ public:
         CpuGray,
         CpuNoGray
     };
-
-public slots:
-    void computeSpectrum(  QStringList rows, quint64 maxComb  );
     void pause();
     void resume();
     void cancel();
+    void uncancel();
+    bool isCancelled();
 
+public slots:
+    void computeSpectrum(  QStringList rows, quint64 maxComb  );
+    
+    
     
     void handleRefreshSpectrumValueChanged(int);
     void handleRefreshProgressbarValueChanged(int);
     void handleUseGpuToggled(bool);
     void handleUseGrayCodeToggled(bool);
-    void setInitialSettings(bool, bool, int, int);
+    void handleUseDualCodeToggled(bool);
+    void setInitialSettings(const QJsonObject&);
 
 
 signals:
@@ -44,8 +51,8 @@ signals:
     void updateSpectrumPTE(   const QVector<quint64>& spectrum  );
     void updateSpectrumPlot(  const QVector<quint64>& spectrum  );
     void errorOccurred(       const QString& message            );
-    void finished();
-    void updateRemainingMinutes(int minutesLeft);
+    void finished( int );
+    void updateRemainingMinutes(int elapsedSec, int minutesLeft);
     void GPUnotFound();
 
 private:
@@ -55,10 +62,10 @@ private:
     quint64** buildBinomTable(unsigned maxN);
     Algorithm chooseAlgorithm(bool useGpu, bool useGray) const;
 
-    void computeSpectrumGpuGray(   quint64 k, quint64 n, quint64 blockCount, quint64 chunkSize, int maxBlocks, int threadsPerBlock );
-    void computeSpectrumGpuNoGray( quint64 k, quint64 n, quint64 blockCount, quint64 chunkSize, int maxBlocks, int threadsPerBlock, quint64 maxComb );
-    void computeSpectrumCpuGray(   quint64 k, quint64 n, quint64 blockCount );
-    void computeSpectrumCpuNoGray( quint64 k, quint64 n, quint64 blockCount, quint64 maxComb );
+    void computeSpectrumGpuGray(   quint64 k, quint64 n, quint64 wordsPerRow, quint64 chunkSize, int blockCount, int threadsPerBlock );
+    void computeSpectrumGpuNoGray( quint64 k, quint64 n, quint64 wordsPerRow, quint64 chunkSize, int blockCount, int threadsPerBlock, quint64 maxComb );
+    void computeSpectrumCpuGray(   quint64 k, quint64 n, quint64 wordsPerRow );
+    void computeSpectrumCpuNoGray( quint64 k, quint64 n, quint64 wordsPerRow, quint64 maxComb );
 
     quint64** binomTable;
     std::atomic<int> paused    { 0 };
@@ -68,12 +75,13 @@ private:
     std::atomic<quint64> refreshSpectrumMs    = DEFAULT_SPECTRUM_MS;
     bool                 useGpu               = DEFAULT_USE_GPU;
     bool                 useGrayCode          = DEFAULT_USE_GRAY_CODE;
+    bool                 useDualCode          = DEFAULT_USE_DUAL_CODE;
 
 
-    std::chrono::steady_clock::time_point startTime;
-    std::chrono::steady_clock::time_point lastTimeSpectrum;
-    std::chrono::steady_clock::time_point lastTimeBar;
-    std::chrono::steady_clock::time_point lastEstimateTime;
+    steady_clock::time_point startTime;
+    steady_clock::time_point lastTimeSpectrum;
+    steady_clock::time_point lastTimeBar;
+    steady_clock::time_point lastEstimateTime;
 
 
 

@@ -2,9 +2,8 @@
 #define SETTINGSDIALOG_H
 
 #include <QDialog>
-#include <QColor>
 #include "defines.h"
-#include "json.hpp"
+#include <QJsonObject>
 
 
 namespace Ui { class SettingsDialog; }
@@ -26,6 +25,7 @@ public:
     int   getStringsMaxValue()          const;
     bool  isGpuUsed()					const;
     bool  isGrayCodeUsed()				const;
+    bool  isDualCodeUsed()              const;
     int   getTransparencyValue()		const;
 
     void  setHistoColorValue(int);
@@ -35,15 +35,16 @@ public:
     void  setStringsMaxValue(int);
     void  setUseGpu(bool);
     void  setUseGrayCode(bool);
+    void  setUseDualCode(bool);
     void  setTransparencyValue(int);
 
 public: signals:
     void useGpuToggled(bool);
     void useGrayCodeToggled(bool);
+    void useDualCodeToggled(bool);
     void refreshProgressbarValueChanged(int);
     void refreshSpectrumValueChanged(int);
-    void sendInitialSettingsToWorker(bool, bool, int, int);
-    
+    void sendInitialSettingsToWorker(const QJsonObject& settings);
 
 public slots:
 
@@ -54,6 +55,8 @@ public slots:
     void toggleUseGpuCHB(bool);
 
     void toggleUseGrayCodeCHB(bool);
+
+    void toggleUseDualCodeCHB(bool);
 
     void handleMatrixChanged(int);
 
@@ -66,7 +69,7 @@ private slots:
 
     void on_useGrayCodeCHB_toggled(bool checked);
 
-    
+    void on_useDualCodeCHB_toggled(bool checked);
 
 private:
 
@@ -77,8 +80,10 @@ private:
     void updateUiFromSettings();
     void updateSettingsFromUi();
     Ui::SettingsDialog *ui;
-    nlohmann::json settings;
+    QJsonObject settings;
+
     void setData();
+    void setToolTips();
 };
 
 #endif // SETTINGSDIALOG_H

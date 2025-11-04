@@ -3,5 +3,15 @@
         <file>icon.ico</file>
         <file>gear.png</file>
         <file>icon.png</file>
+        <file>newspaper.png</file>
+        <file>newspaper--minus.png</file>
+        <file>newspaper--plus.png</file>
+    </qresource>
+    <qresource prefix="/translation">
+        <file>qt_ru.qm</file>
+        <file>qtxmlpatterns_ru.qm</file>
+        <file>qtscript_ru.qm</file>
+        <file>qtmultimedia_ru.qm</file>
+        <file>qtbase_ru.qm</file>
     </qresource>
 </RCC>

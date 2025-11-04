@@ -1,14 +1,12 @@
 #ifndef WIDGET_H
 #define WIDGET_H
 
-#include <QWidget>
-#include <QVector>
-#include <QTimer>
-#include <QSettings>
-#include <QSharedPointer>
-#include <QElapsedTimer>
 #include "qcustomplot.h"
 #include "settingsdialog.h"
+#include "worker.h"
+#include "workwithmatrix.h"
+#include "defines.h"
+
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class Widget; }
@@ -41,20 +39,23 @@ public: signals:
     void toggleStringsSPB(bool);
     void toggleUseGpuCHB(bool);
     void toggleUseGrayCodeCHB(bool);
+    void toggleUseDualCodeCHB(bool);
     void matrixChanged(int);
     void gpuNotFound();
 
     void useGpuToggled(bool);
     void useGrayCodeToggled(bool);
+    void useDualCodeToggled(bool);
     void refreshSpectrumValueChanged(int);
     void refreshProgressbarValueChanged(int);
-    void sendInitialSettingsToWorker(bool, bool, int, int);
+    void sendInitialSettingsToWorker(const QJsonObject&);
     void requestInitialSettings();
 
 private slots:
     void on_executePBN_clicked();
     void on_exitPBN_clicked();
     void on_settingsPBN_clicked();
+    void on_cancelPBN_clicked();
 
     void handleStrValChanged();
     void handleUpdateInfoPBR(int percent);
@@ -62,12 +63,14 @@ private slots:
     void handleUpdateSpectrumPTE(  const QVector<quint64>& spectrum );
     void handleError(const QString& message);
     void handleGPUnotFound();
-    void handleFinished();
-    void handleUpdateRemainingMinutes(int);
+    void handleFinished(int);
+    void handleUpdateRemainingMinutes(int, int);
 
     void handleMatrixChanged();
 
     bool eventFilter(QObject *watched, QEvent *event) override;
+
+    void onAddMatrixTriggered();
 
 private:
 
@@ -76,6 +79,13 @@ private:
     Worker         *workerPtr        = nullptr;
     QThread        *workerThreadPtr  = nullptr;
     SettingsDialog *settings         = nullptr;
+
+    QMenu          *matrixMenu       = nullptr;
+    QAction        *addMatrix        = nullptr;
+    QMenu          *deleteMenu       = nullptr;
+    QTimer         *matrixMenuTimer  = nullptr;
+    // Переписать
+    QPointer<QAction> pendingHover;
 
     // состояние выполнения: Idle / Running / Paused
     enum class RunState { Idle, Running, Paused };
@@ -94,7 +104,12 @@ private:
 
     void updatePlot(const QVector<quint64>& spectrum);
     QVector<QString> buildAxisLabels(int size, int step) const;
-    void setWorker(Worker* worker, QThread* workerThread);
+    void setWorker();
+    void setMatrixMenu();
+    void setMatrixActionsEnabled(bool);
+    bool matrixActionsEnabled = true;
+    void rebuildMatrixMenuActions();
+    void setToolTips();
     void connectSettingsDialog();
     void applySettings();
     void applySpectrumColor(); 
@@ -102,6 +117,17 @@ private:
     void loadSettings(); 
     QString formatRemainingTime(int minutesTotal);
 
+
+
+    QJsonArray matrices;
+    void loadMatricesArray();
+    void saveMatricesArray();
+    void saveMatrixByName(const QString& name);
+    bool removeMatrixByName(const QString& name);
+    int  findMatrixIndexByName(const QString& name);
+    QString getMatrixByName(const QString& name);
+    QStringList listMatrixNames();
+    QString defaultMatrixName();
 
 };
 

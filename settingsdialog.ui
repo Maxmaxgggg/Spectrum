@@ -41,15 +41,39 @@
      <layout class="QVBoxLayout" name="verticalLayout">
       <item>
        <layout class="QGridLayout" name="gridLayout">
-        <item row="4" column="2">
-         <widget class="QSpinBox" name="transparencySPB">
-          <property name="maximum">
-           <number>100</number>
-          </property>
-          <property name="value">
-           <number>50</number>
+        <item row="4" column="0">
+         <widget class="QLabel" name="transparencyLBL">
+          <property name="text">
+           <string>Прозрачность гистограммы</string>
           </property>
          </widget>
+        </item>
+        <item row="5" column="2">
+         <widget class="QCheckBox" name="useGpuCHB">
+          <property name="text">
+           <string/>
+          </property>
+         </widget>
+        </item>
+        <item row="8" column="0">
+         <widget class="QLabel" name="stringsLBL">
+          <property name="text">
+           <string>Максимальное количество объединяемых строк</string>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="1">
+         <spacer name="horizontalSpacer_3">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>68</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
         </item>
         <item row="5" column="0">
          <widget class="QLabel" name="useGpuLBL">
@@ -90,6 +114,63 @@
             <string>1 м</string>
            </property>
           </item>
+         </widget>
+        </item>
+        <item row="3" column="0">
+         <widget class="QLabel" name="histoColorLBL">
+          <property name="text">
+           <string>Цвет гистограммы</string>
+          </property>
+         </widget>
+        </item>
+        <item row="8" column="2">
+         <widget class="QSpinBox" name="stringsSPB">
+          <property name="minimum">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <number>64</number>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="0">
+         <widget class="QLabel" name="refreshProgressbarLBL">
+          <property name="text">
+           <string>Временной интервал обновления шкалы прогресса</string>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="2">
+         <widget class="QComboBox" name="histoColorCMB">
+          <item>
+           <property name="text">
+            <string>Синий</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Зелёный</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Красный</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+        <item row="0" column="0">
+         <widget class="QLabel" name="refreshSpectrumLBL">
+          <property name="text">
+           <string>Временной интервал обновления спектра</string>
+          </property>
+         </widget>
+        </item>
+        <item row="6" column="2">
+         <widget class="QCheckBox" name="useGrayCodeCHB">
+          <property name="text">
+           <string/>
+          </property>
          </widget>
         </item>
         <item row="0" column="2">
@@ -139,90 +220,6 @@
           </item>
          </widget>
         </item>
-        <item row="1" column="0">
-         <widget class="QLabel" name="refreshProgressbarLBL">
-          <property name="text">
-           <string>Частота обновления шкалы прогресса</string>
-          </property>
-         </widget>
-        </item>
-        <item row="7" column="0">
-         <widget class="QLabel" name="stringsLBL">
-          <property name="text">
-           <string>Максимальное количество объединяемых строк</string>
-          </property>
-         </widget>
-        </item>
-        <item row="5" column="2">
-         <widget class="QCheckBox" name="useGpuCHB">
-          <property name="text">
-           <string/>
-          </property>
-         </widget>
-        </item>
-        <item row="0" column="1">
-         <spacer name="horizontalSpacer_3">
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>68</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item row="3" column="0">
-         <widget class="QLabel" name="histoColorLBL">
-          <property name="text">
-           <string>Цвет гистограммы</string>
-          </property>
-         </widget>
-        </item>
-        <item row="7" column="2">
-         <widget class="QSpinBox" name="stringsSPB">
-          <property name="minimum">
-           <number>1</number>
-          </property>
-          <property name="maximum">
-           <number>64</number>
-          </property>
-         </widget>
-        </item>
-        <item row="3" column="2">
-         <widget class="QComboBox" name="histoColorCMB">
-          <item>
-           <property name="text">
-            <string>Синий</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>Зелёный</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>Красный</string>
-           </property>
-          </item>
-         </widget>
-        </item>
-        <item row="0" column="0">
-         <widget class="QLabel" name="refreshSpectrumLBL">
-          <property name="text">
-           <string>Желаемая частота обновления спектра</string>
-          </property>
-         </widget>
-        </item>
-        <item row="4" column="0">
-         <widget class="QLabel" name="transparencyLBL">
-          <property name="text">
-           <string>Прозрачность гистограммы</string>
-          </property>
-         </widget>
-        </item>
         <item row="6" column="0">
          <widget class="QLabel" name="useGrayCodeLBL">
           <property name="text">
@@ -230,8 +227,25 @@
           </property>
          </widget>
         </item>
-        <item row="6" column="2">
-         <widget class="QCheckBox" name="useGrayCodeCHB">
+        <item row="4" column="2">
+         <widget class="QSpinBox" name="transparencySPB">
+          <property name="maximum">
+           <number>100</number>
+          </property>
+          <property name="value">
+           <number>50</number>
+          </property>
+         </widget>
+        </item>
+        <item row="7" column="0">
+         <widget class="QLabel" name="useDualCodeLBL">
+          <property name="text">
+           <string>Использовать дуальный код</string>
+          </property>
+         </widget>
+        </item>
+        <item row="7" column="2">
+         <widget class="QCheckBox" name="useDualCodeCHB">
           <property name="text">
            <string/>
           </property>

@@ -12,13 +12,15 @@ void FilterPlainTextEdit::insertFromMimeData(const QMimeData *source)
     QPlainTextEdit::insertPlainText(text);
 }
 
-void FilterPlainTextEdit::keyPressEvent(QKeyEvent *e)
+void FilterPlainTextEdit::keyPressEvent(QKeyEvent* e)
 {
     // Разрешаем служебные клавиши и навигацию
-    if (e->matches(QKeySequence::Copy)
+    if (   e->matches(QKeySequence::Copy)
         || e->matches(QKeySequence::Paste)
         || e->matches(QKeySequence::Cut)
         || e->matches(QKeySequence::SelectAll)
+        || e->matches(QKeySequence::Undo)
+        || e->matches(QKeySequence::Redo)
         || e->key() == Qt::Key_Backspace
         || e->key() == Qt::Key_Delete
         || e->key() == Qt::Key_Left
