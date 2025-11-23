@@ -93,7 +93,7 @@ void Widget::rebuildMatrixMenuActions()
         for (const QString& nm : names) {
             QAction* act = new QAction(nm, matrixMenu);
             act->setData(nm);
-            act->setIcon(QIcon(":/newspaper.png"));
+            act->setIcon(QIcon(":/ui/icons/newspaper.png"));
             act->setEnabled(matrixActionsEnabled); // учитываем флаг
 
             connect(act, &QAction::triggered, this, [this, nm]() {
@@ -107,7 +107,7 @@ void Widget::rebuildMatrixMenuActions()
         // пункты в подменю удаления (родитель = deleteMenu)
         for (const QString& nm : names) {
             QAction* delAct = new QAction(nm, deleteMenu);
-            delAct->setIcon(QIcon(":/newspaper.png"));
+            delAct->setIcon(QIcon(":/ui/icons/newspaper.png"));
             delAct->setEnabled(matrixActionsEnabled); // учитываем флаг
 
             connect(delAct, &QAction::triggered, this, [this, nm]() {
@@ -193,9 +193,9 @@ void Widget::setMatrixMenu()
 
     addMatrix = matrixMenu->addAction(QString::fromUtf8("Сохранить матрицу"));
     connect(addMatrix, &QAction::triggered, this, &Widget::onAddMatrixTriggered);
-    addMatrix->setIcon(QIcon(":/newspaper--plus.png"));
+    addMatrix->setIcon(QIcon(":/ui/icons/newspaper--plus.png"));
 
-    deleteMenu = matrixMenu->addMenu(QIcon(":/newspaper--minus.png"), QString::fromUtf8("Удалить матрицу"));
+    deleteMenu = matrixMenu->addMenu(QIcon(":/ui/icons/newspaper--minus.png"), QString::fromUtf8("Удалить матрицу"));
 
     // функция-утилита для обновления состояния доступности пунктов
     auto updateMenuEnabledState = [this]() {

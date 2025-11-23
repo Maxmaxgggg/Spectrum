@@ -1,17 +1,15 @@
 <RCC>
     <qresource prefix="/">
-        <file>icon.ico</file>
-        <file>gear.png</file>
-        <file>icon.png</file>
-        <file>newspaper.png</file>
-        <file>newspaper--minus.png</file>
-        <file>newspaper--plus.png</file>
-    </qresource>
-    <qresource prefix="/translation">
-        <file>qt_ru.qm</file>
-        <file>qtxmlpatterns_ru.qm</file>
-        <file>qtscript_ru.qm</file>
-        <file>qtmultimedia_ru.qm</file>
-        <file>qtbase_ru.qm</file>
+        <file>ui/icons/gear.png</file>
+        <file>ui/icons/icon.ico</file>
+        <file>ui/icons/icon.png</file>
+        <file>ui/icons/newspaper.png</file>
+        <file>ui/icons/newspaper--minus.png</file>
+        <file>ui/icons/newspaper--plus.png</file>
+        <file>translation/qt_ru.qm</file>
+        <file>translation/qtbase_ru.qm</file>
+        <file>translation/qtmultimedia_ru.qm</file>
+        <file>translation/qtscript_ru.qm</file>
+        <file>translation/qtxmlpatterns_ru.qm</file>
     </qresource>
 </RCC>

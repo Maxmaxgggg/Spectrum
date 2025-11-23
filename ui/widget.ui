@@ -14,8 +14,8 @@
    <string>Расчет спектра кодовых слов</string>
   </property>
   <property name="windowIcon">
-   <iconset resource="q.qrc">
-    <normaloff>:/icon.png</normaloff>:/icon.png</iconset>
+   <iconset resource="../q.qrc">
+    <normaloff>:/ui/icons/icon.png</normaloff>:/ui/icons/icon.png</iconset>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
@@ -101,8 +101,8 @@
         <string/>
        </property>
        <property name="icon">
-        <iconset resource="q.qrc">
-         <normaloff>:/gear.png</normaloff>:/gear.png</iconset>
+        <iconset resource="../q.qrc">
+         <normaloff>:/ui/icons/gear.png</normaloff>:/ui/icons/gear.png</iconset>
        </property>
       </widget>
      </item>
@@ -189,7 +189,7 @@
   </customwidget>
  </customwidgets>
  <resources>
-  <include location="q.qrc"/>
+  <include location="../q.qrc"/>
  </resources>
  <connections/>
 </ui>
