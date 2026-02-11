@@ -59,8 +59,8 @@ private slots:
 
     void handleStrValChanged();
     void handleUpdateInfoPBR(int percent);
-    void handleUpdateSpectrumPlot( const QVector<quint64>& spectrum ); // сигнал от воркера
-    void handleUpdateSpectrumPTE(  const QVector<quint64>& spectrum );
+    void handleUpdateSpectrumPlot( const QVector<quint64> spectrum ); // сигнал от воркера
+    void handleUpdateSpectrumPTE(  const QVector<quint64> spectrum );
     void handleError(const QString& message);
     void handleGPUnotFound();
     void handleFinished(int);

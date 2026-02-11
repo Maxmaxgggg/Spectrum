@@ -347,18 +347,27 @@ void Widget::on_executePBN_clicked()
                 return;
             }
             QStringList rows = ui->matrixPTE->toPlainText().split('\n', Qt::SkipEmptyParts);
-            if (rows.isEmpty()) {
+            if ( rows.isEmpty()) {
                 QMessageBox::warning(this, ERROR_TITLE, "Матрица пустая");
                 handleFinished(-1);
                 return;
             }
-            if ( rows.size() > MAX_K ) {
-                QMessageBox::warning(this, ERROR_TITLE, QString("Число строк матрицы больше чем %1").arg(MAX_K));
+            quint64 numOfRows = rows.size();
+            if ( numOfRows > MAX_ROWS ) {
+                QMessageBox::warning(this, ERROR_TITLE, QString("Число строк матрицы больше чем %1").arg(MAX_ROWS));
                 handleFinished(-1);
                 return;
             }
-            if ( rows.length() - rows.size() > MAX_K) {
-                QMessageBox::warning(this, ERROR_TITLE, QString("Разница между размерами матрицы больше чем %1").arg(MAX_K));
+            quint64 numOfCols = (quint64)rows.first().length();
+            for (const QString& r : rows) {
+                if ((quint64)r.length() != numOfCols) {
+                    QMessageBox::warning(this, ERROR_TITLE, QString("Все строки должны быть одинаковой длины"));
+                    handleFinished(-1);
+                    return;
+                }
+            }
+            if ( numOfCols > MAX_COLS ) {
+                QMessageBox::warning(this, ERROR_TITLE, QString("Число столбцов матрицы больше чем %1").arg(MAX_COLS));
                 handleFinished(-1);
                 return;
             }
@@ -369,9 +378,10 @@ void Widget::on_executePBN_clicked()
                 else
                     maxComb = rows.size();
             } 
-
+            // Получаем индекс маскимального комбина, который умещается в quint64
+            qint64 maxCombInd = maxCombIndex(numOfRows);
             if (maxComb <= 0 || maxComb > rows.size()) maxComb = rows.size();
-
+            if (maxComb > maxCombInd) maxComb = maxCombInd;
             workerThreadPtr->start();
             QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection,
                 Q_ARG(QStringList, rows), Q_ARG(quint64, (qulonglong)maxComb));
@@ -476,12 +486,12 @@ void Widget::handleUpdateInfoPBR(int percent)
     ui->infoPBR->setValue(percent);
 }
 
-void Widget::handleUpdateSpectrumPlot(const QVector<quint64>& spectrum)
+void Widget::handleUpdateSpectrumPlot(const QVector<quint64> spectrum)
 {
     updatePlot(spectrum);
 }
 
-void Widget::handleUpdateSpectrumPTE(const QVector<quint64> &spectrum)
+void Widget::handleUpdateSpectrumPTE(const QVector<quint64> spectrum)
 {
 
     QString str = "";
@@ -527,9 +537,9 @@ void Widget::handleMatrixChanged()
     QStringList rows = ui->matrixPTE->toPlainText().split('\n', Qt::SkipEmptyParts);
     if( rows.size() != 0)
         emit matrixChanged(rows.size());    
-    if ( rows.size() > MAX_K ) {
-        emit toggleUseGrayCodeCHB( false );
-    }
+    //if ( rows.size() > MAX_K ) {
+    //    emit toggleUseGrayCodeCHB( false );
+    //}
     int maxLen = 0;
     for (const QString& row : rows)
         maxLen = qMax(maxLen, row.length());

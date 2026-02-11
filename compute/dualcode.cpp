@@ -122,8 +122,7 @@ bool computeSpectrumFromDual(quint64* dualSpectrum, int n, int k) {
     // Копируем входной массив в mpz_class-вектор (чтобы работать в big-int)
     std::vector<mpz_class> B(n + 1);
     mpz_class sumB = 0;
-    for (int j = 0; j <= n; ++j) {
-        quint64 t = dualSpectrum[j];
+    for (int j = 0; j <= n; ++j) {;
         B[j] = mpz_class(std::to_string(dualSpectrum[j])); 
         sumB += B[j];
     }
@@ -165,6 +164,56 @@ bool computeSpectrumFromDual(quint64* dualSpectrum, int n, int k) {
         catch (const std::exception& ex) {
             return false;
         }
+    }
+
+    return true;
+}
+
+
+bool computeSpectrumFromDual(const quint64* dualSpectrum, int n, int k, std::vector<mpz_class>& spectrumOut) {
+    if (!dualSpectrum) return false;
+    if (n < 0 || k < 0 || k > n) return false;
+
+    spectrumOut.clear();
+    spectrumOut.resize(n + 1);
+
+    // Копируем входной массив в mpz_class-вектор (big-int)
+    std::vector<mpz_class> B(n + 1);
+    mpz_class sumB = 0;
+    for (int j = 0; j <= n; ++j) {
+        // mpz_class умеет инициализироваться из целочисленного значения
+        B[j] =  mpz_class(std::to_string(dualSpectrum[j]));
+        sumB += B[j];
+    }
+
+    // Проверка: sumB == 2^(n-k)
+    mpz_class expected = mpz_class(1) << (n - k);
+    if (sumB != expected) {
+        // Поведение сохранено: если сумма не соответствует ожидаемой — вернуть false.
+        return false;
+    }
+
+    // Построим таблицу биномиалов C[a][b] для 0..n
+    auto C = buildBinomTable(n);
+
+    // scale = |C^perp| = 2^(n-k)
+    mpz_class scale = expected;
+    if (scale == 0) return false; // на всякий случай
+
+    // Вычисляем A_i по формуле MacWilliams: A_i = (1/|C^perp|) * sum_j B_j * K_j(i)
+    for (int i = 0; i <= n; ++i) {
+        mpz_class s = 0;
+        for (int j = 0; j <= n; ++j) {
+            if (B[j] == 0) continue;
+            mpz_class K = krawtchouk(C, n, j, i); // ожидаем mpz_class или совместимый тип
+            s += B[j] * K;
+        }
+        // Ожидаем целочисленного деления
+        if (s % scale != 0) {
+            // Если деление нецелое — считаем это ошибкой (по исходной логике)
+            return false;
+        }
+        spectrumOut[i] = s / scale;
     }
 
     return true;

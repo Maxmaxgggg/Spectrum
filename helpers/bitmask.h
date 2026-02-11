@@ -1,10 +1,13 @@
 #pragma once
 #include <iostream>
+#include <vector>
+
 struct BitMask {
     unsigned  BITS;   // длина маски в битах
     unsigned  WORDS;  // число 64-битных слов для хранения маски
     unsigned  COUNT;  // число единиц в маске
     uint64_t* DATA = nullptr;
+    uint64_t* lastMask; // последняя маска для данного числа единиц
 
     BitMask(unsigned len, unsigned ones);
     BitMask(const BitMask& other);
@@ -14,7 +17,10 @@ struct BitMask {
 
     // Печать маски
     void print() const;
-    // nextMask заменить текущую маску на следующую комбинацию с тем же числом единиц
+
+    template<typename F>
+    void forEachSetBit(F f) const;
+    // nextMask заменить текущую маску на следующую с тем же числом единиц
     bool nextMask();
     void setMask(uint64_t maskIdx, uint64_t** binomTable, unsigned maxComb);
     // Copy/Move assign
@@ -49,3 +55,26 @@ private:
     // Установить COUNT самых младших единиц
     void initLowest(unsigned r);
 };
+
+
+// Параметр F - функтор (н-р лямбда-функция)
+template<typename F>
+inline void BitMask::forEachSetBit(F f) const {
+    for (unsigned wi = 0; wi < WORDS; ++wi) {
+        // Работаем с локальной копией слова, не изменяем массив DATA
+        uint64_t w = DATA[wi];
+        // Если слово не равно нулевому ( есть ненулевые биты )
+        while (w) {
+            // Получаем локальную позицию ненулевого бита в слове
+            unsigned long bi;
+            _BitScanForward64(&bi, w);
+            unsigned bit = (unsigned)bi;
+            // Получаем глобальную позицию ненулевого бита в маске
+            unsigned pos = (wi << 6) + bit;
+            //
+            f(pos);
+            // сброс младшего бита
+            w &= (w - 1);
+        }
+    }
+}

@@ -4,7 +4,6 @@
 
 int main(int argc, char *argv[])
 {
-
   QApplication a(argc, argv);
   QTranslator qTranslator;
   if (qTranslator.load(":/translation/qt_ru.qm")) {

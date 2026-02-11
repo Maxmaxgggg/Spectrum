@@ -11,6 +11,7 @@
 #include "defines.h"
 #include "dualcode.h"
 #include "computeSpectrumKernel.cuh"
+#include "bitmask.h"
 
 using namespace std::chrono;
 
@@ -48,22 +49,28 @@ public slots:
 
 signals:
     void updateInfoPBR(       int percent                       );
-    void updateSpectrumPTE(   const QVector<quint64>& spectrum  );
-    void updateSpectrumPlot(  const QVector<quint64>& spectrum  );
+    void updateSpectrumPTE(   const QVector<quint64> spectrum  );
+    void updateSpectrumPlot(  const QVector<quint64> spectrum  );
     void errorOccurred(       const QString& message            );
     void finished( int );
     void updateRemainingMinutes(int elapsedSec, int minutesLeft);
     void GPUnotFound();
 
 private:
-    quint64 generateBitMask(unsigned k, unsigned r, quint64 idx, quint64** C);
     static  quint64 sumCombinations(quint64 k, quint64 maxComb);
+    static void CUDART_CB spectrumHostCallback(void* userData);
     void    freeBinomTable(quint64** C, unsigned maxN);
-    quint64** buildBinomTable(unsigned maxN);
+    quint64** buildBinomTable(unsigned maxN, unsigned maxComb);
     Algorithm chooseAlgorithm(bool useGpu, bool useGray) const;
-
     void computeSpectrumGpuGray(   quint64 k, quint64 n, quint64 wordsPerRow, quint64 chunkSize, int blockCount, int threadsPerBlock );
-    void computeSpectrumGpuNoGray( quint64 k, quint64 n, quint64 wordsPerRow, quint64 chunkSize, int blockCount, int threadsPerBlock, quint64 maxComb );
+    void computeSpectrumGpuNoGray(
+        quint64 numOfRows,
+        quint64 numOfCols,
+        quint64 wordsPerRow,
+        //quint64 chunkSize,
+        int blockCount,
+        int threadsPerBlock,
+        quint64 maxComb);
     void computeSpectrumCpuGray(   quint64 k, quint64 n, quint64 wordsPerRow );
     void computeSpectrumCpuNoGray( quint64 k, quint64 n, quint64 wordsPerRow, quint64 maxComb );
 

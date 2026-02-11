@@ -9,6 +9,24 @@ BitMask::BitMask(unsigned len, unsigned ones) {
     DATA = (uint64_t*)calloc(WORDS, sizeof(uint64_t));
     if (!DATA) throw std::bad_alloc();
     initLowest(COUNT);
+
+
+    // Буфер для последней маски
+    lastMask = (uint64_t*)calloc(WORDS, sizeof(uint64_t));
+    if (!lastMask) {
+        free(DATA);
+        DATA = nullptr;
+        throw std::bad_alloc();
+    }
+
+    // Строим последнюю маску: COUNT единиц в старших позициях
+    // позиции: [BITS-COUNT ... BITS-1]
+    for (unsigned i = 0; i < COUNT; ++i) {
+        unsigned bitPos = (unsigned)(BITS - 1 - i);
+        unsigned wordIdx = bitPos >> 6;        // /64
+        unsigned bitIdx = bitPos & 63u;       // %64
+        lastMask[wordIdx] |= (1ULL << bitIdx);
+    }
 }
 
 BitMask::BitMask(const BitMask& other) {
@@ -31,8 +49,14 @@ BitMask::BitMask(BitMask&& other) noexcept {
 
 
 BitMask::~BitMask() {
-    free(DATA);
-    DATA = nullptr;
+    if (DATA) {
+        free(DATA);
+        DATA = nullptr;
+    }
+    if (lastMask) {
+        free(lastMask);
+        lastMask = nullptr;
+    }
 }
 
 void BitMask::print() const {
@@ -44,128 +68,101 @@ void BitMask::print() const {
     std::cout << "\n";
 }
 
-bool BitMask::nextMask() {
-    // Быстрая граница для статических временных буферов (регулируй по нужде)
-    static constexpr unsigned MAX_WORDS_STATIC = 8; // поддержка до 8192 бит без хипа
+// Функция возварщает индекс младшего установленного бита (допустим, если число 5 = 0b0101, то функция вернёт 0)
+static inline unsigned ctz64(uint64_t x) {
+#if defined(_MSC_VER)
+    unsigned long idx;
+    // _BitScanForward64 возвращает 0 если x==0, но мы не вызываем с 0
+    _BitScanForward64(&idx, x);
+    return (unsigned)idx;
+#else
+    return (unsigned)__builtin_ctzll(x);
+#endif
+}
 
+bool BitMask::nextMask()
+{
+    // Проверки
+    if (COUNT == 0 || COUNT > BITS) return false;
+    //if (isLastMask()) return false;
+
+    // 1) Находим младшую установленную единицу
     int wordIndex = -1;
-    unsigned long bitIndex = 0UL;
-    for (int wi = 0; wi < WORDS; ++wi) {
+    unsigned bitIndex = 0;
+    for (unsigned wi = 0; wi < WORDS; ++wi) {
         uint64_t w = DATA[wi];
         if (w != 0ULL) {
-
-            _BitScanForward64(&bitIndex, w);
-            wordIndex = wi;
+            bitIndex = ctz64(w);
+            wordIndex = (int)wi;
             break;
         }
     }
+    // Некорректное состояние: если единиц нет
+    if (wordIndex < 0) return false;
 
-    // 1.5) Проверка: если текущая маска уже "последняя" для COUNT, вернуть false.
-    unsigned k = COUNT; // число единиц фиксировано
-    unsigned first_pos = BITS - k; // глобальная позиция первой (самой левой) единицы в последней комбинации
-    bool isLast = true;
-    for (int j = static_cast<int>(WORDS) - 1; j >= 0; --j) {
-        unsigned word_lo = static_cast<unsigned>(j) << 6;
-        unsigned word_hi = word_lo + 63;
-        if (word_hi > BITS - 1) word_hi = BITS - 1;
+    // Глобальный индекс первого ненулевого бита
+    unsigned t0 = (unsigned)wordIndex * 64u + bitIndex;
 
-        unsigned overlap_lo = (first_pos > word_lo) ? first_pos : word_lo;
-        unsigned overlap_hi = (BITS - 1 < word_hi) ? (BITS - 1) : word_hi;
+    // 2) скопировать исходные слова, начиная с wordIndex до конца,
+    //    т.к. именно там мы будем вычислять ones = r ^ orig.
+    unsigned start = (unsigned)wordIndex;
+    unsigned origLen = WORDS - start;
+    std::vector<uint64_t> orig;
+    orig.resize(origLen);
+    for (unsigned i = 0; i < origLen; ++i) orig[i] = DATA[start + i];
 
-        uint64_t expected = 0ULL;
-        if (overlap_lo <= overlap_hi) {
-            unsigned m = overlap_hi - overlap_lo + 1;      // число единиц в этом слове
-            unsigned shift = overlap_lo - word_lo;        // позиция внутри слова
-            if (m == 64) expected = ~0ULL;
-            else expected = (((1ULL << m) - 1ULL) << shift);
-        }
-        if (DATA[j] != expected) { isLast = false; break; }
-    }
-    if (isLast) return false;
-
-    // 2) подготовить временные буферы tmpOrig (orig) и tmpShift
-    uint64_t* tmpOrig = nullptr;
-    uint64_t* tmpShift = nullptr;
-    bool usedHeap = false;
-
-    if (WORDS <= MAX_WORDS_STATIC) {
-        static thread_local uint64_t staticBuf1[MAX_WORDS_STATIC];
-        static thread_local uint64_t staticBuf2[MAX_WORDS_STATIC];
-        tmpOrig = staticBuf1;
-        tmpShift = staticBuf2;
-    }
-    else {
-        tmpOrig = (uint64_t*)malloc(sizeof(uint64_t) * WORDS);
-        tmpShift = (uint64_t*)malloc(sizeof(uint64_t) * WORDS);
-        if (!tmpOrig || !tmpShift) {
-            free(tmpOrig);
-            free(tmpShift);
-            throw std::bad_alloc();
-        }
-        usedHeap = true;
-    }
-
-    // 3) копия исходного DATA в tmpOrig
-    for (unsigned i = 0; i < WORDS; ++i) tmpOrig[i] = DATA[i];
-
-    // 4) r = x + (1 << t) — выполним in-place в DATA, начиная с найденного слова
-    unsigned wi = static_cast<unsigned>(wordIndex);
-    unsigned bi = static_cast<unsigned>(bitIndex);
-    uint64_t carry = (1ULL << bi);
-    for (unsigned i = wi; i < WORDS && carry; ++i) {
+    // 3) выполнить r = x + (1<<bitIndex) с переносами (изменяет DATA in-place)
+    uint64_t carry = (1ULL << bitIndex);
+    unsigned i = start;
+    for (; i < WORDS && carry; ++i) {
         uint64_t old = DATA[i];
         uint64_t sum = old + carry;
-        carry = (sum < old) ? 1ULL : 0ULL;
         DATA[i] = sum;
+        carry = (sum < old) ? 1ULL : 0ULL;
     }
+
     if (carry) {
-        // переполнение (не ожидается обычно, т.к. мы проверяли isLast), восстановим и выйдем
-        for (unsigned i = 0; i < WORDS; ++i) DATA[i] = tmpOrig[i];
-        if (usedHeap) { free(tmpOrig); free(tmpShift); }
+        // переполнение (перенос вышел за старшую границу) — восстанавливаем
+        for (unsigned k = 0; k < origLen; ++k) DATA[start + k] = orig[k];
         return false;
     }
 
-    // 5) ones = r ^ x  (tmpOrig := DATA ^ tmpOrig)
-    for (unsigned i = 0; i < WORDS; ++i) tmpOrig[i] = DATA[i] ^ tmpOrig[i];
+    // 4) ones = r ^ orig (только для области [start .. WORDS-1])
+    //    будем обращаться к ones по индексу s (0..origLen-1)
+    //    и немедленно смещать их вправо на (t0 + 2) бит, OR-я в DATA.
+    unsigned shiftAmount = t0 + 2u;
+    uint64_t totalBits = WORDS * 64u;
+    if (shiftAmount < totalBits) {
+        unsigned wordShift = shiftAmount >> 6;      // на сколько слов сдвиг
+        unsigned bitShift = shiftAmount & 63u;     // остаток в битах
 
-    // 6) ones_shifted = ones >> (t + 2) -> tmpShift
-    unsigned t = (wi << 6) + bi;
-    unsigned shift = t + 2;
-    // очистим tmpShift
-    for (unsigned i = 0; i < WORDS; ++i) tmpShift[i] = 0ULL;
-    if (shift < WORDS * 64) {
-        unsigned word_shift = shift >> 6;
-        unsigned bit_shift = shift & 63u;
-        if (word_shift < WORDS) {
-            if (bit_shift == 0) {
-                for (unsigned i = 0; i + word_shift < WORDS; ++i)
-                    tmpShift[i] = tmpOrig[i + word_shift];
-            }
-            else {
-                for (unsigned i = 0; i + word_shift < WORDS; ++i) {
-                    uint64_t low = tmpOrig[i + word_shift] >> bit_shift;
-                    uint64_t high = 0ULL;
-                    if (i + word_shift + 1 < WORDS)
-                        high = tmpOrig[i + word_shift + 1] << (64 - bit_shift);
-                    tmpShift[i] = low | high;
+        // Для удобства: обработаем источники s=0..origLen-1
+        // srcWordIndex = start + s
+        // destWordIndex = (start + s) - wordShift  (может быть < 0 => игнорируем)
+        // value = (ones[s] >> bitShift) | (ones[s+1] << (64-bitShift)) (если bitShift!=0)
+        for (unsigned s = 0; s < origLen; ++s) {
+            uint64_t ones = DATA[start + s] ^ orig[s];
+            ptrdiff_t destIdxAbs = (ptrdiff_t)(start + s) - (ptrdiff_t)wordShift;
+            if (destIdxAbs < 0) continue;               // попадает ниже нуля — игнорируем
+            if ((unsigned)destIdxAbs >= WORDS) continue; // вне диапазона — игнорируем
+
+            uint64_t low = (bitShift == 0) ? ones : (ones >> bitShift);
+            uint64_t high = 0;
+            if (bitShift != 0) {
+                // смотрим следующий source слово (s+1), если есть
+                if (s + 1 < origLen) {
+                    uint64_t ones_next = DATA[start + s + 1] ^ orig[s + 1];
+                    high = ones_next << (64u - bitShift);
                 }
             }
+            uint64_t val = low | high;
+            DATA[(unsigned)destIdxAbs] |= val;
         }
     }
-
-    // 7) DATA = r | ones_shifted  (in-place)
-    for (unsigned i = 0; i < WORDS; ++i) DATA[i] |= tmpShift[i];
-
-    // 8) очистка лишних старших битов
-    unsigned excess = (WORDS << 6) - BITS;
-    if (excess) DATA[WORDS - 1] &= (~0ULL >> excess);
-
-    // 9) очистка/освобождение буферов
-    if (usedHeap) { free(tmpOrig); free(tmpShift); }
-
+    // иначе shiftAmount >= totalBits => ones_shifted == 0, ничего OR'ить не нужно
+    // Готово — следующая маска записана в DATA
     return true;
 }
-
 void BitMask::initLowest(unsigned r) {
     std::fill(DATA, DATA + WORDS, 0ULL);
     for (unsigned i = 0; i < r; ++i) {
@@ -188,6 +185,17 @@ void BitMask::setMask(uint64_t maskIdx, uint64_t** binomTable, unsigned maxComb)
     // очистим маску
     std::fill(DATA, DATA + WORDS, 0ULL);
 
+    // при возможности — проверим, что maskIdx в допустимом диапазоне (только если есть запись)
+    if (COUNT <= maxComb) {
+        uint64_t total = binomTable[BITS][COUNT];
+        if (maskIdx >= total) {
+            // диагностическая информация, лучше кинуть исключение или корректно обработать
+            fprintf(stderr, "setMask: maskIdx (%llu) >= C(%u,%u)=%llu\n",
+                (unsigned long long)maskIdx, BITS, COUNT, (unsigned long long)total);
+            throw std::out_of_range("maskIdx out of range in setMask");
+        }
+    }
+
     unsigned nextPos = 0;  // минимальная позиция, в которую ещё можно ставить единицу
 
     for (unsigned i = COUNT; i > 0; --i) {  // ставим i-ую единицу
@@ -195,13 +203,17 @@ void BitMask::setMask(uint64_t maskIdx, uint64_t** binomTable, unsigned maxComb)
         while (j <= BITS - i) {
             unsigned n_rem = BITS - j - 1;  // оставшиеся позиции
             unsigned t_rem = i - 1;         // оставшиеся единицы
-            uint64_t c = 0;
-            if (t_rem <= n_rem && t_rem <= maxComb) {
-                c = binomTable[n_rem][t_rem];
+
+            // если t_rem > n_rem — комбинаций нет, j не подходит
+            if (t_rem > n_rem) break;
+
+            // если таблица не содержит t_rem (t_rem > maxComb), не подставляем 0 — просто не пропускаем
+            if (t_rem > maxComb) {
+                // Нет данных в binomTable; считаем, что C(n_rem,t_rem) > maskIdx, т.е. не пропускаем j.
+                break;
             }
-            else {
-                c = 0;
-            }
+
+            uint64_t c = binomTable[n_rem][t_rem];
 
             if (c <= maskIdx) {
                 maskIdx -= c;
@@ -218,3 +230,5 @@ void BitMask::setMask(uint64_t maskIdx, uint64_t** binomTable, unsigned maxComb)
         nextPos = j + 1;
     }
 }
+
+

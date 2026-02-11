@@ -1,12 +1,14 @@
 #pragma once
 
-#define MAX_K						63
-#define MAX_BINOM_COEF				34
-#define CONST_MEM_SIZE				( 1 << 16 )
-#define WORD_SIZE					sizeof(quint64)
-#define BINOM_TABLE_SIZE			( ( MAX_K + 1 ) * ( MAX_K + 1 ) )
-#define MAX_CONST_WORDS				( CONST_MEM_SIZE/WORD_SIZE - BINOM_TABLE_SIZE )
-#define MAX_BLOCKWORDS				16
+#define CONST_MEM_SIZE				( 1 << 16 )										// –азмер константной пам€ти видеокарты
+#define WORD_SIZE					sizeof(quint64)									// –азмер слова (под словом понимаетс€ тип данных quint64)
+#define MAX_CONST_WORDS	            ( CONST_MEM_SIZE / WORD_SIZE )					// ћаксимальный размер массива в константной пам€ти видеокарты
+///#define MAGIC_K					193												// „исло строк матрицы, с которого необходимо отказыватьс€ от битовых масок
+#define MAX_POSITIONS				33
+#define MAX_BLOCKWORDS				32												// ћаксимальное число 64-битных слов, используемых дл€ хранени€ одной строки
+#define MAX_MASK_WORDS				32												// ћаксимальна€ длина битовой маски
+#define MAX_ROWS					2048
+#define MAX_COLS					2048
 
 
 #define PROGRESSBAR_MS              "refreshProgressbarMs"
