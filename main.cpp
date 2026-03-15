@@ -11,7 +11,7 @@ int main(int argc, char *argv[])
   }
   a.setApplicationName("Spectrum");
   a.setOrganizationName("Alpas");
-  Widget w;
+  MainWindow w;
   w.show();
   return a.exec();
 }

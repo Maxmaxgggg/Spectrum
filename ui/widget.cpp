@@ -6,9 +6,9 @@ QStringList Colors{ "Blue", "Green", "Red" };
 
 
 
-Widget::Widget(QWidget *parent)
-    : QWidget(parent),
-    ui(new Ui::Widget)
+MainWindow::MainWindow(QWidget* parent)
+    : QMainWindow(parent),
+    ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
     /********      УБРАТЬ В UI     ********/
@@ -24,6 +24,21 @@ Widget::Widget(QWidget *parent)
     if( settings == nullptr )
         settings = new SettingsDialog(this);
 
+    msg = new QCPItemText(ui->spectrumCPT);
+    msg->position->setType(QCPItemPosition::ptAxisRectRatio);
+    msg->position->setCoords(0.5, 0.5);
+
+    msg->setPositionAlignment(Qt::AlignCenter);
+
+    msg->setText(QString::fromUtf8(
+        "Спектральные компоненты слишком велики\n"
+        "Невозможно отобразить графически"));
+
+    QFont f;
+    f.setPointSize(12);
+    f.setBold(true);
+    msg->setFont(f);
+
     // Инициализация QCustomPlot и QCPBars (предполагается, что в ui есть spectrumCPT)
     ui->spectrumCPT->xAxis->setTickLabelRotation(0);
     ui->spectrumCPT->yAxis->setNumberFormat("eb");
@@ -34,20 +49,26 @@ Widget::Widget(QWidget *parent)
         spectrumBars->setPen(QPen(Qt::black));
         spectrumBars->setBrush(QBrush(Qt::blue));
     }
-    connect( ui->matrixPTE, &FilterPlainTextEdit::textChanged, this,  &Widget::handleMatrixChanged    );
-
+    connect( ui->matrixPTE, &FilterPlainTextEdit::textChanged, this,  &MainWindow::handleMatrixChanged    );
+    connect(ui->settingsACN, &QAction::triggered,
+        this, [this]() {
+            settings->exec();
+            applySettings();
+        });
 
 
     loadSettings();
     ui->spectrumCPT->installEventFilter(this);
+    connectSettingsDialog();
     setWorker();
     setMatrixMenu();
     setToolTips();
-    connectSettingsDialog();
-    emit requestInitialSettings();
+    emit handleMatrixChanged();
+    
+    //emit requestInitialSettings();
 }
 
-Widget::~Widget()
+MainWindow::~MainWindow()
 {
     saveSettings();
     if (workerPtr){
@@ -61,10 +82,10 @@ Widget::~Widget()
         delete workerPtr;
         workerPtr = nullptr;
     }
-    this->setWindowTitle(MAIN_TITLE);
+    this->setWindowTitle(UIStrings::MAIN_TITLE);
     delete ui;
 }
-void Widget::rebuildMatrixMenuActions()
+void MainWindow::rebuildMatrixMenuActions()
 {
     if (!matrixMenu) return;
 
@@ -73,17 +94,17 @@ void Widget::rebuildMatrixMenuActions()
     QStringList names = listMatrixNames(); // текущие имена
 
     // 2) Удаляем любые динамические действия (все, кроме addMatrix и действия подменю deleteMenu)
-    QAction* deleteMenuAction = deleteMenu ? deleteMenu->menuAction() : nullptr;
+    QAction* deleteMenuAction = ui->deleteMatrix ? ui->deleteMatrix->menuAction() : nullptr;
     const QList<QAction*> actsSnapshot = matrixMenu->actions();
     for (QAction* a : actsSnapshot) {
-        if (a == addMatrix || a == deleteMenuAction)
+        if ( a == ui->addMatrixACN || a == deleteMenuAction )
             continue;
         matrixMenu->removeAction(a);
     }
 
     // 3) Очищаем подменю удаления
-    if (deleteMenu)
-        deleteMenu->clear();
+    if (ui->deleteMatrix)
+        ui->deleteMatrix->clear();
 
     // 4) Если есть имена — добавляем динамические пункты и включаем deleteMenu (учитываем флаг)
     if (!names.isEmpty()) {
@@ -106,7 +127,7 @@ void Widget::rebuildMatrixMenuActions()
 
         // пункты в подменю удаления (родитель = deleteMenu)
         for (const QString& nm : names) {
-            QAction* delAct = new QAction(nm, deleteMenu);
+            QAction* delAct = new QAction(nm, ui->deleteMatrix);
             delAct->setIcon(QIcon(":/ui/icons/newspaper.png"));
             delAct->setEnabled(matrixActionsEnabled); // учитываем флаг
 
@@ -120,13 +141,13 @@ void Widget::rebuildMatrixMenuActions()
 
                 QAction* caller = qobject_cast<QAction*>(sender());
                 if (caller) {
-                    deleteMenu->removeAction(caller);
+                    ui->deleteMatrix->removeAction(caller);
                     caller->deleteLater();
                 }
 
                 for (QAction* ma : matrixMenu->actions()) {
-                    if (ma == addMatrix) continue;
-                    if (ma == deleteMenu->menuAction()) continue;
+                    if (ma == ui->addMatrixACN) continue;
+                    if (ma == ui->deleteMatrix->menuAction()) continue;
                     if (ma->data().toString() == nm || ma->text() == nm) {
                         matrixMenu->removeAction(ma);
                         ma->deleteLater();
@@ -134,31 +155,29 @@ void Widget::rebuildMatrixMenuActions()
                     }
                 }
 
-                deleteMenu->setEnabled(matrixActionsEnabled && !deleteMenu->actions().isEmpty());
+                ui->deleteMatrix->setEnabled(matrixActionsEnabled && !ui->deleteMatrix->actions().isEmpty());
                 });
 
-            deleteMenu->addAction(delAct);
+            ui->deleteMatrix->addAction(delAct);
         }
 
-        deleteMenu->setEnabled(matrixActionsEnabled && !deleteMenu->actions().isEmpty());
+        ui->deleteMatrix->setEnabled(matrixActionsEnabled && !ui->deleteMatrix->actions().isEmpty());
     }
     else {
         // нет сохранённых матриц
-        if (deleteMenu)
-            deleteMenu->setEnabled(false);
+        if (ui->deleteMatrix)
+            ui->deleteMatrix->setEnabled(false);
     }
 }
-void Widget::setToolTips() {
-    ui->matrixLBL->setToolTip(MATRIX_TOOLTIP);
-    ui->spectrumLBL->setToolTip(SPECTRUM_TOOLTIP);
-    ui->settingsPBN->setToolTip(SETTINGS_TOOLTIP);
-    ui->executePBN->setToolTip(START_TOOLTIP);
-    ui->cancelPBN->setToolTip(CANCEL_TOOLTIP);
-    ui->exitPBN->setToolTip(EXIT_TOOLTIP);
-
+void MainWindow::setToolTips() {
+    ui->matrixLBL->setToolTip(UIStrings::MATRIX_TOOLTIP);
+    ui->spectrumLBL->setToolTip(UIStrings::SPECTRUM_TOOLTIP);
+    ui->executePBN->setToolTip(UIStrings::START_TOOLTIP);
+    ui->cancelPBN->setToolTip(UIStrings::CANCEL_TOOLTIP);
+    ui->exitPBN->setToolTip(UIStrings::EXIT_TOOLTIP);
 }
 
-void Widget::setWorker()
+void MainWindow::setWorker()
 {
     workerPtr = new Worker;
     workerThreadPtr = new QThread(this);
@@ -166,51 +185,42 @@ void Widget::setWorker()
 
     workerPtr->moveToThread(workerThreadPtr);
 
-    connect( workerPtr,       &Worker::updateInfoPBR,                  this,      &Widget::handleUpdateInfoPBR,                  Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::updateSpectrumPlot,             this,      &Widget::handleUpdateSpectrumPlot,             Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::updateSpectrumPTE,              this,      &Widget::handleUpdateSpectrumPTE,              Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::updateRemainingMinutes,         this,      &Widget::handleUpdateRemainingMinutes,         Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::errorOccurred,                  this,      &Widget::handleError,                          Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::GPUnotFound,                    this,      &Widget::handleGPUnotFound,                    Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::finished,                       this,      &Widget::handleFinished,                       Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::updateInfoPBR,                  this,      &MainWindow::handleUpdateInfoPBR,                  Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::updateSpectrumPlot,             this,      &MainWindow::handleUpdateSpectrumPlot,             Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::updateSpectrumPTE,              this,      &MainWindow::handleUpdateSpectrumPTE,              Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::updateRemainingMinutes,         this,      &MainWindow::handleUpdateRemainingMinutes,         Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::errorOccurred,                  this,      &MainWindow::handleError,                          Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::finished,                       this,      &MainWindow::handleFinished,                       Qt::QueuedConnection );
 
-    connect( this,            &Widget::useGpuToggled,                  workerPtr, &Worker::handleUseGpuToggled,                  Qt::QueuedConnection );
-    connect( this,            &Widget::useGrayCodeToggled,             workerPtr, &Worker::handleUseGrayCodeToggled,             Qt::QueuedConnection );
-    connect( this,            &Widget::useDualCodeToggled,             workerPtr, &Worker::handleUseDualCodeToggled,             Qt::QueuedConnection );
-    connect( this,            &Widget::sendInitialSettingsToWorker,    workerPtr, &Worker::setInitialSettings,                   Qt::QueuedConnection );
+
+    connect( this,            &MainWindow::sendSettingsToWorker, workerPtr, &Worker::setSettings, Qt::QueuedConnection);
+
 
     // DirectConnection для того, чтобы частоту обновления можно было изменять в реальном времени
-    connect( this,            &Widget::refreshProgressbarValueChanged, workerPtr, &Worker::handleRefreshProgressbarValueChanged, Qt::DirectConnection );
-    connect( this,            &Widget::refreshSpectrumValueChanged,    workerPtr, &Worker::handleRefreshSpectrumValueChanged,    Qt::DirectConnection );
+    //connect( this,            &MainWindow::refreshProgressbarValueChanged, workerPtr, &Worker::handleRefreshProgressbarValueChanged, Qt::DirectConnection );
+    //connect( this,            &MainWindow::refreshSpectrumValueChanged,    workerPtr, &Worker::handleRefreshSpectrumValueChanged,    Qt::DirectConnection );
 }
 
-void Widget::setMatrixMenu()
+void MainWindow::setMatrixMenu()
 {
     ui->matrixLBL->setContextMenuPolicy(Qt::CustomContextMenu);
 
     // Создаём меню и базовые действия один раз
-    matrixMenu = new QMenu(this);
+    matrixMenu = ui->matrixMNU;
 
-    addMatrix = matrixMenu->addAction(QString::fromUtf8("Сохранить матрицу"));
-    connect(addMatrix, &QAction::triggered, this, &Widget::onAddMatrixTriggered);
-    addMatrix->setIcon(QIcon(":/ui/icons/newspaper--plus.png"));
 
-    deleteMenu = matrixMenu->addMenu(QIcon(":/ui/icons/newspaper--minus.png"), QString::fromUtf8("Удалить матрицу"));
-
+    connect(ui->addMatrixACN, &QAction::triggered, this, &MainWindow::onAddMatrixTriggered);
+    ui->addMatrixACN->setIcon(QIcon(":/ui/icons/newspaper--plus.png"));
+    ui->deleteMatrix->setIcon(QIcon(":/ui/icons/newspaper--minus.png"));
     // функция-утилита для обновления состояния доступности пунктов
     auto updateMenuEnabledState = [this]() {
-        // подменю удаления доступно только если есть элементы и matrixActionsEnabled == true
         loadMatricesArray(); // обновим массив, чтобы проверить наличие
-        deleteMenu->setEnabled(matrixActionsEnabled && !matrices.isEmpty());
-
-        // основные динамические пункты (те, которые добавляются в aboutToShow) — будут установлены в aboutToShow
-        // здесь можно дополнительно пробежать по уже существующим элементам и выставить enabled,
-        // но поскольку мы пересоздаём динамику в aboutToShow, это достаточно.
+        ui->deleteMatrix->setEnabled(matrixActionsEnabled && !matrices.isEmpty());
         };
 
     // По умолчанию включаем/выключаем подменю — учитываем флаг matrixActionsEnabled
     loadMatricesArray();
-    deleteMenu->setEnabled(matrixActionsEnabled && !matrices.isEmpty());
+    ui->deleteMatrix->setEnabled(matrixActionsEnabled && !matrices.isEmpty());
 
     matrixMenu->setMouseTracking(true);
 
@@ -249,45 +259,32 @@ void Widget::setMatrixMenu()
     connect(matrixMenu, &QMenu::aboutToShow, this, [this]() {
         rebuildMatrixMenuActions();
     });
-
-    // показать меню по правому клику
-    connect(ui->matrixLBL, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
-        // Перед показом ещё раз приведём состояние меню в соответствие флагу
-        // (например, если matrixActionsEnabled меняется во время жизни приложения)
-        if (matrixMenu) {
-            // если нужно — можно полностью закрывать меню при отключении:
-            if (!matrixActionsEnabled && matrixMenu->isVisible())
-                matrixMenu->close();
-        }
-        matrixMenu->exec(ui->matrixLBL->mapToGlobal(pos));
-        });
-
     // синхронизируем стартовое состояние (на случай, если matrixActionsEnabled уже false)
     updateMenuEnabledState();
 }
 
-void Widget::setMatrixActionsEnabled(bool enabled)
+void MainWindow::setMatrixActionsEnabled(bool enabled)
 {
     matrixActionsEnabled = enabled;
 
     if (!matrixMenu) return;
 
     // действие, которое представляет подменю удаления
-    QAction* deleteMenuAction = deleteMenu ? deleteMenu->menuAction() : nullptr;
+    QAction* deleteMenuAction = ui->deleteMatrix ? ui->deleteMatrix->menuAction() : nullptr;
 
     // 1) Обновим уже существующие динамические пункты (если они есть)
     for (QAction* a : matrixMenu->actions()) {
-        if (a == addMatrix || a == deleteMenuAction)
+        if (a == ui->addMatrixACN || a == deleteMenuAction)
             continue;
         a->setEnabled(enabled);
     }
 
     // 2) Обновим действия внутри подменю "Удалить"
-    if (deleteMenu) {
-        for (QAction* a : deleteMenu->actions()) {
+    if (ui->deleteMatrix) {
+        for (QAction* a : ui->deleteMatrix->actions()) {
             a->setEnabled(enabled);
         }
-        deleteMenu->setEnabled(enabled && !deleteMenu->actions().isEmpty());
+        ui->deleteMatrix->setEnabled(enabled && !ui->deleteMatrix->actions().isEmpty());
     }
 
     // 3) Если меню видно — перестроим динамику прямо сейчас, чтобы новые enabled/disabled вступили в силу.
@@ -304,36 +301,25 @@ void Widget::setMatrixActionsEnabled(bool enabled)
     }
 }
 
-void Widget::connectSettingsDialog()
+void MainWindow::connectSettingsDialog()
 {
     if (!settings) return;
 
-    connect( this,     &Widget::gpuNotFound,                            settings, &SettingsDialog::disableGpu                   );
-    connect( this,     &Widget::toggleStringsSPB,                       settings, &SettingsDialog::toggleStringsSPB             );
-    connect( this,     &Widget::toggleUseGpuCHB,                        settings, &SettingsDialog::toggleUseGpuCHB              );
-    connect( this,     &Widget::toggleUseGrayCodeCHB,                   settings, &SettingsDialog::toggleUseGrayCodeCHB         );
-    connect( this,     &Widget::toggleUseDualCodeCHB,                   settings, &SettingsDialog::toggleUseDualCodeCHB         );
-    connect( this,     &Widget::matrixChanged,                          settings, &SettingsDialog::handleMatrixChanged          );
-    connect( this,     &Widget::requestInitialSettings,                 settings, &SettingsDialog::handleRequestInitialSettings );
 
-    connect( settings, &SettingsDialog::useGpuToggled,                  this,     &Widget::useGpuToggled                        );
-    connect( settings, &SettingsDialog::useGrayCodeToggled,             this,     &Widget::useGrayCodeToggled                   );
-    connect( settings, &SettingsDialog::useDualCodeToggled,             this,     &Widget::useDualCodeToggled                   );
-    connect( settings, &SettingsDialog::refreshSpectrumValueChanged,    this,     &Widget::refreshSpectrumValueChanged          );
-    connect( settings, &SettingsDialog::refreshProgressbarValueChanged, this,     &Widget::refreshProgressbarValueChanged       );
-    connect( settings, &SettingsDialog::sendInitialSettingsToWorker,    this,     &Widget::sendInitialSettingsToWorker          );
+    connect( this,     &MainWindow::matrixChanged,            settings, &SettingsDialog::handleMatrixChanged     );
+    connect( this,     &MainWindow::setInterfaceEnabled,      settings, &SettingsDialog::setInterfaceEnabled     );
+    connect( this,     &MainWindow::requestSettings,          settings, &SettingsDialog::handleSettingsRequested );
+    connect( settings, &SettingsDialog::sendSettingsToWorker, this,     &MainWindow::sendSettingsToWorker        );
 }
 
 
-void Widget::on_executePBN_clicked()
+void MainWindow::on_executePBN_clicked()
 {
     switch (runState) {
         case RunState::Idle: {
             
-            emit toggleStringsSPB(      false );
-            emit toggleUseGpuCHB(       false );
-            emit toggleUseGrayCodeCHB(  false );
-            emit toggleUseDualCodeCHB( false  );
+            // Блокируем интерфейс
+            emit setInterfaceEnabled(   false );
             ui->matrixPTE->setReadOnly( true  );
             ui->cancelPBN->setEnabled(  true  );
             setMatrixActionsEnabled(    false );
@@ -342,53 +328,50 @@ void Widget::on_executePBN_clicked()
             ui->infoPBR->setValue(0);
 
             if (!workerPtr) {
-                QMessageBox::warning(this, ERROR_TITLE, "Worker не подключён");
+                QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString::fromUtf8("Worker не подключён"));
                 handleFinished(-1);
                 return;
             }
             QStringList rows = ui->matrixPTE->toPlainText().split('\n', Qt::SkipEmptyParts);
             if ( rows.isEmpty()) {
-                QMessageBox::warning(this, ERROR_TITLE, "Матрица пустая");
+                QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString::fromUtf8("Матрица пустая"));
                 handleFinished(-1);
                 return;
             }
             quint64 numOfRows = rows.size();
-            if ( numOfRows > MAX_ROWS ) {
-                QMessageBox::warning(this, ERROR_TITLE, QString("Число строк матрицы больше чем %1").arg(MAX_ROWS));
+            if ( numOfRows > Constants::MAX_ROWS ) {
+                QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString("Число строк матрицы больше чем %1").arg(Constants::MAX_ROWS));
                 handleFinished(-1);
                 return;
             }
             quint64 numOfCols = (quint64)rows.first().length();
             for (const QString& r : rows) {
                 if ((quint64)r.length() != numOfCols) {
-                    QMessageBox::warning(this, ERROR_TITLE, QString("Все строки должны быть одинаковой длины"));
+                    QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString("Все строки должны быть одинаковой длины"));
                     handleFinished(-1);
                     return;
                 }
             }
-            if ( numOfCols > MAX_COLS ) {
-                QMessageBox::warning(this, ERROR_TITLE, QString("Число столбцов матрицы больше чем %1").arg(MAX_COLS));
+            if ( numOfCols > Constants::MAX_COLS ) {
+                QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString("Число столбцов матрицы больше чем %1").arg(Constants::MAX_COLS));
                 handleFinished(-1);
                 return;
             }
-            qint64 maxComb = 0;
-            if (settings) {
-                if (!settings->isGrayCodeUsed())
-                    maxComb = settings->getStringsValue();
-                else
-                    maxComb = rows.size();
-            } 
-            // Получаем индекс маскимального комбина, который умещается в quint64
-            qint64 maxCombInd = maxCombIndex(numOfRows);
-            if (maxComb <= 0 || maxComb > rows.size()) maxComb = rows.size();
-            if (maxComb > maxCombInd) maxComb = maxCombInd;
+            //qint64 maxComb = 0;
+            //// Получаем индекс максимального комбина, который умещается в quint64
+            //qint64 maxCombInd = maxCombIndex(numOfRows);
+            //if (maxComb <= 0 || maxComb > rows.size()) maxComb = rows.size();
+            //if (maxComb > maxCombInd) maxComb = maxCombInd;
             workerThreadPtr->start();
-            QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection,
-                Q_ARG(QStringList, rows), Q_ARG(quint64, (qulonglong)maxComb));
+            // Запрашиваем настройки для расчета
+            emit requestSettings();
+            // Начинаем расчет
+            QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection, Q_ARG(QStringList, rows) );
 
+            
             runState = RunState::Running;
-            ui->executePBN->setText(    PAUSE_TEXT    );
-            ui->executePBN->setToolTip( PAUSE_TOOLTIP );
+            ui->executePBN->setText(UIStrings::PAUSE_TEXT    );
+            ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP );
         } break;
 
         case RunState::Running: {
@@ -396,9 +379,9 @@ void Widget::on_executePBN_clicked()
                 workerPtr->pause();
 
             runState = RunState::Paused;
-            this->setWindowTitle(PAUSE_TEXT);
-            ui->executePBN->setText(CONTINUE_TEXT);
-            ui->executePBN->setToolTip(CONTINUE_TOOLTIP);
+            this->setWindowTitle(UIStrings::PAUSE_TEXT);
+            ui->executePBN->setText(UIStrings::CONTINUE_TEXT);
+            ui->executePBN->setToolTip(UIStrings::CONTINUE_TOOLTIP);
         } break;
 
         case RunState::Paused: {
@@ -406,19 +389,19 @@ void Widget::on_executePBN_clicked()
                 workerPtr->resume();
 
             runState = RunState::Running;
-            ui->executePBN->setText(PAUSE_TEXT);
-            ui->executePBN->setToolTip(PAUSE_TOOLTIP);
+            ui->executePBN->setText(UIStrings::PAUSE_TEXT);
+            ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP);
             if (remainingMinutes != -1)
                 this->setWindowTitle(formatRemainingTime(remainingMinutes));
             else
-                this->setWindowTitle(MAIN_TITLE);
+                this->setWindowTitle(UIStrings::MAIN_TITLE);
         } break;
 
 
     } 
 }
 
-void Widget::on_exitPBN_clicked()
+void MainWindow::on_exitPBN_clicked()
 {
     if( workerPtr ){
         workerPtr->cancel();
@@ -428,23 +411,19 @@ void Widget::on_exitPBN_clicked()
         workerThreadPtr->wait();
     }
     
-    emit toggleUseGpuCHB(true);
-    emit toggleUseGrayCodeCHB(true);
-    emit toggleUseDualCodeCHB(true);
-    if ( !settings->isGrayCodeUsed() )
-        emit toggleStringsSPB(true);
+    emit setInterfaceEnabled(   true  );
     saveSettings();
-    ui->matrixPTE->setReadOnly(false);
+    ui->matrixPTE->setReadOnly( false );
     qApp->exit();
 }
 
-void Widget::on_settingsPBN_clicked()
+void MainWindow::on_settingsPBN_clicked()
 {
     settings->exec();
     applySettings();
 }
 
-void Widget::on_cancelPBN_clicked()
+void MainWindow::on_cancelPBN_clicked()
 {
     if (workerPtr) {
         workerPtr->cancel();
@@ -454,16 +433,12 @@ void Widget::on_cancelPBN_clicked()
         workerThreadPtr->wait();
     }
 
-    emit toggleUseGpuCHB(true);
-    emit toggleUseGrayCodeCHB(true);
-    emit toggleUseDualCodeCHB(true);
-    if (!settings->isGrayCodeUsed())
-        emit toggleStringsSPB(true);
-    ui->matrixPTE->setReadOnly(false);
-    ui->cancelPBN->setEnabled(false);
+    emit setInterfaceEnabled(   true  );
+    ui->matrixPTE->setReadOnly( false );
+    ui->cancelPBN->setEnabled(  false );
 }
 
-void Widget::handleStrValChanged()
+void MainWindow::handleStrValChanged()
 {
     if( workerPtr )
         workerPtr->cancel();
@@ -473,7 +448,7 @@ void Widget::handleStrValChanged()
     }
     runState = RunState::Idle;
     ui->infoPBR->setValue(0);
-    ui->executePBN->setText(START_TEXT);
+    ui->executePBN->setText(UIStrings::START_TEXT);
 
 }
 
@@ -481,25 +456,19 @@ void Widget::handleStrValChanged()
 // Worker signal handlers
 //
 
-void Widget::handleUpdateInfoPBR(int percent)
+void MainWindow::handleUpdateInfoPBR(int percent)
 {
     ui->infoPBR->setValue(percent);
 }
 
-void Widget::handleUpdateSpectrumPlot(const QVector<quint64> spectrum)
+void MainWindow::handleUpdateSpectrumPlot(const QVector<float> spectrum)
 {
     updatePlot(spectrum);
 }
 
-void Widget::handleUpdateSpectrumPTE(const QVector<quint64> spectrum)
+void MainWindow::handleUpdateSpectrumPTE(const QStringList spectrum)
 {
-
-    QString str = "";
-    for (qint64 w = 0; w < spectrum.size(); ++w){
-        if( spectrum.at(w) != 0){
-            str += QString::number(w) + " - " + QString::number(spectrum.at(w)) + '\n';
-           }
-       }
+    QString str = spectrum.join('\n');
     if (!str.isEmpty() && str.endsWith('\n'))
         str.chop(1);
     QScrollBar *vbar = ui->spectrumPTE->verticalScrollBar();
@@ -507,7 +476,7 @@ void Widget::handleUpdateSpectrumPTE(const QVector<quint64> spectrum)
     ui->spectrumPTE->setPlainText( str );
     vbar->setValue(pos);
 }
-void Widget::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft)
+void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft)
 {
     remainingMinutes = minutesLeft;
     int days = elapsedSec / 86400;
@@ -532,33 +501,25 @@ void Widget::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft)
     this->setWindowTitle(formatRemainingTime(remainingMinutes));
     ui->infoLBL->show();
 }
-void Widget::handleMatrixChanged()
+void MainWindow::handleMatrixChanged()
 {
     QStringList rows = ui->matrixPTE->toPlainText().split('\n', Qt::SkipEmptyParts);
-    if( rows.size() != 0)
-        emit matrixChanged(rows.size());    
-    //if ( rows.size() > MAX_K ) {
-    //    emit toggleUseGrayCodeCHB( false );
-    //}
     int maxLen = 0;
     for (const QString& row : rows)
         maxLen = qMax(maxLen, row.length());
+    if (rows.size() != 0 && maxLen != 0)
+        emit matrixChanged( rows.size(), maxLen );
     ui->matrixLBL->setText(QString::fromUtf8("Матрица (%1,%2):").arg(maxLen).arg(rows.size()));
 }
-void Widget::handleError(const QString& message)
+void MainWindow::handleError(const QString& message)
 {
-    QMessageBox::critical(this, ERROR_TITLE, message);
+    QMessageBox::critical(this, UIStrings::ERROR_TITLE, message);
     // reset UI
     runState = RunState::Idle;
-    ui->executePBN->setText(START_TEXT);
+    ui->executePBN->setText(UIStrings::START_TEXT);
 }
-void Widget::handleGPUnotFound()
-{
-    QMessageBox::warning(this, WARNING_TITLE, GPU_NOT_FOUND_TEXT);
-    emit gpuNotFound();
 
-}
-void Widget::handleFinished(int elapsedSec)
+void MainWindow::handleFinished(int elapsedSec)
 {
     runState = RunState::Idle;
     
@@ -567,21 +528,17 @@ void Widget::handleFinished(int elapsedSec)
         workerThreadPtr->wait();
     }
     workerPtr->resume();
-    emit toggleUseGpuCHB(       true  );
-    emit toggleUseGrayCodeCHB(  true  );
-    emit toggleUseDualCodeCHB( true   );
-    if (!settings->isGrayCodeUsed() )
-        emit toggleStringsSPB(true);
+    emit setInterfaceEnabled(   true  );
     ui->matrixPTE->setReadOnly( false );
     ui->cancelPBN->setEnabled(  false );
-    setMatrixActionsEnabled( true );
+    setMatrixActionsEnabled(    true  );
 
-    ui->executePBN->setText(  START_TEXT  );
-    ui->executePBN->setToolTip(START_TOOLTIP);
-    this->setWindowTitle(     MAIN_TITLE  );
+    ui->executePBN->setText(UIStrings::START_TEXT  );
+    ui->executePBN->setToolTip(UIStrings::START_TOOLTIP);
+    this->setWindowTitle(UIStrings::MAIN_TITLE  );
     if ( workerPtr->isCancelled() ) {
         workerPtr->uncancel();
-        ui->infoLBL->setText( CANCEL_TEXT );
+        ui->infoLBL->setText(UIStrings::CANCEL_TEXT );
         return;
     }
     int days = elapsedSec / 86400;
@@ -609,22 +566,22 @@ void Widget::handleFinished(int elapsedSec)
 
 
 
-bool Widget::eventFilter(QObject *watched, QEvent *event)
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
     // При изменение размера обновляем подписи под графиком
     if (watched == ui->spectrumCPT && event->type() == QEvent::Resize) {
-        QVector<quint64> vec(yCache.size());
+        QVector<float> vec(yCache.size());
         for (int i = 0; i < yCache.size(); ++i) {
-            vec[i] = (quint64) yCache.at(i);
+            vec[i] = (float) yCache.at(i);
         }
         updatePlot(vec);
         return false;
     }
     // Для всех остальных событий — стандартная обработка
-    return QWidget::eventFilter(watched, event);
+    return QMainWindow::eventFilter(watched, event);
 }
 
-void Widget::onAddMatrixTriggered()
+void MainWindow::onAddMatrixTriggered()
 {
     // Формируем дефолтное имя по текущему содержимому
     const QString defName = defaultMatrixName();
@@ -686,10 +643,11 @@ void Widget::onAddMatrixTriggered()
     // }
 }
 
-void Widget::updatePlot(const QVector<quint64>& spectrum)
+void MainWindow::updatePlot(const QVector<float>& spectrum)
 {
     if (spectrum.isEmpty()) return;
-
+    
+    
     const int size = spectrum.size();
     if (sizeCache != size) {
         sizeCache = size;
@@ -720,8 +678,13 @@ void Widget::updatePlot(const QVector<quint64>& spectrum)
     qint64 minIdx = -1;
     qint64 maxIdx = -1;
     double maxVal = 0.0;
+    bool invalidSpectrum = false;
     for (int i = 0; i < size; ++i) {
+       
         double v = double(spectrum.at(i));
+        if (std::isinf(v) || std::isnan(v)) {
+            invalidSpectrum = true;
+        }
         yCache[i] = v;
         if (v != 0.0) {
             if (minIdx == -1) minIdx = i;
@@ -730,20 +693,32 @@ void Widget::updatePlot(const QVector<quint64>& spectrum)
         if (v > maxVal) maxVal = v;
     }
 
-    // set data to bars
-    if ( ui->spectrumCPT->plottableCount() > 0 ) {
-        QCPBars *bars = qobject_cast<QCPBars*>(ui->spectrumCPT->plottable());
-        if (bars) {
-            bars->setData(xCache, yCache);
+    QCPBars* bars = nullptr;
+    if (ui->spectrumCPT->plottableCount() > 0)
+        bars = qobject_cast<QCPBars*>(ui->spectrumCPT->plottable());
 
-            QColor c = Colors[DEFAULT_SPECTRUM_COLOR];
-            c = QColor(Colors[settings->getHistoColorValue()]);
-            c.setAlpha( ( 100- settings->getTransparencyValue() )*255/100 );
-            bars->setBrush(QBrush(c));
-            bars->setPen(QPen(Qt::black));
-        }
+    if (invalidSpectrum) {
+        msg->setVisible(true);
+        if (bars)
+            bars->setVisible(false);
+        ui->spectrumCPT->replot();
+        return;
     }
+    else {
+        msg->setVisible(false);
+        if (bars)
+            bars->setVisible(true);
+    }
+    if (bars) {
+        bars->setData(xCache, yCache);
 
+        QColor c = Colors[DefaultValues::SPECTRUM_COLOR];
+        //c = QColor(Colors[settings->getHistoColorValue()]);
+        //c.setAlpha( ( 100- settings->getTransparencyValue() )*255/100 );
+        bars->setBrush(QBrush(c));
+        bars->setPen(QPen(Qt::black));
+    }
+    
     // axes range
     if (minIdx == -1) ui->spectrumCPT->xAxis->setRange(0, size);
     else ui->spectrumCPT->xAxis->setRange( minIdx - 1, maxIdx + 1 );
@@ -755,7 +730,7 @@ void Widget::updatePlot(const QVector<quint64>& spectrum)
     ui->spectrumCPT->replot(QCustomPlot::rpQueuedReplot);
 }
 
-QVector<QString> Widget::buildAxisLabels(int size, int step) const
+QVector<QString> MainWindow::buildAxisLabels(int size, int step) const
 {
     QVector<QString> labels;
     labels.reserve(size);
@@ -769,19 +744,19 @@ QVector<QString> Widget::buildAxisLabels(int size, int step) const
 
 
 // Применить настройки
-void Widget::applySettings()
+void MainWindow::applySettings()
 {
     applySpectrumColor();
 }
 // Применить цвет спектра
-void Widget::applySpectrumColor()
+void MainWindow::applySpectrumColor()
 {
     QSettings s;
     QColor c = Qt::blue;
 
     
-    c = QColor(Colors[settings->getHistoColorValue()]);
-    c.setAlpha( ( 100-settings->getTransparencyValue() )*255/100);
+    //c = QColor(Colors[settings->getHistoColorValue()]);
+    //c.setAlpha( ( 100-settings->getTransparencyValue() )*255/100);
     if ( ui->spectrumCPT->plottableCount() > 0 ) {
         QCPBars *bars = qobject_cast<QCPBars*>(ui->spectrumCPT->plottable());
         if (bars) {
@@ -792,41 +767,41 @@ void Widget::applySpectrumColor()
     }
 }
 // Сохранить настройки в реестр
-void Widget::saveSettings()
+void MainWindow::saveSettings()
 {
     QSettings s;
     if( splitter )
-        s.setValue( SPLITTER_STATE,  this->splitter->saveState()    );
-    s.setValue(     CODE_MATRIX,     ui->matrixPTE->toPlainText()   );
-    s.setValue(     SPECTRUM_TEXT,   ui->spectrumPTE->toPlainText() );
-    s.setValue(     WIDGET_GEOMETRY, this->saveGeometry()           );
+        s.setValue(SettingsKeys::SPLITTER_STATE,  this->splitter->saveState()    );
+    s.setValue(SettingsKeys::CODE_MATRIX,     ui->matrixPTE->toPlainText()   );
+    s.setValue(SettingsKeys::SPECTRUM_TEXT,   ui->spectrumPTE->toPlainText() );
+    s.setValue(SettingsKeys::WIDGET_GEOMETRY, this->saveGeometry()           );
     QVariantList values;
     for (double v : std::as_const(yCache))
         values << v;
-    s.setValue(    SPECTRUM_VALUES, values);
+    s.setValue(SettingsKeys::SPECTRUM_VALUES, values);
     s.sync();
 }
 
 // Загрузить настройки из реестра
-void Widget::loadSettings()
+void MainWindow::loadSettings()
 {
     QSettings s;
 
-    this->restoreGeometry(                    s.value( WIDGET_GEOMETRY                ).toByteArray()       );
-    if( splitter ) splitter->restoreState(    s.value( SPLITTER_STATE                 ).toByteArray()       );
-    ui->spectrumPTE->setPlainText(            s.value( SPECTRUM_TEXT                  ).toString()          );
-    ui->matrixPTE->setPlainText(              s.value( CODE_MATRIX                    ).toString()          );
-    if (s.contains(SPECTRUM_VALUES)) {
-        QVariantList values = s.value(SPECTRUM_VALUES).toList();
-        QVector<quint64> spectrum;
+    this->restoreGeometry(                    s.value(SettingsKeys::WIDGET_GEOMETRY                ).toByteArray()       );
+    if( splitter ) splitter->restoreState(    s.value(SettingsKeys::SPLITTER_STATE                 ).toByteArray()       );
+    ui->spectrumPTE->setPlainText(            s.value(SettingsKeys::SPECTRUM_TEXT                  ).toString()          );
+    ui->matrixPTE->setPlainText(              s.value(SettingsKeys::CODE_MATRIX                    ).toString()          );
+    if (s.contains(SettingsKeys::SPECTRUM_VALUES)) {
+        QVariantList values = s.value(SettingsKeys::SPECTRUM_VALUES).toList();
+        QVector<float> spectrum;
         spectrum.reserve(values.size());
         for (const QVariant &v : values)
-            spectrum.append(v.toULongLong());
+            spectrum.append(v.toFloat());
         updatePlot(spectrum);
     }
 }
 
-QString Widget::formatRemainingTime(int minutesTotal)
+QString MainWindow::formatRemainingTime(int minutesTotal)
 {
     if (minutesTotal <= 0) {
         return QObject::tr("Меньше минуты");
@@ -847,12 +822,12 @@ QString Widget::formatRemainingTime(int minutesTotal)
     return parts.join(" ");
 }
 
-void Widget::loadMatricesArray()
+void MainWindow::loadMatricesArray()
 {
     matrices = QJsonArray();
 
     QSettings s;
-    const QByteArray data = s.value(MATRICES_JSON).toByteArray();
+    const QByteArray data = s.value(SettingsKeys::MATRICES_JSON).toByteArray();
     if (data.isEmpty())
         return;
 
@@ -863,15 +838,15 @@ void Widget::loadMatricesArray()
     matrices = doc.array();
 }
 
-void Widget::saveMatricesArray()
+void MainWindow::saveMatricesArray()
 {
     QSettings s;
     QJsonDocument doc(matrices);
-    s.setValue(MATRICES_JSON, doc.toJson(QJsonDocument::Compact));
+    s.setValue(SettingsKeys::MATRICES_JSON, doc.toJson(QJsonDocument::Compact));
     s.sync();
 }
 
-void Widget::saveMatrixByName(const QString& name)
+void MainWindow::saveMatrixByName(const QString& name)
 {
     if (name.isEmpty())
         return;
@@ -903,7 +878,7 @@ void Widget::saveMatrixByName(const QString& name)
     saveMatricesArray();
 }
 
-bool Widget::removeMatrixByName(const QString& name)
+bool MainWindow::removeMatrixByName(const QString& name)
 {
     int idx = findMatrixIndexByName(name);
     if (idx < 0) return false;
@@ -912,7 +887,7 @@ bool Widget::removeMatrixByName(const QString& name)
     return true;
 }
 
-int Widget::findMatrixIndexByName(const QString& name)
+int MainWindow::findMatrixIndexByName(const QString& name)
 {
     for (int i = 0; i < matrices.size(); ++i) {
         if (!matrices.at(i).isObject()) continue;
@@ -922,14 +897,14 @@ int Widget::findMatrixIndexByName(const QString& name)
     return -1;
 }
 
-QString Widget::getMatrixByName(const QString& name)
+QString MainWindow::getMatrixByName(const QString& name)
 {
     int idx = findMatrixIndexByName(name);
     if (idx < 0) return QString();
     return matrices.at(idx).toObject().value("matrix").toString();
 }
 
-QStringList Widget::listMatrixNames()
+QStringList MainWindow::listMatrixNames()
 {
     QStringList out;
     for (const QJsonValue& v : matrices) {
@@ -939,7 +914,7 @@ QStringList Widget::listMatrixNames()
     return out;
 }
 
-QString Widget::defaultMatrixName()
+QString MainWindow::defaultMatrixName()
 {
     QString text = ui->matrixPTE->toPlainText();
     QStringList rows = text.split('\n', Qt::SkipEmptyParts);

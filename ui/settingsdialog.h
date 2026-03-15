@@ -3,10 +3,15 @@
 
 #include <QDialog>
 #include "defines.h"
+#include "settings.h"
+#include "workwithmatrix.h"
 #include <QJsonObject>
-
+#include <qjsondocument.h>
+#include <qbuttongroup.h>
+#include <cuda_runtime.h>
 
 namespace Ui { class SettingsDialog; }
+enum class Length { Short, Long };
 
 class SettingsDialog : public QDialog
 {
@@ -16,74 +21,31 @@ public:
     explicit SettingsDialog(QWidget *parent = nullptr);
     ~SettingsDialog() override;
 
-    
-
-    int   getHistoColorValue()			const;
-    int   getRefreshProgressbarValue()	const;
-    int   getRefreshSpectrumValue()		const;
-    int   getStringsValue()				const;
-    int   getStringsMaxValue()          const;
-    bool  isGpuUsed()					const;
-    bool  isGrayCodeUsed()				const;
-    bool  isDualCodeUsed()              const;
-    int   getTransparencyValue()		const;
-
-    void  setHistoColorValue(int);
-    void  setRefreshProgressbarValue(int);
-    void  setRefreshSpectrumValue(int);
-    void  setStringsValue(int);
-    void  setStringsMaxValue(int);
-    void  setUseGpu(bool);
-    void  setUseGrayCode(bool);
-    void  setUseDualCode(bool);
-    void  setTransparencyValue(int);
-
 public: signals:
-    void useGpuToggled(bool);
-    void useGrayCodeToggled(bool);
-    void useDualCodeToggled(bool);
-    void refreshProgressbarValueChanged(int);
-    void refreshSpectrumValueChanged(int);
-    void sendInitialSettingsToWorker(const QJsonObject& settings);
-
+    // Сигнал для отправки настроек воркеру
+    void sendSettingsToWorker(const QJsonObject& settings);
 public slots:
-
-    void disableGpu();
-
-    void toggleStringsSPB(bool);
-
-    void toggleUseGpuCHB(bool);
-
-    void toggleUseGrayCodeCHB(bool);
-
-    void toggleUseDualCodeCHB(bool);
-
-    void handleMatrixChanged(int);
-
-    void handleRequestInitialSettings();
+    void handleMatrixChanged(int rows, int cols);
+    void handleSettingsRequested();
+    void setInterfaceEnabled(bool enabled);
 private slots:
 
-    void on_buttonBox_accepted();
-
-    void on_buttonBox_rejected();
-
-    void on_useGrayCodeCHB_toggled(bool checked);
-
-    void on_useDualCodeCHB_toggled(bool checked);
-
 private:
-
+    void checkGpuAvailable();
+    bool isGpuAvailable();
+    void loadSettings();
     void saveSettings();
 
-    void loadSettings();
 
-    void updateUiFromSettings();
-    void updateSettingsFromUi();
+    Length codeLength;
+    Length dualCodeLength;
     Ui::SettingsDialog *ui;
-    QJsonObject settings;
+    QButtonGroup* algorithmBGP;
+    QButtonGroup* enumeratorBGP;
+    QButtonGroup* computeDeviceBGP;
+    ComputationSettings settings;
 
-    void setData();
-    void setToolTips();
+    //QJsonObject settings;
 };
 
 #endif // SETTINGSDIALOG_H

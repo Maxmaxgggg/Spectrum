@@ -3,19 +3,80 @@
 #include <QSettings>
 #include <QColorDialog>
 #include <qtimer.h>
+#include <omp.h>
+
+using Algorithm       = ComputationSettings::Algorithm;
+using EnumerationType = ComputationSettings::EnumerationType;
+using ComputeDevice   = ComputationSettings::ComputeDevice;
 
 SettingsDialog::SettingsDialog(QWidget *parent)
     : QDialog(parent), ui(new Ui::SettingsDialog)
 {
     ui->setupUi(this);
+    // Создаём группу радиокнопок, отвечающую за выбор алгоритма
+    algorithmBGP = new QButtonGroup(this);
+    algorithmBGP->addButton( ui->simpleXorRB, Algorithm::SimpleXor );
+    algorithmBGP->addButton( ui->grayCodeRB,  Algorithm::GrayCode  );
+    algorithmBGP->addButton( ui->dualCodeRB,  Algorithm::DualCode  );
 
-    setData();
-    setToolTips();
+    enumeratorBGP = new QButtonGroup(this);
+    enumeratorBGP->addButton( ui->fullEnumRB,    EnumerationType::Full    );
+    enumeratorBGP->addButton( ui->partialEnumRB, EnumerationType::Partial );
+
+    computeDeviceBGP = new QButtonGroup(this);
+    computeDeviceBGP->addButton( ui->cpuRB, ComputeDevice::CPU );
+    computeDeviceBGP->addButton( ui->gpuRB, ComputeDevice::GPU );
+
+
     loadSettings();
-    updateUiFromSettings();
+    checkGpuAvailable();
+
+    settings.algorithmType = static_cast<Algorithm>(algorithmBGP->checkedId());
+    settings.enumType = static_cast<EnumerationType>(enumeratorBGP->checkedId());
+    settings.maxRows = ui->maxRowsSPB->value();
+    settings.compDev = static_cast<ComputeDevice>(computeDeviceBGP->checkedId());
     
+    int maxThreads = omp_get_max_threads();
+    ui->threadsCpuSPB->setMaximum(maxThreads);
+    settings.compDevSet.threadsCpu = std::min(maxThreads, ui->threadsCpuSPB->value());
+    settings.compDevSet.blocksGpu = ui->blocksGpuSPB->value();
+    settings.compDevSet.threadsGpu = ui->threadsGpuSPB->value();
+
+
+
+    connect(algorithmBGP, &QButtonGroup::idClicked,
+        this, [=](int id)
+        {
+            ui->enumTypeGBX->setVisible( id == Algorithm::SimpleXor );
+        });
+    //Если выбран полный перебор, то отключаем выбор числа строк
+    connect(enumeratorBGP, &QButtonGroup::idClicked,
+        this, [=](int id) {
+            ui->maxRowsSPB->setVisible( id == EnumerationType::Partial );
+            ui->maxRowsSPB->setValue(   ui->maxRowsSPB->maximum()     );
+            ui->maxRowsLBL->setVisible( id == EnumerationType::Partial );
+        });
+    connect(computeDeviceBGP, &QButtonGroup::idClicked,
+        this, [=](int id) {
+            //ui->threadsCpuLBL->setVisible( id == ComputeDevice::CPU );
+            //ui->threadsCpuSPB->setVisible( id == ComputeDevice::CPU );
+            ui->blocksGpuLBL->setVisible(  id == ComputeDevice::GPU );
+            ui->blocksGpuSPB->setVisible(  id == ComputeDevice::GPU );
+            ui->threadsGpuLBL->setVisible( id == ComputeDevice::GPU );
+            ui->threadsGpuSPB->setVisible( id == ComputeDevice::GPU );
+        });
+    connect(ui->buttonBox, &QDialogButtonBox::accepted,
+        this, [this]() {
+            saveSettings();
+            accept();
+        });
+    connect(ui->buttonBox, &QDialogButtonBox::rejected,
+        this, [this]() {
+            loadSettings();
+            reject();
+        });
     // Отключаем кнопку помощи
-    setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);    
+    setWindowFlags( windowFlags()  & ~Qt::WindowContextHelpButtonHint );
 }
 
 SettingsDialog::~SettingsDialog()
@@ -23,321 +84,171 @@ SettingsDialog::~SettingsDialog()
     saveSettings();
 }
 
-void SettingsDialog::handleRequestInitialSettings() {
-    emit sendInitialSettingsToWorker(settings);
-}
-void SettingsDialog::on_buttonBox_accepted()
+void SettingsDialog::handleSettingsRequested()
 {
-    updateSettingsFromUi();
-    saveSettings();
+    emit sendSettingsToWorker(settings.toJson());
 }
 
-void SettingsDialog::on_buttonBox_rejected()
+void SettingsDialog::setInterfaceEnabled( bool enabled )
 {
-    loadSettings();
-    updateUiFromSettings();
-}
-
-void SettingsDialog::on_useGrayCodeCHB_toggled(bool checked)
-{
-    if (checked) {
-        setStringsValue(ui->stringsSPB->value());
-        ui->stringsSPB->setValue(ui->stringsSPB->maximum());
-        ui->stringsSPB->setEnabled(false);
-        return;
+    if (!enabled) {
+        // Выключаем весь интерфейс
+        ui->algorithmGBX->setEnabled(             false );
+        ui->enumTypeGBX->setEnabled(              false );
+        ui->computeDeviceGBX->setEnabled(         false );
+        ui->computeDeviceSettingsGBX->setEnabled( false );
     }
-    ui->useDualCodeCHB->setChecked(false);
-    ui->stringsSPB->setValue(getStringsValue());
-    ui->stringsSPB->setEnabled(true);
+    else {
+        // Включаем весь интерфейс
+        ui->algorithmGBX->setEnabled(             true  );
+        ui->enumTypeGBX->setEnabled(              true  );
+        ui->computeDeviceGBX->setEnabled(         true  );
+        ui->computeDeviceSettingsGBX->setEnabled( true  );
+        // Частично выключаем его
+        if ( codeLength == Length::Short ) {
+            ui->grayCodeRB->setEnabled(true);
+            // Включаем возможность полного перебора
+            ui->fullEnumRB->setEnabled(true);
+        }
+        else {
+            ui->grayCodeRB->setEnabled(false);
+            // Отключаем возможность полного перебора
+            ui->fullEnumRB->setEnabled(false);
+            // Включаем частичный перебор
+            ui->partialEnumRB->setChecked(true);
+        }
+        if ( dualCodeLength == Length::Short ) {
+            ui->dualCodeRB->setEnabled(true);
+        }
+        else {
+            ui->dualCodeRB->setEnabled(false);
+        }
+    }
 }
 
-void SettingsDialog::on_useDualCodeCHB_toggled(bool checked)
-{
-    if (checked)
-        ui->useGrayCodeCHB->setChecked(true);
+void SettingsDialog::handleMatrixChanged(int rows, int cols) {
+    // Если число строк порождающей матрицы больше 63
+    if (rows > 63) {
+        codeLength = Length::Long;
+        // Отключаем возможность использования кода грея
+        ui->grayCodeRB->setEnabled(false);
+        // Если перед отключением было включено использование кода Грея, то насильно выключаем его
+        if ( ui->grayCodeRB->isChecked() ){
+            ui->simpleXorRB->setChecked(true);
+            ui->enumTypeGBX->setVisible(true);
+        }
+            
+        // Отключаем возможность полного перебора
+        ui->fullEnumRB->setEnabled(false);
+        // Включаем частичный перебор
+        ui->partialEnumRB->setChecked(true);
+        
+        // Находим максимальное количество строк, которые можем сложить, не выходя за uint64
+        ui->maxRowsSPB->setMaximum(maxCombIndex(rows));
+        ui->maxRowsSPB->setVisible(enumeratorBGP->checkedId() == EnumerationType::Partial);
+        ui->maxRowsLBL->setVisible(enumeratorBGP->checkedId() == EnumerationType::Partial);
+    }
+    // -||- меньше 63
+    else {
+        codeLength = Length::Short;
+        // Включаем возможность использования кода грея
+        ui->grayCodeRB->setEnabled(true);
+        // Включаем возможность полного перебора
+        ui->fullEnumRB->setEnabled(true);
+        // Устанавливаем максимальное количество строк равным числу строк порождающей матрицы
+        ui->maxRowsSPB->setMaximum(rows);
+    }
+    // Если размерность дуального кода больше 63
+    if (cols - rows > 63) {
+        dualCodeLength = Length::Long;
+        // Отключаем возможность использование дуального кода для расчета
+        ui->dualCodeRB->setEnabled(false);
+        // Если во время вписывания новой матрицы был выбран расчет с использованием дуального кода
+        if (ui->dualCodeRB->isChecked())
+            // Если число строк больше 63, то выбираем расчет с использованием простого XOR-а
+            if (rows > 63)
+                ui->simpleXorRB->setChecked(true);
+            // Иначе - с использованием кода грея
+            else
+                ui->grayCodeRB->setChecked(true);
+    }
+    // -||- меньше 63
+    else {
+        dualCodeLength = Length::Short;
+        ui->dualCodeRB->setEnabled(true);
+    }
+}
+bool SettingsDialog::isGpuAvailable() {
+    int deviceCount = 0;
+    cudaError_t err = cudaGetDeviceCount(&deviceCount);
+    if (err != cudaSuccess)
+        return false;
+    else
+        return deviceCount > 0;
+}
+void SettingsDialog::checkGpuAvailable() {
+    if (isGpuAvailable()) {
+        ui->gpuRB->setEnabled(true);
+    }
+    else {
+        ui->gpuRB->setEnabled(false);
+        ui->cpuRB->setChecked(true);
+        //ui->threadsCpuLBL->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::CPU);
+        //ui->threadsCpuSPB->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::CPU);
+        ui->blocksGpuLBL->setVisible(computeDeviceBGP->checkedId()  == ComputeDevice::GPU);
+        ui->blocksGpuSPB->setVisible(computeDeviceBGP->checkedId()  == ComputeDevice::GPU);
+        ui->threadsGpuLBL->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::GPU);
+        ui->threadsGpuSPB->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::GPU);
+    }
 }
 
-void SettingsDialog::disableGpu()
-{
-    setUseGpu(false);
-    saveSettings();
-    ui->useGpuCHB->setChecked(false);
-}
-void SettingsDialog::toggleStringsSPB(bool b) {
-    ui->stringsSPB->setEnabled(b);
-}
-void SettingsDialog::toggleUseGpuCHB(bool b) {
-    ui->useGpuCHB->setEnabled(b);
-}
-void SettingsDialog::toggleUseGrayCodeCHB(bool b) {
-    ui->useGrayCodeCHB->setEnabled(b);
-}
-void SettingsDialog::toggleUseDualCodeCHB(bool b)
-{
-    ui->useDualCodeCHB->setEnabled(b);
-}
-void SettingsDialog::handleMatrixChanged(int v)
-{
-    settings[STRINGS_MAX_VALUE] = v;
-    ui->stringsSPB->setMaximum(v);
-    ui->stringsSPB->setValue(v);
-}
-void SettingsDialog::setData()
-{
-
-    ui->refreshProgressbarCMB->setItemData( 0, 100   );
-    ui->refreshProgressbarCMB->setItemData( 1, 500   );
-    ui->refreshProgressbarCMB->setItemData( 2, 1000  );
-    ui->refreshProgressbarCMB->setItemData( 3, 5000  );
-    ui->refreshProgressbarCMB->setItemData( 4, 10000 );
-    ui->refreshProgressbarCMB->setItemData( 5, 60000 );
-
-    ui->refreshSpectrumCMB->setItemData( 0, 100     );
-    ui->refreshSpectrumCMB->setItemData( 1, 500     );
-    ui->refreshSpectrumCMB->setItemData( 2, 1000    );
-    ui->refreshSpectrumCMB->setItemData( 3, 5000    );
-    ui->refreshSpectrumCMB->setItemData( 4, 10000   );
-    ui->refreshSpectrumCMB->setItemData( 5, 60000   );
-    ui->refreshSpectrumCMB->setItemData( 6, 600000  );
-    ui->refreshSpectrumCMB->setItemData( 7, 3600000 );
-
-    ui->histoColorCMB->setItemData( 0, 0 );
-    ui->histoColorCMB->setItemData( 1, 1 );
-    ui->histoColorCMB->setItemData( 2, 2 );
-}
-
-void SettingsDialog::setToolTips()
-{
-    ui->refreshSpectrumLBL->setToolTip(    QString::fromUtf8("Выбор минимального времени обновления гистограммы и текстового спектра\
-                                                            \nПри тяжелых расчетах увеличивается автоматически"));
-
-    ui->refreshProgressbarLBL->setToolTip( QString::fromUtf8("Выбор времени обновления шкалы прогресса"));
-                                           
-    ui->histoColorLBL->setToolTip(         QString::fromUtf8("Выбор цвета гистограммы"));
-                                           
-    ui->transparencyLBL->setToolTip(       QString::fromUtf8("Установка прозрачности гистограммы"));
-                                           
-    ui->useGpuLBL->setToolTip(             QString::fromUtf8("Включение использования видеокарты для расчета спектра кода\
-                                                            \nЕсли выключено — расчет выполняется на процессоре"));
-
-    ui->useGrayCodeLBL->setToolTip(        QString::fromUtf8("Включение использования кода Грея при генерации битовых масок\
-                                                            \nБлокирует выбор максимального количества объединяемых строк\
-                                                            \nПовышает производительность при переборе всех строк"));
-
-    ui->useDualCodeLBL->setToolTip(        QString::fromUtf8("Включение расчета спектра кода через спектр дуального кода\
-                                                            \nВключает использование кода Грея\
-                                                            \nПовышает производительность при n − k < k"));
-
-    ui->stringsLBL->setToolTip(            QString::fromUtf8("Установка максимального числа складываемых по модулю 2 строк при расчете спектра"));
-    
-}
-
+// Сохраняем настройки в реестр
 void SettingsDialog::saveSettings() {
-
     QSettings s;
-    s.setValue( SPECTRUM_COLOR,        settings.value( SPECTRUM_COLOR        ).toInt()  );
-    s.setValue( PROGRESSBAR_MS,        settings.value( PROGRESSBAR_MS        ).toInt()  );
-    s.setValue( SPECTRUM_MS,           settings.value( SPECTRUM_MS           ).toInt()  );
-    s.setValue( USE_GPU_CHECKED,       settings.value( USE_GPU_CHECKED       ).toBool() );
-    s.setValue( USE_GRAY_CODE_CHECKED, settings.value( USE_GRAY_CODE_CHECKED ).toBool() );
-    s.setValue( USE_DUAL_CODE_CHECKED, settings.value( USE_DUAL_CODE_CHECKED ).toBool() );
-    s.setValue( STRINGS_VALUE,         settings.value( STRINGS_VALUE         ).toInt()  );
-    s.setValue( STRINGS_MAX_VALUE,     settings.value( STRINGS_MAX_VALUE     ).toInt()  );
-    s.setValue( TRANSPARENCY_VALUE,    settings.value( TRANSPARENCY_VALUE    ).toInt()  );
-    s.setValue( SETTINGS_GEOMETRY,     this->saveGeometry()    );
-    s.sync();
+    settings.algorithmType = static_cast<Algorithm>(algorithmBGP->checkedId());
+    settings.enumType      = static_cast<EnumerationType>(enumeratorBGP->checkedId());
+    settings.maxRows       = ui->maxRowsSPB->value();
+    settings.compDev       = static_cast<ComputeDevice>(computeDeviceBGP->checkedId());
 
+    settings.compDevSet.threadsCpu = ui->threadsCpuSPB->value();
+    settings.compDevSet.blocksGpu  = ui->blocksGpuSPB->value();
+    settings.compDevSet.threadsGpu = ui->threadsGpuSPB->value();
+
+    QJsonDocument doc(settings.toJson());
+    s.setValue(SettingsKeys::COMPUTATION_SETTINGS, doc.toJson());
 }
 void SettingsDialog::loadSettings() {
-
+    // Загружаем настройки из реестра
     QSettings s;
-
-    if ( s.contains( SETTINGS_GEOMETRY ) ) this->restoreGeometry( s.value( SETTINGS_GEOMETRY ).toByteArray() );
- 
-    settings[ SPECTRUM_COLOR        ] = s.value( SPECTRUM_COLOR,        DEFAULT_SPECTRUM_COLOR     ).toInt();
-    settings[ PROGRESSBAR_MS        ] = s.value( PROGRESSBAR_MS,        DEFAULT_PROGRESSBAR_MS     ).toInt();
-    settings[ SPECTRUM_MS           ] = s.value( SPECTRUM_MS,           DEFAULT_SPECTRUM_MS        ).toInt();
-    settings[ USE_GPU_CHECKED       ] = s.value( USE_GPU_CHECKED,       DEFAULT_USE_GPU            ).toBool();
-    settings[ USE_GRAY_CODE_CHECKED ] = s.value( USE_GRAY_CODE_CHECKED, DEFAULT_USE_GRAY_CODE      ).toBool();
-    settings[ USE_DUAL_CODE_CHECKED ] = s.value( USE_DUAL_CODE_CHECKED, DEFAULT_USE_DUAL_CODE      ).toBool();
-    settings[ STRINGS_VALUE         ] = s.value( STRINGS_VALUE,         DEFAULT_STRINGS_VALUE      ).toInt();
-    settings[ STRINGS_MAX_VALUE     ] = s.value( STRINGS_MAX_VALUE,     DEFAULT_STRINGS_MAX_VALUE  ).toInt();
-    settings[ TRANSPARENCY_VALUE    ] = s.value( TRANSPARENCY_VALUE,    DEFAULT_TRANSPARENCY_VALUE ).toInt();
-
-}
-
-void SettingsDialog::updateUiFromSettings()
-{
-    int  spectrumColor        = getHistoColorValue();
-    int  refreshProgressbarMs = getRefreshProgressbarValue();
-    int  refreshSpectrumMs    = getRefreshSpectrumValue();
-    int  strVal               = getStringsValue();
-    int  strMaxVal            = getStringsMaxValue();
-    bool useGPUChecked        = isGpuUsed();
-    bool useGrayCodeChecked   = isGrayCodeUsed();
-    bool useDualCodeChecked   = isDualCodeUsed();
-    int  trpVal               = getTransparencyValue();
-
-    ui->histoColorCMB->setCurrentIndex(
-        ui->histoColorCMB->findData(spectrumColor)
-    );
-    ui->refreshProgressbarCMB->setCurrentIndex(
-        ui->refreshProgressbarCMB->findData(refreshProgressbarMs)
-    );
-    ui->stringsSPB->setValue(
-        strVal
-    );
-    ui->stringsSPB->setMaximum(
-        strMaxVal
-    );
-    ui->useGpuCHB->setChecked(
-        useGPUChecked
-    );
-    ui->useGrayCodeCHB->setChecked(
-        useGrayCodeChecked
-    );
-    ui->useDualCodeCHB->setChecked(
-        useDualCodeChecked
-    );
-    ui->transparencySPB->setValue(
-        trpVal
-    );
-    ui->refreshSpectrumCMB->setCurrentIndex(
-        ui->refreshSpectrumCMB->findData(refreshSpectrumMs)
-    );
-    if (useGrayCodeChecked) {
-        ui->stringsSPB->setEnabled(false);
-        ui->stringsSPB->setValue(ui->stringsSPB->maximum());
+    QByteArray data = s.value(SettingsKeys::COMPUTATION_SETTINGS).toByteArray();
+    if (!data.isEmpty())
+    {
+        QJsonDocument doc = QJsonDocument::fromJson(data);
+        settings = ComputationSettings::fromJson(doc.object());
     }
-}
+    // Загружаем настройки в UI
+    algorithmBGP->button(settings.algorithmType)->setChecked(true);
+    ui->enumTypeGBX->setVisible(algorithmBGP->checkedId() == Algorithm::SimpleXor);
 
-void SettingsDialog::updateSettingsFromUi()
-{
-    QSettings s;
-    s.setValue(SETTINGS_GEOMETRY, this->saveGeometry());
+    enumeratorBGP->button(settings.enumType)->setChecked(true);
+    ui->maxRowsSPB->setVisible(enumeratorBGP->checkedId() == EnumerationType::Partial);
+    ui->maxRowsLBL->setVisible(enumeratorBGP->checkedId() == EnumerationType::Partial);
+    ui->maxRowsSPB->setValue(settings.maxRows);
 
-    int colVal = ui->histoColorCMB->currentData().toInt();
-    int barVal = ui->refreshProgressbarCMB->currentData().toInt();
-    int sptrVal = ui->refreshSpectrumCMB->currentData().toInt();
-    int strVal = ui->stringsSPB->value();
-    bool useGPUChecked = ui->useGpuCHB->isChecked();
-    bool useGrayCodeChecked = ui->useGrayCodeCHB->isChecked();
-    bool useDualCodeChecked = ui->useDualCodeCHB->isChecked();
+    computeDeviceBGP->button(settings.compDev)->setChecked(true);
 
-    int trpVal = ui->transparencySPB->value();
+    int maxThreads = omp_get_max_threads();
+    ui->threadsCpuSPB->setMaximum(maxThreads);
 
-    if (isGpuUsed() != useGPUChecked)
-        emit useGpuToggled(useGPUChecked);
+    //ui->threadsCpuLBL->setVisible( computeDeviceBGP->checkedId() == ComputeDevice::CPU );
+    //ui->threadsCpuSPB->setVisible( computeDeviceBGP->checkedId() == ComputeDevice::CPU );
+    ui->blocksGpuLBL->setVisible(  computeDeviceBGP->checkedId() == ComputeDevice::GPU );
+    ui->blocksGpuSPB->setVisible(  computeDeviceBGP->checkedId() == ComputeDevice::GPU );
+    ui->threadsGpuLBL->setVisible( computeDeviceBGP->checkedId() == ComputeDevice::GPU );
+    ui->threadsGpuSPB->setVisible( computeDeviceBGP->checkedId() == ComputeDevice::GPU );
 
-    if (isGrayCodeUsed() != useGrayCodeChecked)
-        emit useGrayCodeToggled(useGrayCodeChecked);
-    if (isDualCodeUsed() != useDualCodeChecked)
-        emit useDualCodeToggled(useDualCodeChecked);
-    if (getRefreshProgressbarValue() != barVal)
-        emit refreshProgressbarValueChanged(barVal);
-    
-    if (getRefreshSpectrumValue() != sptrVal)
-        emit refreshSpectrumValueChanged(sptrVal);
 
-    setHistoColorValue(colVal);
-    setRefreshProgressbarValue(barVal);
-    
-    setRefreshSpectrumValue(sptrVal);
-    setUseGpu(useGPUChecked);
-    setUseGrayCode(useGrayCodeChecked);
-    setUseDualCode(useDualCodeChecked);
-    if(!useGrayCodeChecked)
-        setStringsValue(strVal);
-    setTransparencyValue(trpVal);
-
-}
-
-int SettingsDialog::getHistoColorValue() const
-{
-    return settings.value(SPECTRUM_COLOR).toInt();
-}
-
-int SettingsDialog::getRefreshProgressbarValue() const
-{
-    return settings.value(PROGRESSBAR_MS).toInt();
-}
-
-int SettingsDialog::getRefreshSpectrumValue() const
-{
-    return settings.value(SPECTRUM_MS).toInt();
-}
-
-int SettingsDialog::getStringsValue() const
-{
-    return settings.value(STRINGS_VALUE).toInt();
-}
-
-int SettingsDialog::getStringsMaxValue() const
-{
-    return settings.value(STRINGS_MAX_VALUE).toInt();
-}
-
-bool SettingsDialog::isGpuUsed() const
-{
-    return settings.value(USE_GPU_CHECKED).toBool();
-}
-
-bool SettingsDialog::isGrayCodeUsed() const
-{
-    return settings.value(USE_GRAY_CODE_CHECKED).toBool();
-}
-
-bool SettingsDialog::isDualCodeUsed() const
-{
-    return settings.value(USE_DUAL_CODE_CHECKED).toBool();
-}
-
-int SettingsDialog::getTransparencyValue() const
-{
-    return settings.value(TRANSPARENCY_VALUE).toInt();
-}
-
-void SettingsDialog::setHistoColorValue(int v)
-{
-    settings[SPECTRUM_COLOR] = v;
-}
-
-void SettingsDialog::setRefreshProgressbarValue(int v)
-{
-    settings[PROGRESSBAR_MS] = v;
-}
-
-void SettingsDialog::setRefreshSpectrumValue(int v)
-{
-    settings[SPECTRUM_MS] = v;
-}
-
-void SettingsDialog::setStringsValue(int v)
-{
-    settings[STRINGS_VALUE] = v;
-}
-
-void SettingsDialog::setStringsMaxValue(int v)
-{
-    settings[STRINGS_MAX_VALUE] = v;
-}
-
-void SettingsDialog::setUseGpu(bool b)
-{
-    settings[USE_GPU_CHECKED] = b;
-}
-
-void SettingsDialog::setUseGrayCode(bool b)
-{
-    settings[USE_GRAY_CODE_CHECKED] = b;
-}
-
-void SettingsDialog::setUseDualCode(bool b)
-{
-    settings[USE_DUAL_CODE_CHECKED] = b;
-}
-
-void SettingsDialog::setTransparencyValue(int v)
-{
-    settings[TRANSPARENCY_VALUE] = v;
+    ui->threadsCpuSPB->setValue( std::min(maxThreads,settings.compDevSet.threadsCpu) );
+    ui->blocksGpuSPB->setValue(  settings.compDevSet.blocksGpu  );
+    ui->threadsGpuSPB->setValue( settings.compDevSet.threadsGpu );
 }

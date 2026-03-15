@@ -6,10 +6,6 @@
 typedef uint64_t quint64;
 #pragma once
 
-//enum class MaskGenerationMode {
-//    CPU_MASKS,   // Битовые маски генерируются на CPU и копируются на GPU
-//    GPU_MASKS    // Битовые маски генерируются на GPU
-//};
 // Макрос для проверки ошибок
 #ifndef CUDA_CALL
 #define CUDA_CALL(call) do { \
@@ -23,7 +19,32 @@ typedef uint64_t quint64;
 
 __host__ cudaError_t copyMatrixToConstant(const quint64* h_matrix, size_t wordsNeeded);
 
-__global__ void computeSpectrumKernel(
+
+__global__ void computeSpectrumKernelShort(
+    quint64 * d_spectrum,
+    const quint64* d_binomTable,
+    int n,
+    int k,
+    int blockCount,
+    quint64 chunkOffset,
+    quint64 chunkSize,
+    quint64 r
+);
+__host__ void launchSpectrumKernelShort(
+    quint64 * d_spectrum,
+    const quint64 * d_binomTable,
+    int numOfBlocks,
+    int threadsPerBlock,
+    cudaStream_t stream,
+    int n,
+    int k,
+    int blockCount,
+    quint64 chunkOffset,
+    quint64 chunkSize,
+    quint64 r
+);
+
+__global__ void computeSpectrumKernelLong(
     uint64_t*        d_spectrum,       
     const uint64_t*  d_matrix,   
     int              numCols,     
@@ -37,7 +58,7 @@ __global__ void computeSpectrumKernel(
     uint64_t*        d_maskCounter
 );
 
-__host__ void launchSpectrumKernel(
+__host__ void launchSpectrumKernelLong(
     int              numBlocks,
     int              threadsPerBlock,
     cudaStream_t     stream,
@@ -53,22 +74,22 @@ __host__ void launchSpectrumKernel(
     uint64_t         numOfOnes,
     uint64_t*        d_maskCounter
 );
-//__global__ void computeSpectrumKernelGray(
-//    quint64* d_spectrum,
-//    int n,
-//    int k,
-//    int blockCount,
-//    quint64 chunkOffset,
-//    quint64 chunkSize
-//);
-//__host__ void launchSpectrumKernelGray(
-//    int numOfBlocks,
-//    int threadsPerBlock,
-//    cudaStream_t stream,
-//    quint64* d_spectrum,
-//    int n,
-//    int k,
-//    int blockCount,
-//    quint64 chunkOffset,
-//    quint64 chunkSize
-//);
+__global__ void computeSpectrumKernelGrayShort(
+    quint64* d_spectrum,
+    int n,
+    int k,
+    int blockCount,
+    quint64 chunkOffset,
+    quint64 chunkSize
+);
+__host__ void launchSpectrumKernelGrayShort(
+    int numOfBlocks,
+    int threadsPerBlock,
+    cudaStream_t stream,
+    quint64* d_spectrum,
+    int n,
+    int k,
+    int blockCount,
+    quint64 chunkOffset,
+    quint64 chunkSize
+);
