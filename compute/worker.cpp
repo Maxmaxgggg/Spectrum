@@ -558,19 +558,19 @@ void Worker::computeSpectrumCpuNoGrayLong(
     quint64 maxComb)
 {
     using namespace std::chrono;
-
+    int numThreads = omp_get_max_threads();
     quint64 totalOps = sumCombinations(numOfRows, maxComb);
     quint64 doneOps = 0;
 
     // Число "битовых масок", обрабатываемых одним потоком
-    const uint64_t masksPerThread = 1ULL << 12; // можно настроить
-    const quint64 chunkSizeTarget = ((uint64_t)omp_get_num_threads()) * masksPerThread;
+    const uint64_t masksPerThread = 1ULL << 20; // можно настроить
+    const quint64 chunkSizeTarget = numThreads * masksPerThread;
 
     auto startTime = steady_clock::now();
     auto lastTimeSpectrum = startTime;
     auto lastTimeBar = startTime;
     auto lastEstimateTime = startTime;
-
+    std::vector<std::vector<quint64>> threadSpectrum( numThreads, std::vector<quint64>(numOfCols + 1, 0ULL) );
     // Основной внешний цикл по числу единиц в маске
     for (unsigned r = 0; r <= maxComb; ++r) {
         quint64 curOps = h_binomTable[numOfRows][r];
@@ -586,11 +586,16 @@ void Worker::computeSpectrumCpuNoGrayLong(
             
             uint64_t numStartMasks = (chunkSize + masksPerThread - 1ULL) / masksPerThread;
             if (numStartMasks == 0) continue;
+            
+
+            for (int t = 0; t < numThreads; ++t)
+                std::fill(threadSpectrum[t].begin(), threadSpectrum[t].end(), 0ULL);
 
             #pragma omp parallel
             {
                 // Локальный спектр для данного потока
-                std::vector<quint64> localSpectrum((size_t)numOfCols + 1ULL, 0ULL);
+                int tid = omp_get_thread_num();
+                auto& localSpectrum = threadSpectrum[tid];
 
                 // Локальные буферы, хранящие позиции массивов единиц
                 int16_t a_local[Constants::MAX_POSITIONS];
@@ -684,13 +689,19 @@ void Worker::computeSpectrumCpuNoGrayLong(
                 } // for gtid
 
                 // Слияние локального спектра в глобальный
-                #pragma omp critical
-                {
-                    for (quint64 w = 0; w <= numOfCols; ++w)
-                        h_spectrum[(size_t)w] += localSpectrum[(size_t)w];
-                }
+                //#pragma omp critical
+                //{
+                //    for (quint64 w = 0; w <= numOfCols; ++w)
+                //        h_spectrum[(size_t)w] += localSpectrum[(size_t)w];
+                //}
             } // omp parallel
-
+            for (int t = 0; t < numThreads; ++t)
+            {
+                for (quint64 w = 0; w <= numOfCols; ++w)
+                {
+                    h_spectrum[w] += threadSpectrum[t][w];
+                }
+            }
             // После расчёта чанка — увеличиваем doneOps, делаем чекпоинт и апдейтим UI
             doneOps += chunkSize;
 
