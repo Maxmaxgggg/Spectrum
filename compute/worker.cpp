@@ -1292,10 +1292,15 @@ void Worker::computeSpectrum(QStringList rows)
             cudaFree(d_matrix);
             d_matrix = nullptr;
         }
-        if ( ev != nullptr )
-            CUDA_CALL( cudaEventDestroy( ev ) );
-        if ( stream != nullptr )
-            CUDA_CALL( cudaStreamDestroy( stream ) );
+        if (ev != nullptr) {
+            CUDA_CALL(cudaEventDestroy(ev));
+            ev = nullptr;
+        }
+            
+        if (stream != nullptr) {
+            CUDA_CALL(cudaStreamDestroy(stream));
+            stream = nullptr;
+        }
         return;
     }
     // Финальное обновление интерфейса
@@ -1343,10 +1348,15 @@ void Worker::computeSpectrum(QStringList rows)
         d_matrix = nullptr;
     }
 
-    if ( ev != nullptr )
-        CUDA_CALL( cudaEventDestroy( ev ) );
-    if ( stream != nullptr )
-        CUDA_CALL( cudaStreamDestroy( stream ) );
+    if (ev != nullptr) {
+        CUDA_CALL(cudaEventDestroy(ev));
+        ev = nullptr;
+    }
+    if (stream != nullptr) {
+        CUDA_CALL(cudaStreamDestroy(stream));
+        stream = nullptr;
+    }
+        
 }
 
 
