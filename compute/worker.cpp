@@ -71,13 +71,7 @@ void Worker::freeBinomTable(quint64** C, unsigned maxN)
     }
     delete[] C;
 }
-//// Получение следующей битовой маски из текущей (хак Госпера)
-//static inline quint64 nextCombination64( quint64 x )
-//{
-//    quint64 c = x & -x;
-//    quint64 r = x + c;
-//    return (((r ^ x) >> 2) / c) | r;
-//}
+
 // Получение битовой маски длины k с r единицами с индексом rank
 static quint64 unrankCombination( unsigned K, unsigned R, quint64 rank, quint64** binomTable )
 {
@@ -131,14 +125,19 @@ quint64 Worker::sumCombinations(quint64 k, quint64 maxComb)
 void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols, quint64 wordsPerRow, quint64 chunkSize, int blockCount, int threadsPerBlock, quint64 maxComb)
 {
     bool    copyPending = false;
-    quint64 doneOps = 0;
     quint64 totalOps = sumCombinations(numOfRows, maxComb);
 
-    for (int r = 0; r <= maxComb; r++)
+    for (int r = runState.rOffset; r <= maxComb; r++)
     {
+        quint64 startOffset = 0;
+
+        
         quint64 curOps = h_binomTable[numOfRows][r];
+
+        if (r == runState.rOffset)
+            startOffset = runState.chunkOffset;
         // Разбиваем на чанки
-        for (quint64 offset = 0; offset < curOps; offset += chunkSize)
+        for ( quint64 offset = startOffset; offset < curOps; offset += chunkSize )
         {
             quint64 thisChunkSize = qMin(chunkSize, curOps - offset); // последний чанк может быть меньше
             while (paused.load() != 0) {
@@ -163,23 +162,23 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
                 thisChunkSize,         // Размер чанка
                 r                      // Число единиц в битовой маске (число складываемых строк)
             );
-            doneOps += thisChunkSize;
+            runState.doneOps += thisChunkSize;
             std::chrono::duration<quint64, std::milli> spectrumMs{ 1000/*refreshSpectrumMs.load()*/};
             std::chrono::duration<quint64, std::milli> barMs{ 1000/*refreshProgressbarMs.load()*/};
             auto now = steady_clock::now();
             if (now - lastEstimateTime >= std::chrono::seconds(1)) {
                 lastEstimateTime = now;
-                long long elapsedSec = duration_cast<seconds>(now - startTime).count();
+                runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
                 double speed = 1.0;
 
-                if (doneOps != 0)
-                    speed = double(doneOps) / elapsedSec;
+                if (runState.doneOps != 0)
+                    speed = double(runState.doneOps) / runState.elapsedSec;
 
-                quint64 remainingOps = totalOps > doneOps ? totalOps - doneOps : 0;
+                quint64 remainingOps = totalOps > runState.doneOps ? totalOps - runState.doneOps : 0;
                 double estSec = speed > 0 ? remainingOps / speed : 0.0;
 
                 int minutesLeft = int(std::ceil(estSec / 60.0));
-                emit updateRemainingMinutes((int)elapsedSec, minutesLeft);
+                emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft);
 
             }
             if (!copyPending && (now - lastTimeSpectrum > spectrumMs)) {
@@ -197,7 +196,28 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
             }
             if (now - lastTimeBar > barMs) {
                 lastTimeBar = now;
-                emit updateInfoPBR(doneOps * 100 / totalOps);
+                emit updateInfoPBR(runState.doneOps * 100 / totalOps);
+            }
+            if (now - lastCheckpointTime >= checkpointPeriod) {
+                lastCheckpointTime = now;
+                // 1. Ждём завершения всех операций в stream
+                cudaError_t err = cudaStreamSynchronize(stream);
+                if (err != cudaSuccess) {
+                    return;
+                }
+                // 2. Синхронная копия (данные гарантированно относятся к текущему чанку)
+                err = cudaMemcpy(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost);
+                if (err != cudaSuccess) {
+                    return;
+                }
+                // 3. Обновляем интерфейс
+                updateSpectrum(numOfCols);
+                // 4. Сохраняем чекпоинт
+                runState.rOffset = r;
+                runState.chunkOffset = offset + thisChunkSize; // ВАЖНО!
+                makeCheckpoint(numOfCols);
+                // 5. Сбрасываем async-копирование
+                copyPending = false;
             }
 
         }
@@ -220,16 +240,16 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
 void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, quint64 wordsPerRow, quint64 chunkSize, int blockCount, int threadsPerBlock )
 {
     bool    copyPending = false;
-    quint64 doneOps = 0;
     quint64 totalOps = 1ULL << numOfRows;
-
-
-
-    for (quint64 offset = 0; offset < totalOps; offset += chunkSize) {
-        quint64 thisChunkSize = qMin(chunkSize, totalOps - offset);
+    // Обновление на случай, когда загружаем чекпоинт
+    emit updateInfoPBR(runState.doneOps * 100 / totalOps);
+    for (quint64 chunkOffset = runState.chunkOffset; chunkOffset < totalOps; chunkOffset += chunkSize) {
+        quint64 thisChunkSize = qMin(chunkSize, totalOps - chunkOffset);
         while (paused.load() != 0) {
             QThread::msleep(50);
-            if (cancelled.load()) break;
+            if (cancelled.load()) {
+                break;
+            } 
         }
         if (cancelled.load()) {
             break;
@@ -242,27 +262,25 @@ void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, 
             numOfCols,
             numOfRows,
             (int)wordsPerRow,
-            offset,     
+            chunkOffset,
             thisChunkSize
         );
-
-        doneOps += thisChunkSize;
         std::chrono::duration<quint64, std::milli> spectrumMs{ 1000 };
         std::chrono::duration<quint64, std::milli> barMs{ 500 };
         auto now = steady_clock::now();
         if (now - lastEstimateTime >= std::chrono::seconds(1)) {
             lastEstimateTime = now;
-            long long elapsedSec = duration_cast<seconds>(now - startTime).count();
+            runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
             double speed = 1.0;
 
-            if (doneOps != 0)
-                speed = double(doneOps) / elapsedSec;
+            if (runState.doneOps != 0)
+                speed = double(runState.doneOps) / runState.elapsedSec;
 
-            quint64 remainingOps = totalOps > doneOps ? totalOps - doneOps : 0;
+            quint64 remainingOps = totalOps > runState.doneOps ? totalOps - runState.doneOps : 0;
             double estSec = speed > 0 ? remainingOps / speed : 0.0;
 
             int minutesLeft = int(std::ceil(estSec / 60.0));
-            emit updateRemainingMinutes((int)elapsedSec,minutesLeft);
+            emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft);
 
         }
         if (!copyPending && (now - lastTimeSpectrum > spectrumMs)) {
@@ -280,7 +298,30 @@ void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, 
         }
         if (now - lastTimeBar > barMs) {
             lastTimeBar = now;
-            emit updateInfoPBR(doneOps * 100 / totalOps);
+            emit updateInfoPBR(runState.doneOps * 100 / totalOps);
+        }
+        // ПРОТЕСТИРОВАТЬ
+        runState.doneOps += thisChunkSize;
+        runState.chunkOffset = chunkOffset + thisChunkSize;
+        if ( now - lastCheckpointTime >= checkpointPeriod ) {
+            lastCheckpointTime = now;
+            // 1. Ждём завершения всех операций в stream
+            cudaError_t err = cudaStreamSynchronize(stream);
+            if (err != cudaSuccess) {
+                return;
+            }
+            // 2. Синхронная копия (данные гарантированно относятся к текущему чанку)
+            err = cudaMemcpy(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost);
+            if (err != cudaSuccess) {
+                return;
+            }
+            // 3. Обновляем интерфейс
+            updateSpectrum(numOfCols);
+            // 4. Сохраняем чекпоинт
+            
+            makeCheckpoint(numOfCols);
+            // 5. Сбрасываем async-копирование
+            copyPending = false;
         }
     }
 
@@ -308,7 +349,6 @@ void Worker::computeSpectrumGpuNoGrayLong(
 )
 {
     quint64 totalOps = sumCombinations(numOfRows, maxComb);
-    quint64 doneOps = 0;
 
     // Общее число нитей, запущенных на видеокарте
     uint64_t maxThreads = static_cast<uint64_t>(blockCount) * static_cast<uint64_t>(threadsPerBlock);
@@ -329,8 +369,6 @@ void Worker::computeSpectrumGpuNoGrayLong(
     int16_t* d_slots = nullptr;
     CUDA_CALL(cudaMallocHost((void**)&h_slots, bytesPerChunk));
     CUDA_CALL(cudaMalloc((void**)&d_slots, bytesPerChunk));
-    // Копируем матрицу в константую память
-   // CUDA_CALL(copyMatrixToConstant(h_matrix, numOfRows * wordsPerRow));
 
     #ifdef _DEBUG
     uint64_t* h_maskCounter = nullptr;
@@ -343,25 +381,25 @@ void Worker::computeSpectrumGpuNoGrayLong(
     CUDA_CALL(cudaStreamCreate(&stream));
     CUDA_CALL(cudaEventCreate(&evCopy));
 
-
-    auto startTime = steady_clock::now();
-    auto lastTimeSpectrum = startTime;
-    auto lastTimeBar = startTime;
-    auto lastEstimateTime = startTime;
-
     bool copyPending = false;
 
     // Размер чанка в масках
     const quint64 chunkSizeTarget = maxThreads * masksPerThread;
 
     // Внешний цикл по числу единиц в маске
-    for (unsigned r = 0; r <= maxComb; ++r) {
+    for (unsigned r = runState.rOffset; r <= maxComb; ++r) {
+
+        quint64 startOffset = 0;
+
         // Количество масок с r единицами
         quint64 curOps = h_binomTable[numOfRows][r];
         if (curOps == 0) continue;
 
+        if (r == runState.rOffset)
+            startOffset = runState.chunkOffset;
+
         // Внутренний цикл по чанку
-        for (quint64 chunkOffset = 0; chunkOffset < curOps; chunkOffset += chunkSizeTarget) {
+        for (quint64 chunkOffset = startOffset; chunkOffset < curOps; chunkOffset += chunkSizeTarget) {
             while (paused.load() != 0) {
                 QThread::msleep(50);
                 if (cancelled.load()) break;
@@ -441,7 +479,7 @@ void Worker::computeSpectrumGpuNoGrayLong(
             }
             #endif
             // Учёт прогресса
-            doneOps += chunkSize;
+            runState.doneOps += chunkSize;
 
             auto now = steady_clock::now();
 
@@ -470,22 +508,43 @@ void Worker::computeSpectrumGpuNoGrayLong(
             // Обновляем progress bar по таймеру
             if (now - lastTimeBar > std::chrono::milliseconds(refreshProgressbarMs.load())) {
                 lastTimeBar = now;
-                emit updateInfoPBR(doneOps * 100 / totalOps);
+                emit updateInfoPBR(runState.doneOps * 100 / totalOps);
             }
             if (now - lastEstimateTime >= std::chrono::seconds(1)) {
                 lastEstimateTime = now;
-                long long elapsedSec = duration_cast<seconds>(now - startTime).count();
+                runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
                 double speed = 1.0;
 
-                if (doneOps != 0)
-                    speed = double(doneOps) / elapsedSec;
+                if (runState.doneOps != 0)
+                    speed = double(runState.doneOps) / runState.elapsedSec;
 
-                quint64 remainingOps = totalOps > doneOps ? totalOps - doneOps : 0;
+                quint64 remainingOps = totalOps > runState.doneOps ? totalOps - runState.doneOps : 0;
                 double estSec = speed > 0 ? remainingOps / speed : 0.0;
 
                 int minutesLeft = int(std::ceil(estSec / 60.0));
-                emit updateRemainingMinutes((int)elapsedSec, minutesLeft);
+                emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft);
 
+            }
+            if (now - lastCheckpointTime >= checkpointPeriod) {
+                lastCheckpointTime = now;
+                // 1. Ждём завершения всех операций в stream
+                cudaError_t err = cudaStreamSynchronize(stream);
+                if (err != cudaSuccess) {
+                    return;
+                }
+                // 2. Синхронная копия (данные гарантированно относятся к текущему чанку)
+                err = cudaMemcpy(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost);
+                if (err != cudaSuccess) {
+                    return;
+                }
+                // 3. Обновляем интерфейс
+                updateSpectrum(numOfCols);
+                // 4. Сохраняем чекпоинт
+                runState.rOffset = r;
+                runState.chunkOffset = chunkOffset + chunkSize;
+                makeCheckpoint(numOfCols);
+                // 5. Сбрасываем async-копирование
+                copyPending = false;
             }
 
             if (cancelled.load()) break;
@@ -560,24 +619,22 @@ void Worker::computeSpectrumCpuNoGrayLong(
     using namespace std::chrono;
     int numThreads = omp_get_max_threads();
     quint64 totalOps = sumCombinations(numOfRows, maxComb);
-    quint64 doneOps = 0;
 
     // Число "битовых масок", обрабатываемых одним потоком
     const uint64_t masksPerThread = 1ULL << 20; // можно настроить
     const quint64 chunkSizeTarget = numThreads * masksPerThread;
 
-    auto startTime = steady_clock::now();
-    auto lastTimeSpectrum = startTime;
-    auto lastTimeBar = startTime;
-    auto lastEstimateTime = startTime;
     std::vector<std::vector<quint64>> threadSpectrum( numThreads, std::vector<quint64>(numOfCols + 1, 0ULL) );
     // Основной внешний цикл по числу единиц в маске
-    for (unsigned r = 0; r <= maxComb; ++r) {
+    for (quint64 r = runState.rOffset; r <= maxComb; ++r)
+    {
         quint64 curOps = h_binomTable[numOfRows][r];
+
+        quint64 startOffset = (r == runState.rOffset) ? runState.chunkOffset : 0;
         if (curOps == 0) continue;
 
         // Внутренний цикл по чанкам
-        for (quint64 chunkOffset = 0; chunkOffset < curOps; chunkOffset += chunkSizeTarget) {
+        for (quint64 chunkOffset = startOffset; chunkOffset < curOps; chunkOffset += chunkSizeTarget) {
             if (cancelled.load()) break;
 
             quint64 chunkSize = std::min(chunkSizeTarget, curOps - chunkOffset);
@@ -703,12 +760,7 @@ void Worker::computeSpectrumCpuNoGrayLong(
                 }
             }
             // После расчёта чанка — увеличиваем doneOps, делаем чекпоинт и апдейтим UI
-            doneOps += chunkSize;
-
-            // чекпоинт: сохранить прогресс (последний посчитанный чанк)
-            //startChunkInd = chunkOffset + chunkSize; // или другое поле у тебя
-            //makeCheckpoint();
-
+            runState.doneOps += chunkSize;
             // Обновление спектра в UI (копия h_spectrum уже актуальна)
             auto now = steady_clock::now();
             milliseconds spectrumMs{ (long long)refreshSpectrumMs.load() };
@@ -720,18 +772,33 @@ void Worker::computeSpectrumCpuNoGrayLong(
             }
             if (now - lastTimeBar >= barMs) {
                 lastTimeBar = now;
-                emit updateInfoPBR((int)(doneOps * 100 / totalOps));
+                emit updateInfoPBR((int)(runState.doneOps * 100 / totalOps));
             }
             if (now - lastEstimateTime >= seconds(1)) {
                 lastEstimateTime = now;
-                long long elapsedSec = duration_cast<seconds>(now - startTime).count();
-                double speed = (doneOps != 0) ? double(doneOps) / elapsedSec : 1.0;
-                quint64 remainingOps = (totalOps > doneOps) ? (totalOps - doneOps) : 0;
+                runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
+                double speed = (runState.doneOps != 0) ? double(runState.doneOps) / runState.elapsedSec : 1.0;
+                quint64 remainingOps = (totalOps > runState.doneOps) ? (totalOps - runState.doneOps) : 0;
                 double estSec = (speed > 0.0) ? (remainingOps / speed) : 0.0;
                 int minutesLeft = (int)std::ceil(estSec / 60.0);
-                emit updateRemainingMinutes((int)elapsedSec, minutesLeft);
+                emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft);
             }
+            if (now - lastCheckpointTime >= checkpointPeriod) {
+                lastCheckpointTime = now;
 
+                // 1. Обновляем runState
+                runState.rOffset = r;
+                runState.chunkOffset = chunkOffset + chunkSize; // ВАЖНО!
+
+                // 2. Копируем спектр
+                runState.spectrum.resize(numOfCols + 1);
+                for (quint64 i = 0; i <= numOfCols; ++i) {
+                    runState.spectrum[i] = h_spectrum[i];
+                }
+
+                // 3. Сохраняем
+                makeCheckpoint(numOfCols);
+            }
             if (cancelled.load()) break;
         } // chunkOffset
         if (cancelled.load()) break;
@@ -756,9 +823,7 @@ void Worker::computeSpectrumCpuGrayShort(
             return (i ^ (i >> 1));
         };
 
-    // Начинаем цикл с маски с индексом startChunkId
-    //for (quint64 offset = startChunkInd; offset < totalOps; offset += chunkSize)
-    for (quint64 offset = 0; offset < totalOps; offset += chunkSize)
+    for (quint64 offset = runState.chunkOffset; offset < totalOps; offset += chunkSize)
     {
         // Если пользователь нажал кнопку отмены, завершаем расчет
         if (cancelled.load())
@@ -884,8 +949,7 @@ void Worker::computeSpectrumCpuGrayShort(
         
 
         // После расчета чанка создаём чекпоинт
-        startChunkInd = chunkEnd;
-        makeCheckpoint();
+        runState.doneOps = chunkEnd;
 
         // И обновляем интерфейс
         auto now = steady_clock::now();
@@ -905,7 +969,7 @@ void Worker::computeSpectrumCpuGrayShort(
         if (now - lastTimeBar >= barMs) {
             lastTimeBar = now;
 
-            int percent = int(100.0 * double(startChunkInd) / double(totalOps));
+            int percent = int(100.0 * double(runState.doneOps) / double(totalOps));
 
             emit updateInfoPBR(percent);
         }
@@ -913,18 +977,18 @@ void Worker::computeSpectrumCpuGrayShort(
         if (now - lastEstimateTime >= seconds(1)) {
             lastEstimateTime = now;
 
-            long long elapsedSec =
+            runState.elapsedSec =
                 duration_cast<seconds>(
                     now - startTime).count();
 
             double speed =
-                startChunkInd > 0
-                ? double(startChunkInd) / elapsedSec
+                runState.doneOps > 0
+                ? double(runState.doneOps) / runState.elapsedSec
                 : 1.0;
 
             quint64 remaining =
-                totalOps > startChunkInd
-                ? totalOps - startChunkInd
+                totalOps > runState.doneOps
+                ? totalOps - runState.doneOps
                 : 0;
 
             double estSec =
@@ -936,10 +1000,22 @@ void Worker::computeSpectrumCpuGrayShort(
                 int(std::ceil(estSec / 60.0));
 
             emit updateRemainingMinutes(
-                (int)elapsedSec,
+                (int)runState.elapsedSec,
                 minutesLeft);
         } // if (now - lastEstimateTime >= seconds(1))
+        if (now - lastCheckpointTime >= checkpointPeriod)
+        {
+            lastCheckpointTime = now;
 
+            // 1. Обновляем runState
+            runState.chunkOffset = runState.doneOps;
+
+            // 2. Копируем спектр
+            for (quint64 i = 0; i <= numOfCols; i++)
+                runState.spectrum[i] = h_spectrum[i];
+            // 4. Сохраняем
+            makeCheckpoint(numOfCols);
+        }
         if (cancelled.load())
             break;
 
@@ -950,92 +1026,135 @@ void Worker::computeSpectrumCpuNoGrayShort(
     quint64 numOfRows,
     quint64 numOfCols,
     quint64 wordsPerRow,
-    quint64 maxComb)
+    quint64 maxComb
+)
 {
-    quint64 doneOps = 0;
+    using namespace std::chrono;
+
     quint64 totalOps = sumCombinations(numOfRows, maxComb);
 
-    for (unsigned r = 0; r <= maxComb; ++r) {
-        if (cancelled.load()) break;
+    // Если продолжаем после чекпоинта
+    quint64 startR = runState.rOffset;
+    quint64 startOffsetForStartR = runState.chunkOffset;
+
+    for (quint64 r = startR; r <= maxComb; ++r)
+    {
+        if (cancelled.load())
+            break;
 
         quint64 combCount = h_binomTable[numOfRows][r];
-        if (combCount == 0) continue;
-        #pragma omp parallel
+        if (combCount == 0)
+            continue;
+
+        quint64 startOffset = (r == startR) ? startOffsetForStartR : 0;
+
+        for (quint64 offset = startOffset; offset < combCount; offset += chunkSize)
         {
-            std::vector<quint64> localCodeword(wordsPerRow, 0);
+            if (cancelled.load())
+                break;
 
-            #pragma omp for schedule(dynamic)
-            for (qint64 idx = 0; idx < combCount; ++idx) {
-                if (cancelled.load()) {
-                    continue;
-                }
+            while (paused.load() != 0) {
+                QThread::msleep(50);
+                if (cancelled.load())
+                    break;
+            }
+            if (cancelled.load())
+                break;
 
-                while (paused.load() != 0) {
-                    QThread::msleep(50);
-                    if (cancelled.load()) break;
-                }
-                if (cancelled.load()) {
-                    continue;
-                }
-                quint64 mask = unrankCombination(numOfRows, r, idx, h_binomTable);
-                std::fill(localCodeword.begin(), localCodeword.end(), 0);
+            quint64 thisChunkSize = qMin(chunkSize, combCount - offset);
 
-                for (quint64 i = 0; i < numOfRows; ++i) {
-                    if (mask & (1ULL << i)) {
-                        quint64* rowData = h_matrix + i * wordsPerRow;
-                        for (quint64 b = 0; b < wordsPerRow; ++b) localCodeword[b] ^= rowData[b];
-                    }
-                }
+            // Локальный результат чанка
+            QVector<quint64> chunkSpectrum(numOfCols + 1, 0);
 
-                quint64 weight = 0;
-                for (quint64 b = 0; b < wordsPerRow; ++b)
+            #pragma omp parallel
+            {
+                QVector<quint64> localSpectrum(numOfCols + 1, 0);
+                QVector<quint64> localCodeword(wordsPerRow, 0);
 
-                    weight += __popcnt64(localCodeword[b]);
+                #pragma omp for schedule(static)
+                for (qint64 idx = (qint64)offset; idx < (qint64)(offset + thisChunkSize); ++idx)
+                {
+                    if (cancelled.load())
+                        continue;
 
-                #pragma omp atomic
-                ++h_spectrum[weight];
+                    quint64 mask = unrankCombination(numOfRows, r, (quint64)idx, h_binomTable);
+                    std::fill(localCodeword.begin(), localCodeword.end(), 0);
 
-                #pragma omp atomic
-                ++doneOps;
-
-                if (omp_get_thread_num() == 0) {
-                    std::chrono::duration<quint64, std::milli> spectrumMs{ refreshSpectrumMs.load() };
-                    std::chrono::duration<quint64, std::milli> barMs{ refreshProgressbarMs.load() };
-
-                    auto now = steady_clock::now();
-                    if (now - lastTimeSpectrum >= spectrumMs) {
-                        lastTimeSpectrum = now;
-                        updateSpectrum(numOfCols);
-
-                    }
-                    if (now - lastTimeBar >= barMs) {
-                        lastTimeBar = now;
-                        int percent = int(100.0 * double(doneOps) / double(totalOps));
-                        emit updateInfoPBR(percent);
-                    }
-                    if (now - lastEstimateTime >= std::chrono::seconds(1)) {
-                        lastEstimateTime = now;
-                        long long elapsedSec = duration_cast<seconds>(now - startTime).count();
-                        double speed = 1.0;
-
-                        if (doneOps != 0)
-                            speed = double(doneOps) / elapsedSec;
-
-                        quint64 remainingOps = totalOps > doneOps ? totalOps - doneOps : 0;
-                        double estSec = speed > 0 ? remainingOps / speed : 0.0;
-
-                        int minutesLeft = int(std::ceil(estSec / 60.0));
-                        emit updateRemainingMinutes((int)elapsedSec, minutesLeft);
-
+                    for (quint64 i = 0; i < numOfRows; ++i) {
+                        if (mask & (1ULL << i)) {
+                            quint64* rowData = h_matrix + i * wordsPerRow;
+                            for (quint64 b = 0; b < wordsPerRow; ++b)
+                                localCodeword[b] ^= rowData[b];
+                        }
                     }
 
-                } // if (omp_get_thread_num() == 0)
+                    quint64 weight = 0;
+                    for (quint64 b = 0; b < wordsPerRow; ++b)
+                        weight += __popcnt64(localCodeword[b]);
 
-            } // for (quint64 idx = 0; idx < combCount; ++idx)
+                    if (weight <= numOfCols)
+                        localSpectrum[weight]++;
+                }
 
-        } // #pragma omp parallel
+                #pragma omp critical
+                {
+                    for (quint64 w = 0; w <= numOfCols; ++w)
+                        chunkSpectrum[w] += localSpectrum[w];
+                }
+            }
 
-    } // for (unsigned r = 1; r <= maxComb; ++r)
+            // Прибавляем чанк к общему спектру
+            for (quint64 w = 0; w <= numOfCols; ++w)
+                h_spectrum[w] += chunkSpectrum[w];
+
+            runState.doneOps += thisChunkSize;
+
+            auto now = steady_clock::now();
+
+            std::chrono::duration<quint64, std::milli> spectrumMs{ refreshSpectrumMs.load() };
+            std::chrono::duration<quint64, std::milli> barMs{ refreshProgressbarMs.load() };
+
+            if (now - lastTimeSpectrum >= spectrumMs) {
+                lastTimeSpectrum = now;
+                updateSpectrum(numOfCols);
+            }
+
+            if (now - lastTimeBar >= barMs) {
+                lastTimeBar = now;
+                int percent = int(100.0 * double(runState.doneOps) / double(totalOps));
+                emit updateInfoPBR(percent);
+            }
+
+            if (now - lastEstimateTime >= seconds(1)) {
+                lastEstimateTime = now;
+
+                runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
+                double speed = (runState.doneOps != 0 && runState.elapsedSec > 0)
+                    ? double(runState.doneOps) / runState.elapsedSec
+                    : 1.0;
+
+                quint64 remainingOps = totalOps > runState.doneOps ? totalOps - runState.doneOps : 0;
+                double estSec = speed > 0 ? remainingOps / speed : 0.0;
+
+                int minutesLeft = int(std::ceil(estSec / 60.0));
+                emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft);
+            }
+
+            // Чекпоинт после завершения чанка
+            if (now - lastCheckpointTime >= checkpointPeriod) {
+                lastCheckpointTime = now;
+
+                runState.rOffset = r;
+                runState.chunkOffset = offset + thisChunkSize; // следующий необработанный
+
+                for (quint64 i = 0; i <= numOfCols; ++i)
+                    runState.spectrum[i] = h_spectrum[i];
+
+                makeCheckpoint(numOfCols);
+            }
+        }
+    }
+    updateSpectrum(numOfCols);
 }
 void Worker::updateSpectrum(int numOfCols)
 {
@@ -1086,33 +1205,55 @@ void Worker::updateSpectrumDual(int numOfCols, int numOfRows)
         emit updateSpectrumPlot(spectrumCopyPlot);
     }
 }
-void Worker::makeCheckpoint()
+void Worker::makeCheckpoint(int numOfCols)
 {
+    // 1. Обновляем spectrum из GPU буфера
+    runState.spectrum.resize(numOfCols + 1);
+    for (int i = 0; i < numOfCols + 1; i++) {
+        runState.spectrum[i] = h_spectrum[i];
+    }
+    // 2. Хеш → имя группы
+    quint64 hash = settings.computeHash();
+    QString group = QString("checkpoints/%1").arg(hash);
+    QSettings s;
+    s.beginGroup(group);
+    // 3. Сохраняем settings
+    s.setValue("settings", settings.toJson());
+    // 4. Сохраняем runState
+    s.setValue("runState", runState.toJson());
+    s.endGroup();
 }
 void Worker::loadCheckpoint()
 {
 }
-void Worker::computeSpectrum(QStringList rows)
+void Worker::computeSpectrum()
 {
+
     /*  РАБОТА С МАТРИЦЕЙ   */
+    QStringList matrix = settings.matrix;
     // Если применяется дуальный код - генерируем проверочную матрицу
     if (settings.algorithmType == ComputationSettings::DualCode) {
-        rows = generatorToParity(rows);
+        matrix = generatorToParity(matrix);
     }
     // Число строк и столбцов матрицы
-    quint64 numOfRows = rows.length();
-    quint64 numOfCols = rows[0].length();
+    quint64 numOfRows = matrix.length();
+    quint64 numOfCols = matrix[0].length();
     quint64 maxRows = settings.maxRows;
+    quint64 spectrumSize = numOfCols + 1;
+    // Если спектр уже есть, то ничего не произойдет
+    if (runState.spectrum.size() != spectrumSize)
+        runState.spectrum.resize(spectrumSize);
+
     /*  НАСТРОЙКИ ВЫЧИСЛИТЕЛЯ   */
     // Устанавливаем число потоков CPU
-    int workerThreads   = settings.compDevSet.threadsCpu;
+    int workerThreads = settings.compDevSet.threadsCpu;
     omp_set_num_threads(workerThreads);
     // Число блоков для запуска на видеокарте ( минимум - число мультипроцессоров )
-    int blockCount      = settings.compDevSet.blocksGpu;
+    int blockCount = settings.compDevSet.blocksGpu;
     // Число нитей, запускаемых на одном блоке
     int threadsPerBlock = settings.compDevSet.threadsGpu;
 
-    
+
     // Число 64-битных слов на одну строку матрицы
     quint64 wordsPerRow = (numOfCols + 63) / 64;
     // Размер матрицы в 64-битных словах
@@ -1127,11 +1268,11 @@ void Worker::computeSpectrum(QStringList rows)
             emit finished(-1);
             return;
         }
-        CUDA_CALL( cudaMalloc( (void**)&d_matrix, matrixSizeInWords * Constants::WORD_SIZE ) );
+        CUDA_CALL(cudaMalloc((void**)&d_matrix, matrixSizeInWords * Constants::WORD_SIZE));
         matrixInGlobalMem = true;
     }
     // Выделяем матрицу на хосте
-    h_matrix = (quint64*)calloc( matrixSizeInWords, Constants::WORD_SIZE );
+    h_matrix = (quint64*)calloc(matrixSizeInWords, Constants::WORD_SIZE);
     if (!h_matrix) {
         emit errorOccurred("Ошибка выделения памяти");
         emit finished(-1);
@@ -1140,7 +1281,7 @@ void Worker::computeSpectrum(QStringList rows)
     // Копируем из QStringList-а
     for (quint64 i = 0; i < numOfRows; ++i) {
         quint64* rowData = h_matrix + i * wordsPerRow;
-        const QString& row = rows[(int)i];
+        const QString& row = matrix[(int)i];
         for (quint64 j = 0; j < numOfCols; ++j) {
             if (row.at((int)j) == QLatin1Char('1')) {
                 quint64 blockIdx = j / 64;
@@ -1153,19 +1294,19 @@ void Worker::computeSpectrum(QStringList rows)
     if (settings.algorithmType == ComputationSettings::SimpleXor) {
         // Для коротких - строим всю таблицу. Не оптимально, но работает.
         if (numOfRows < 64) {
-            h_binomTable = buildBinomTable(Constants::MAX_SHORT_CODE_LENGTH, Constants::MAX_SHORT_CODE_LENGTH); 
+            h_binomTable = buildBinomTable(Constants::MAX_SHORT_CODE_LENGTH, Constants::MAX_SHORT_CODE_LENGTH);
         }
         // Для длинных кодов строим только часть таблицы
         else {
             h_binomTable = buildBinomTable(numOfRows, settings.maxRows);
         }
 
-        
+
 
     }
-        
+
     // Если расчет производится на GPU
-    if( settings.compDev == ComputationSettings::GPU ){
+    if (settings.compDev == ComputationSettings::GPU) {
         if (!matrixInGlobalMem) {
             // Копируем порождающую матрицу в константную память
             CUDA_CALL(copyMatrixToConstant(h_matrix, matrixSizeInWords));
@@ -1174,18 +1315,40 @@ void Worker::computeSpectrum(QStringList rows)
             // Если матрица слишком большая - копируем её в глобальную память
             CUDA_CALL(cudaMemcpy(d_matrix, h_matrix, matrixSizeInWords * Constants::WORD_SIZE, cudaMemcpyHostToDevice));
         }
-        
+
         // Выделяем оперативную память
-        CUDA_CALL( cudaMallocHost( (void**)&h_spectrum, ( numOfCols + 1 ) * sizeof( quint64 ) ) );
-        memset( h_spectrum, 0, (numOfCols + 1) * sizeof( quint64 ) );
+        CUDA_CALL(cudaMallocHost((void**)&h_spectrum, (spectrumSize) * sizeof(quint64)));
+        
+        if (exportSpectrum) {
+            // Если загружаемся с чекпоинта, то копируем спектр
+            for (int i = 0; i < spectrumSize; i++)
+            {
+                h_spectrum[i] = runState.spectrum.at(i);
+            }
+        }
+        else {
+            // Иначе - заполняем нулями
+            memset(h_spectrum, 0, (spectrumSize) * sizeof(quint64));
+        }
+        
+        
         // Выделяем видеопамять
-        CUDA_CALL( cudaMalloc( (void**)&d_spectrum, ( numOfCols + 1 ) * sizeof( quint64 ) ) );
-        CUDA_CALL( cudaMemset( d_spectrum, 0, ( ( numOfCols + 1 ) * sizeof( quint64 ) ) ) );
-        CUDA_CALL( cudaEventCreate(&ev) );
-        CUDA_CALL( cudaStreamCreate(&stream) );
+        CUDA_CALL(cudaMalloc((void**)&d_spectrum, (spectrumSize) * sizeof(quint64)));
+
+        if (exportSpectrum) {
+            // Если загружаемся с чекпоинта, то копируем спектр с хоста на устройство
+            CUDA_CALL(cudaMemcpy(d_spectrum, h_spectrum, (spectrumSize) * sizeof(quint64), cudaMemcpyHostToDevice));
+        }
+        else {
+            // Иначе - заполняем нулями
+            CUDA_CALL(cudaMemset(d_spectrum, 0, ((spectrumSize) * sizeof(quint64))));
+        }
+        
+        CUDA_CALL(cudaEventCreate(&ev));
+        CUDA_CALL(cudaStreamCreate(&stream));
 
         // Если расчитываем спектр короткого кода простым XOR - ом
-        if ( settings.algorithmType == ComputationSettings::SimpleXor && ( numOfRows < 64 ) ) {
+        if (settings.algorithmType == ComputationSettings::SimpleXor && (numOfRows < 64)) {
             // Переводим двумерный массив биноминальных коэффициентов в одномерный
             int width = Constants::MAX_SHORT_CODE_LENGTH + 1;
             quint64* flat = (quint64*)malloc(Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES * sizeof(quint64));
@@ -1196,24 +1359,30 @@ void Worker::computeSpectrum(QStringList rows)
                 }
             }
             CUDA_CALL(cudaMalloc((void**)&d_binomTable, Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES * sizeof(quint64)));
-            CUDA_CALL(cudaMemcpy(d_binomTable, flat, Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES * sizeof(quint64), cudaMemcpyHostToDevice) );
+            CUDA_CALL(cudaMemcpy(d_binomTable, flat, Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES * sizeof(quint64), cudaMemcpyHostToDevice));
             free(flat);
         }
     }
     else {
-        h_spectrum = (quint64*)malloc( ( numOfCols + 1 ) * sizeof( quint64 ) );
-        if( h_spectrum != nullptr ){
-            memset( h_spectrum, 0, ( numOfCols + 1 ) * sizeof( quint64 ) );
+        h_spectrum = (quint64*)malloc((spectrumSize) * sizeof(quint64));
+        if (exportSpectrum) {
+            // Если загружаемся с чекпоинта, то копируем спектр
+            for (int i = 0; i < spectrumSize; i++)
+            {
+                h_spectrum[i] = runState.spectrum.at(i);
+            }
         }
         else {
-            // ДОПИСАТЬ
+            // Иначе - заполняем нулями
+            memset(h_spectrum, 0, (spectrumSize) * sizeof(quint64));
         }
     }
 
-    startTime = steady_clock::now();
+    startTime = steady_clock::now() - std::chrono::seconds(runState.elapsedSec);
     lastTimeSpectrum = startTime;
     lastTimeBar = startTime;
     lastEstimateTime = startTime;
+    lastCheckpointTime = startTime;
 
     switch (settings.algorithmType) {
         // В дуальном коде для ускорения используется код Грея
@@ -1279,7 +1448,8 @@ void Worker::computeSpectrum(QStringList rows)
             }
         } break;
     }
-
+    // После того, как произвели расчеты - сбрасываем RunState
+    initializeRunState(LoadMode::Reset);
     if ( cancelled.load() ) {
 
         emit finished(-1);
@@ -1317,7 +1487,7 @@ void Worker::computeSpectrum(QStringList rows)
     // Финальное обновление интерфейса
     if ( settings.compDev == ComputationSettings::ComputeDevice::GPU ) {
         cudaDeviceSynchronize();
-        cudaMemcpy( h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost );
+        cudaMemcpy( h_spectrum, d_spectrum, (spectrumSize) * sizeof(quint64), cudaMemcpyDeviceToHost );
         if (d_spectrum != nullptr) {
             cudaFree(d_spectrum);
             d_spectrum = nullptr;
@@ -1398,4 +1568,53 @@ bool Worker::isCancelled()
 
 void Worker::setSettings(const QJsonObject& jsonSettings) {
     this->settings = ComputationSettings::fromJson(jsonSettings);
+}
+
+void Worker::initializeRunState(LoadMode lm)
+{
+    // Если сбрасываем состояние
+    if ( lm == LoadMode::Reset ) {
+        runState.rOffset = 0;
+        runState.chunkOffset = 0;
+        runState.elapsedSec = 0;
+        runState.doneOps = 0;
+        runState.spectrum.clear();
+        exportSpectrum = false;
+        return;
+    }
+    else {
+        // Считаем хеш текущих настроек
+        quint64 hash = settings.computeHash();
+        // Хеш - имя чекпоинта
+        QString group = QString("checkpoints/%1").arg(hash);
+
+        QSettings s;
+        s.beginGroup(group);
+
+        // Проверяем, есть ли чекпоинт вообще
+        if (!s.contains("runState")){
+            s.endGroup();
+            initializeRunState(LoadMode::Reset);
+            return;
+        }
+
+        // --- Проверка settings ---
+        QJsonObject savedSettingsObj = s.value("settings").toJsonObject();
+        ComputationSettings saved = ComputationSettings::fromJson(savedSettingsObj);
+
+        // Защита от коллизий. Если случилась - сбрасываем RunState
+        if (!(saved == settings)) {
+            s.endGroup();
+            initializeRunState(LoadMode::Reset);
+            return;
+        }
+
+        // Если всё ок, то загружаем RunState
+        QJsonObject runObj = s.value("runState").toJsonObject();
+        runState = RunState::fromJson(runObj);
+
+        s.endGroup();
+        // Ставим флаг, что надо выгрузить спектр
+        exportSpectrum = true;
+    }
 }

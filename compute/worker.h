@@ -7,6 +7,7 @@
 #include <omp.h>
 #include <cuda_runtime.h>
 #include <qjsonobject.h>
+#include <qsettings.h>
 
 #include "defines.h"
 #include "dualcode.h"
@@ -14,7 +15,11 @@
 #include "bitmask.h"
 #include "settings.h"
 using namespace std::chrono;
-
+enum LoadMode {
+    Reset,
+    FromCheckpoint
+};
+Q_DECLARE_METATYPE(LoadMode)
 class Worker : public QObject
 {
     Q_OBJECT
@@ -29,8 +34,9 @@ public:
     bool isCancelled();
 
 public slots:
-    void computeSpectrum(  QStringList rows );
+    void computeSpectrum( );
     void setSettings( const QJsonObject& jsonSettings );
+    void initializeRunState(LoadMode lm);
 signals:
     // Сигнал для обновления progressbar-а
     void updateInfoPBR(       int percent                       );
@@ -104,7 +110,7 @@ private:
 
 
     /* Функции для работы с чекпоинтами */
-    void    makeCheckpoint();
+    void    makeCheckpoint(int numOfCols);
     void    loadCheckpoint();
 
     
@@ -114,21 +120,22 @@ private:
     std::atomic<quint64> refreshProgressbarMs = DefaultValues::PROGRESSBAR_MS;
     std::atomic<quint64> refreshSpectrumMs    = DefaultValues::SPECTRUM_MS;
 
-    ComputationSettings      settings;
-    steady_clock::time_point startTime;
-    steady_clock::time_point lastTimeSpectrum;
-    steady_clock::time_point lastTimeBar;
-    steady_clock::time_point lastEstimateTime;
+    ComputationSettings         settings;
+    RunState                    runState;
+    steady_clock::time_point    startTime;
+    steady_clock::time_point    lastTimeSpectrum;
+    steady_clock::time_point    lastTimeBar;
+    steady_clock::time_point    lastEstimateTime;
+    steady_clock::time_point    lastCheckpointTime;
+    const std::chrono::seconds  checkpointPeriod = std::chrono::seconds(10);
+    bool                        exportSpectrum = false;
 
 
 
 
-    // Индекс стартовой маски
-    quint64 startChunkInd = 0;
     // Число масок между двумя чекпоинтами
     quint64 chunkSize = 1 << 20;
-    // Текущий спектр
-    QVector<quint64> spectrum;
+
 
     cudaStream_t  stream   = nullptr;
     cudaEvent_t   ev       = nullptr;

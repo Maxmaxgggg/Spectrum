@@ -6,6 +6,7 @@
 #include "worker.h"
 #include "workwithmatrix.h"
 #include "defines.h"
+
 #include <qmainwindow.h>
 
 QT_BEGIN_NAMESPACE
@@ -22,7 +23,7 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
-
+    ComputationSettings settings;
     // Подключаем воркера (после создания worker и workerThread)
     
 protected:
@@ -41,11 +42,13 @@ public: signals:
 
     void refreshSpectrumValueChanged(int);
     void refreshProgressbarValueChanged(int);
-    void sendInitialSettingsToWorker( const QJsonObject&);
-    void sendSettingsToWorker(        const QJsonObject&);
+    void sendInitialSettingsToWorker( QJsonObject& );
+    
+    void sendSettingsToWorker( const QJsonObject& );
     void requestSettings();
 
 private slots:
+
     void on_executePBN_clicked();
     void on_exitPBN_clicked();
     void on_settingsPBN_clicked();
@@ -53,6 +56,7 @@ private slots:
 
     void handleStrValChanged();
     void handleUpdateInfoPBR(int percent);
+    void sendSettingsToWorker();
     void handleUpdateSpectrumPlot( const QVector<float> spectrum ); // сигнал от воркера
     void handleUpdateSpectrumPTE(  const QStringList    spectrum );
     void handleError(const QString& message);
@@ -64,13 +68,16 @@ private slots:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
     void onAddMatrixTriggered();
+
+    // Проверяет, есть ли для текущих настроек чекпоинт, если есть - предлагает загрузить его
+    bool hasCheckpoint() const;
 private:
 
     Ui::MainWindow *ui;
     QSplitter      *splitter         = nullptr;
     Worker         *workerPtr        = nullptr;
     QThread        *workerThreadPtr  = nullptr;
-    SettingsDialog *settings         = nullptr;
+    SettingsDialog *settingsDialog   = nullptr;
     QMenu* matrixMenu = nullptr;
     QMenu          *deleteMenu       = nullptr;
     QTimer         *matrixMenuTimer  = nullptr;
@@ -120,6 +127,8 @@ private:
     QStringList listMatrixNames();
     QString defaultMatrixName();
 
+
+    
 };
 
 #endif // WIDGET_H

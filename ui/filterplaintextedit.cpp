@@ -4,6 +4,12 @@
 FilterPlainTextEdit::FilterPlainTextEdit(QWidget *parent)
     : QPlainTextEdit(parent){}
 
+QStringList FilterPlainTextEdit::toStringList()
+{
+    QStringList mtx = this->toPlainText().split('\n', Qt::SkipEmptyParts);
+    return mtx;
+}
+
 void FilterPlainTextEdit::insertFromMimeData(const QMimeData *source)
 {
     // Вставляем только 0, 1 и символ новой строки

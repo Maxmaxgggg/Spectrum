@@ -22,8 +22,8 @@ public:
     ~SettingsDialog() override;
 
 public: signals:
-    // Сигнал для отправки настроек воркеру
-    void sendSettingsToWorker(const QJsonObject& settings);
+    // Сигнал для отправки настроек виджету
+    void sendSettingsToWidget( const QJsonObject& settings );
 public slots:
     void handleMatrixChanged(int rows, int cols);
     void handleSettingsRequested();
@@ -44,8 +44,6 @@ private:
     QButtonGroup* enumeratorBGP;
     QButtonGroup* computeDeviceBGP;
     ComputationSettings settings;
-
-    //QJsonObject settings;
 };
 
 #endif // SETTINGSDIALOG_H

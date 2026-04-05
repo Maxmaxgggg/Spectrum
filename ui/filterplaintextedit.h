@@ -8,6 +8,7 @@ class FilterPlainTextEdit : public QPlainTextEdit
     Q_OBJECT
 public:
     explicit FilterPlainTextEdit(QWidget *parent = nullptr);
+    QStringList toStringList();
 protected:
     // Перехват вставки из буфера (Ctrl+V, drag&drop и т.п.)
     void insertFromMimeData(const QMimeData *source) override;

@@ -68,11 +68,14 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     connect(ui->buttonBox, &QDialogButtonBox::accepted,
         this, [this]() {
             saveSettings();
+            emit sendSettingsToWidget(settings.toJson());
             accept();
         });
     connect(ui->buttonBox, &QDialogButtonBox::rejected,
         this, [this]() {
             loadSettings();
+            // На всякий случай
+            emit sendSettingsToWidget(settings.toJson());
             reject();
         });
     // Отключаем кнопку помощи
@@ -86,7 +89,7 @@ SettingsDialog::~SettingsDialog()
 
 void SettingsDialog::handleSettingsRequested()
 {
-    emit sendSettingsToWorker(settings.toJson());
+    emit sendSettingsToWidget(settings.toJson());
 }
 
 void SettingsDialog::setInterfaceEnabled( bool enabled )
@@ -136,17 +139,20 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
         if ( ui->grayCodeRB->isChecked() ){
             ui->simpleXorRB->setChecked(true);
             ui->enumTypeGBX->setVisible(true);
+            settings.algorithmType = Algorithm::SimpleXor;
         }
             
         // Отключаем возможность полного перебора
         ui->fullEnumRB->setEnabled(false);
         // Включаем частичный перебор
         ui->partialEnumRB->setChecked(true);
-        
+        settings.enumType = EnumerationType::Partial;
         // Находим максимальное количество строк, которые можем сложить, не выходя за uint64
         ui->maxRowsSPB->setMaximum(maxCombIndex(rows));
         ui->maxRowsSPB->setVisible(enumeratorBGP->checkedId() == EnumerationType::Partial);
         ui->maxRowsLBL->setVisible(enumeratorBGP->checkedId() == EnumerationType::Partial);
+        if (settings.maxRows > ui->maxRowsSPB->maximum())
+            settings.maxRows = ui->maxRowsSPB->value();
     }
     // -||- меньше 63
     else {
@@ -157,6 +163,8 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
         ui->fullEnumRB->setEnabled(true);
         // Устанавливаем максимальное количество строк равным числу строк порождающей матрицы
         ui->maxRowsSPB->setMaximum(rows);
+        if ( settings.maxRows > ui->maxRowsSPB->maximum() )
+            settings.maxRows = ui->maxRowsSPB->value();
     }
     // Если размерность дуального кода больше 63
     if (cols - rows > 63) {
@@ -166,17 +174,27 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
         // Если во время вписывания новой матрицы был выбран расчет с использованием дуального кода
         if (ui->dualCodeRB->isChecked())
             // Если число строк больше 63, то выбираем расчет с использованием простого XOR-а
-            if (rows > 63)
+            if (rows > 63) {
                 ui->simpleXorRB->setChecked(true);
+                settings.algorithmType = Algorithm::SimpleXor;
+                ui->enumTypeGBX->setVisible(true);
+                ui->partialEnumRB->setChecked(true);
+                ui->fullEnumRB->setEnabled(false);
+            }
             // Иначе - с использованием кода грея
-            else
+            else {
                 ui->grayCodeRB->setChecked(true);
+                settings.algorithmType = Algorithm::GrayCode;
+            }
+                
     }
     // -||- меньше 63
     else {
         dualCodeLength = Length::Short;
         ui->dualCodeRB->setEnabled(true);
     }
+    // Отправляем новые настройки в виджет
+    emit sendSettingsToWidget(settings.toJson());
 }
 bool SettingsDialog::isGpuAvailable() {
     int deviceCount = 0;
@@ -202,31 +220,40 @@ void SettingsDialog::checkGpuAvailable() {
     }
 }
 
-// Сохраняем настройки в реестр
 void SettingsDialog::saveSettings() {
     QSettings s;
+
+    s.beginGroup("lastSettings");  // ← ВАЖНО
+
     settings.algorithmType = static_cast<Algorithm>(algorithmBGP->checkedId());
-    settings.enumType      = static_cast<EnumerationType>(enumeratorBGP->checkedId());
-    settings.maxRows       = ui->maxRowsSPB->value();
-    settings.compDev       = static_cast<ComputeDevice>(computeDeviceBGP->checkedId());
+    settings.enumType = static_cast<EnumerationType>(enumeratorBGP->checkedId());
+    settings.maxRows = ui->maxRowsSPB->value();
+    settings.compDev = static_cast<ComputeDevice>(computeDeviceBGP->checkedId());
 
     settings.compDevSet.threadsCpu = ui->threadsCpuSPB->value();
-    settings.compDevSet.blocksGpu  = ui->blocksGpuSPB->value();
+    settings.compDevSet.blocksGpu = ui->blocksGpuSPB->value();
     settings.compDevSet.threadsGpu = ui->threadsGpuSPB->value();
 
     QJsonDocument doc(settings.toJson());
     s.setValue(SettingsKeys::COMPUTATION_SETTINGS, doc.toJson());
+
+    s.endGroup(); // ← не забыть
 }
 void SettingsDialog::loadSettings() {
-    // Загружаем настройки из реестра
     QSettings s;
+
+    s.beginGroup("lastSettings");  // ← ВАЖНО
+
     QByteArray data = s.value(SettingsKeys::COMPUTATION_SETTINGS).toByteArray();
     if (!data.isEmpty())
     {
         QJsonDocument doc = QJsonDocument::fromJson(data);
         settings = ComputationSettings::fromJson(doc.object());
     }
-    // Загружаем настройки в UI
+
+    s.endGroup(); // ← не забыть
+
+    // дальше UI без изменений
     algorithmBGP->button(settings.algorithmType)->setChecked(true);
     ui->enumTypeGBX->setVisible(algorithmBGP->checkedId() == Algorithm::SimpleXor);
 
@@ -240,15 +267,12 @@ void SettingsDialog::loadSettings() {
     int maxThreads = omp_get_max_threads();
     ui->threadsCpuSPB->setMaximum(maxThreads);
 
-    //ui->threadsCpuLBL->setVisible( computeDeviceBGP->checkedId() == ComputeDevice::CPU );
-    //ui->threadsCpuSPB->setVisible( computeDeviceBGP->checkedId() == ComputeDevice::CPU );
-    ui->blocksGpuLBL->setVisible(  computeDeviceBGP->checkedId() == ComputeDevice::GPU );
-    ui->blocksGpuSPB->setVisible(  computeDeviceBGP->checkedId() == ComputeDevice::GPU );
-    ui->threadsGpuLBL->setVisible( computeDeviceBGP->checkedId() == ComputeDevice::GPU );
-    ui->threadsGpuSPB->setVisible( computeDeviceBGP->checkedId() == ComputeDevice::GPU );
+    ui->blocksGpuLBL->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::GPU);
+    ui->blocksGpuSPB->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::GPU);
+    ui->threadsGpuLBL->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::GPU);
+    ui->threadsGpuSPB->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::GPU);
 
-
-    ui->threadsCpuSPB->setValue( std::min(maxThreads,settings.compDevSet.threadsCpu) );
-    ui->blocksGpuSPB->setValue(  settings.compDevSet.blocksGpu  );
-    ui->threadsGpuSPB->setValue( settings.compDevSet.threadsGpu );
+    ui->threadsCpuSPB->setValue(std::min(maxThreads, settings.compDevSet.threadsCpu));
+    ui->blocksGpuSPB->setValue(settings.compDevSet.blocksGpu);
+    ui->threadsGpuSPB->setValue(settings.compDevSet.threadsGpu);
 }

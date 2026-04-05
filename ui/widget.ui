@@ -178,13 +178,13 @@
     <property name="title">
      <string>Матрицы</string>
     </property>
-    <widget class="QMenu" name="deleteMatrix">
+    <widget class="QMenu" name="deleteMatrixMNU">
      <property name="title">
-      <string>Удалить матрицу</string>
+      <string>Удалить матрицу из реестра</string>
      </property>
     </widget>
     <addaction name="addMatrixACN"/>
-    <addaction name="deleteMatrix"/>
+    <addaction name="deleteMatrixMNU"/>
    </widget>
    <widget class="QMenu" name="spectrumMNU">
     <property name="title">
@@ -198,7 +198,7 @@
   <widget class="QStatusBar" name="statusbar"/>
   <action name="addMatrixACN">
    <property name="text">
-    <string>Сохранить матрицу</string>
+    <string>Сохранить матрицу в реестр</string>
    </property>
   </action>
   <action name="settingsACN">
@@ -229,6 +229,16 @@
   <action name="action_8">
    <property name="text">
     <string>пр</string>
+   </property>
+  </action>
+  <action name="saveMatrixToFileACN">
+   <property name="text">
+    <string>Сохранить матрицу в файл</string>
+   </property>
+  </action>
+  <action name="loadMatrixFromFileACN">
+   <property name="text">
+    <string>Загрузить матрицу из файла</string>
    </property>
   </action>
  </widget>

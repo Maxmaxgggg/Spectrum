@@ -21,9 +21,8 @@ MainWindow::MainWindow(QWidget* parent)
         ui->verticalLayout->setStretch(3, 1);
         splitter->setSizes({ 1, 1 });
     /********                      ********/
-    if( settings == nullptr )
-        settings = new SettingsDialog(this);
-
+    if( settingsDialog == nullptr )
+        settingsDialog = new SettingsDialog(this);
     msg = new QCPItemText(ui->spectrumCPT);
     msg->position->setType(QCPItemPosition::ptAxisRectRatio);
     msg->position->setCoords(0.5, 0.5);
@@ -52,7 +51,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect( ui->matrixPTE, &FilterPlainTextEdit::textChanged, this,  &MainWindow::handleMatrixChanged    );
     connect(ui->settingsACN, &QAction::triggered,
         this, [this]() {
-            settings->exec();
+            settingsDialog->exec();
             applySettings();
         });
 
@@ -94,7 +93,7 @@ void MainWindow::rebuildMatrixMenuActions()
     QStringList names = listMatrixNames(); // текущие имена
 
     // 2) Удаляем любые динамические действия (все, кроме addMatrix и действия подменю deleteMenu)
-    QAction* deleteMenuAction = ui->deleteMatrix ? ui->deleteMatrix->menuAction() : nullptr;
+    QAction* deleteMenuAction = ui->deleteMatrixMNU ? ui->deleteMatrixMNU->menuAction() : nullptr;
     const QList<QAction*> actsSnapshot = matrixMenu->actions();
     for (QAction* a : actsSnapshot) {
         if ( a == ui->addMatrixACN || a == deleteMenuAction )
@@ -103,8 +102,8 @@ void MainWindow::rebuildMatrixMenuActions()
     }
 
     // 3) Очищаем подменю удаления
-    if (ui->deleteMatrix)
-        ui->deleteMatrix->clear();
+    if (ui->deleteMatrixMNU)
+        ui->deleteMatrixMNU->clear();
 
     // 4) Если есть имена — добавляем динамические пункты и включаем deleteMenu (учитываем флаг)
     if (!names.isEmpty()) {
@@ -127,7 +126,7 @@ void MainWindow::rebuildMatrixMenuActions()
 
         // пункты в подменю удаления (родитель = deleteMenu)
         for (const QString& nm : names) {
-            QAction* delAct = new QAction(nm, ui->deleteMatrix);
+            QAction* delAct = new QAction(nm, ui->deleteMatrixMNU);
             delAct->setIcon(QIcon(":/ui/icons/newspaper.png"));
             delAct->setEnabled(matrixActionsEnabled); // учитываем флаг
 
@@ -141,13 +140,13 @@ void MainWindow::rebuildMatrixMenuActions()
 
                 QAction* caller = qobject_cast<QAction*>(sender());
                 if (caller) {
-                    ui->deleteMatrix->removeAction(caller);
+                    ui->deleteMatrixMNU->removeAction(caller);
                     caller->deleteLater();
                 }
 
                 for (QAction* ma : matrixMenu->actions()) {
                     if (ma == ui->addMatrixACN) continue;
-                    if (ma == ui->deleteMatrix->menuAction()) continue;
+                    if (ma == ui->deleteMatrixMNU->menuAction()) continue;
                     if (ma->data().toString() == nm || ma->text() == nm) {
                         matrixMenu->removeAction(ma);
                         ma->deleteLater();
@@ -155,18 +154,18 @@ void MainWindow::rebuildMatrixMenuActions()
                     }
                 }
 
-                ui->deleteMatrix->setEnabled(matrixActionsEnabled && !ui->deleteMatrix->actions().isEmpty());
+                ui->deleteMatrixMNU->setEnabled(matrixActionsEnabled && !ui->deleteMatrixMNU->actions().isEmpty());
                 });
 
-            ui->deleteMatrix->addAction(delAct);
+            ui->deleteMatrixMNU->addAction(delAct);
         }
 
-        ui->deleteMatrix->setEnabled(matrixActionsEnabled && !ui->deleteMatrix->actions().isEmpty());
+        ui->deleteMatrixMNU->setEnabled(matrixActionsEnabled && !ui->deleteMatrixMNU->actions().isEmpty());
     }
     else {
         // нет сохранённых матриц
-        if (ui->deleteMatrix)
-            ui->deleteMatrix->setEnabled(false);
+        if (ui->deleteMatrixMNU)
+            ui->deleteMatrixMNU->setEnabled(false);
     }
 }
 void MainWindow::setToolTips() {
@@ -193,7 +192,7 @@ void MainWindow::setWorker()
     connect( workerPtr,       &Worker::finished,                       this,      &MainWindow::handleFinished,                       Qt::QueuedConnection );
 
 
-    connect( this,            &MainWindow::sendSettingsToWorker, workerPtr, &Worker::setSettings, Qt::QueuedConnection);
+    connect( this, static_cast<void (MainWindow::*)(const QJsonObject&)>( &MainWindow::sendSettingsToWorker ), workerPtr, &Worker::setSettings, Qt::QueuedConnection);
 
 
     // DirectConnection для того, чтобы частоту обновления можно было изменять в реальном времени
@@ -208,19 +207,18 @@ void MainWindow::setMatrixMenu()
     // Создаём меню и базовые действия один раз
     matrixMenu = ui->matrixMNU;
 
-
     connect(ui->addMatrixACN, &QAction::triggered, this, &MainWindow::onAddMatrixTriggered);
     ui->addMatrixACN->setIcon(QIcon(":/ui/icons/newspaper--plus.png"));
-    ui->deleteMatrix->setIcon(QIcon(":/ui/icons/newspaper--minus.png"));
+    ui->deleteMatrixMNU->setIcon(QIcon(":/ui/icons/newspaper--minus.png"));
     // функция-утилита для обновления состояния доступности пунктов
     auto updateMenuEnabledState = [this]() {
         loadMatricesArray(); // обновим массив, чтобы проверить наличие
-        ui->deleteMatrix->setEnabled(matrixActionsEnabled && !matrices.isEmpty());
+        ui->deleteMatrixMNU->setEnabled(matrixActionsEnabled && !matrices.isEmpty());
         };
 
     // По умолчанию включаем/выключаем подменю — учитываем флаг matrixActionsEnabled
     loadMatricesArray();
-    ui->deleteMatrix->setEnabled(matrixActionsEnabled && !matrices.isEmpty());
+    ui->deleteMatrixMNU->setEnabled(matrixActionsEnabled && !matrices.isEmpty());
 
     matrixMenu->setMouseTracking(true);
 
@@ -270,7 +268,7 @@ void MainWindow::setMatrixActionsEnabled(bool enabled)
     if (!matrixMenu) return;
 
     // действие, которое представляет подменю удаления
-    QAction* deleteMenuAction = ui->deleteMatrix ? ui->deleteMatrix->menuAction() : nullptr;
+    QAction* deleteMenuAction = ui->deleteMatrixMNU ? ui->deleteMatrixMNU->menuAction() : nullptr;
 
     // 1) Обновим уже существующие динамические пункты (если они есть)
     for (QAction* a : matrixMenu->actions()) {
@@ -280,11 +278,11 @@ void MainWindow::setMatrixActionsEnabled(bool enabled)
     }
 
     // 2) Обновим действия внутри подменю "Удалить"
-    if (ui->deleteMatrix) {
-        for (QAction* a : ui->deleteMatrix->actions()) {
+    if (ui->deleteMatrixMNU) {
+        for (QAction* a : ui->deleteMatrixMNU->actions()) {
             a->setEnabled(enabled);
         }
-        ui->deleteMatrix->setEnabled(enabled && !ui->deleteMatrix->actions().isEmpty());
+        ui->deleteMatrixMNU->setEnabled(enabled && !ui->deleteMatrixMNU->actions().isEmpty());
     }
 
     // 3) Если меню видно — перестроим динамику прямо сейчас, чтобы новые enabled/disabled вступили в силу.
@@ -303,13 +301,20 @@ void MainWindow::setMatrixActionsEnabled(bool enabled)
 
 void MainWindow::connectSettingsDialog()
 {
-    if (!settings) return;
+    if (!settingsDialog) return;
 
 
-    connect( this,     &MainWindow::matrixChanged,            settings, &SettingsDialog::handleMatrixChanged     );
-    connect( this,     &MainWindow::setInterfaceEnabled,      settings, &SettingsDialog::setInterfaceEnabled     );
-    connect( this,     &MainWindow::requestSettings,          settings, &SettingsDialog::handleSettingsRequested );
-    connect( settings, &SettingsDialog::sendSettingsToWorker, this,     &MainWindow::sendSettingsToWorker        );
+    connect( this,     &MainWindow::matrixChanged,            settingsDialog, &SettingsDialog::handleMatrixChanged     );
+    connect( this,     &MainWindow::setInterfaceEnabled,      settingsDialog, &SettingsDialog::setInterfaceEnabled     );
+    connect( this,     &MainWindow::requestSettings,          settingsDialog, &SettingsDialog::handleSettingsRequested );
+
+    // Записываем матрицу при получении
+    connect( settingsDialog, &SettingsDialog::sendSettingsToWidget,
+        this, [this]( const QJsonObject& obj ) {
+            settings = ComputationSettings::fromJson(obj);
+            settings.matrix = ui->matrixPTE->toStringList();
+            MainWindow::sendSettingsToWorker(settings.toJson());
+        });
 }
 
 
@@ -332,7 +337,7 @@ void MainWindow::on_executePBN_clicked()
                 handleFinished(-1);
                 return;
             }
-            QStringList rows = ui->matrixPTE->toPlainText().split('\n', Qt::SkipEmptyParts);
+            QStringList rows = ui->matrixPTE->toStringList();
             if ( rows.isEmpty()) {
                 QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString::fromUtf8("Матрица пустая"));
                 handleFinished(-1);
@@ -357,16 +362,32 @@ void MainWindow::on_executePBN_clicked()
                 handleFinished(-1);
                 return;
             }
-            //qint64 maxComb = 0;
-            //// Получаем индекс максимального комбина, который умещается в quint64
-            //qint64 maxCombInd = maxCombIndex(numOfRows);
-            //if (maxComb <= 0 || maxComb > rows.size()) maxComb = rows.size();
-            //if (maxComb > maxCombInd) maxComb = maxCombInd;
+            // Запускаем поток, чтобы отправить в него настройки
             workerThreadPtr->start();
             // Запрашиваем настройки для расчета
             emit requestSettings();
+
+            // Если есть чекпоинт для данных настроек - выводим диалог
+            if (hasCheckpoint()) {
+                QMessageBox::StandardButton reply;
+                reply = QMessageBox::question(
+                    this,
+                    "Найден спектр",
+                    "Для текущих настроек обнаружен сохранённый спектр\nПродолжить вычисление с сохранённого состояния?",
+                    QMessageBox::Yes | QMessageBox::No
+                );
+                // Загружаем RunState в зависимости от выбора пользователя
+                QMetaObject::invokeMethod(
+                    workerPtr,
+                    "initializeRunState",
+                    Qt::QueuedConnection,
+                    Q_ARG(LoadMode, reply == QMessageBox::Yes
+                        ? LoadMode::FromCheckpoint
+                        : LoadMode::Reset)
+                );
+            }
             // Начинаем расчет
-            QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection, Q_ARG(QStringList, rows) );
+            QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection );
 
             
             runState = RunState::Running;
@@ -419,7 +440,7 @@ void MainWindow::on_exitPBN_clicked()
 
 void MainWindow::on_settingsPBN_clicked()
 {
-    settings->exec();
+    settingsDialog->exec();
     applySettings();
 }
 
@@ -459,6 +480,11 @@ void MainWindow::handleStrValChanged()
 void MainWindow::handleUpdateInfoPBR(int percent)
 {
     ui->infoPBR->setValue(percent);
+}
+
+void MainWindow::sendSettingsToWorker()
+{
+    MainWindow::sendSettingsToWorker(settings.toJson());
 }
 
 void MainWindow::handleUpdateSpectrumPlot(const QVector<float> spectrum)
@@ -503,13 +529,16 @@ void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft)
 }
 void MainWindow::handleMatrixChanged()
 {
-    QStringList rows = ui->matrixPTE->toPlainText().split('\n', Qt::SkipEmptyParts);
+    QStringList rows = ui->matrixPTE->toStringList();
     int maxLen = 0;
     for (const QString& row : rows)
         maxLen = qMax(maxLen, row.length());
+    // При изменении размеров матрицы автоматически вызовется слот в settingsDialog-е, который отправит новые настройки
     if (rows.size() != 0 && maxLen != 0)
         emit matrixChanged( rows.size(), maxLen );
     ui->matrixLBL->setText(QString::fromUtf8("Матрица (%1,%2):").arg(maxLen).arg(rows.size()));
+    
+    
 }
 void MainWindow::handleError(const QString& message)
 {
@@ -641,6 +670,33 @@ void MainWindow::onAddMatrixTriggered()
     //     matrixMenu->hide();
     //     matrixMenu->show();
     // }
+}
+
+bool MainWindow::hasCheckpoint() const
+{
+    // Считаем хеш текущих настроек
+    quint64 hash = settings.computeHash();
+    // Хеш - имя чекпоинта
+    QString group = QString("checkpoints/%1").arg(hash);
+
+    QSettings s;
+    s.beginGroup(group);
+
+    // Проверяем, есть ли чекпоинт вообще
+    if (!s.contains("settings")) {
+        s.endGroup();
+        return false;
+    }
+
+    // Защита от коллизий
+    QJsonObject savedSettingsObj = s.value("settings").toJsonObject();
+    ComputationSettings saved = ComputationSettings::fromJson(savedSettingsObj);
+    // Переписать
+    if (!(saved == settings)/* && !(saved <= settings) */) {
+        s.endGroup();
+        return false;
+    }
+    return true;
 }
 
 void MainWindow::updatePlot(const QVector<float>& spectrum)
