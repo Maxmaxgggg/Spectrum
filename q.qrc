@@ -11,5 +11,6 @@
         <file>translation/qtmultimedia_ru.qm</file>
         <file>translation/qtscript_ru.qm</file>
         <file>translation/qtxmlpatterns_ru.qm</file>
+        <file>ui/icons/disk-black.png</file>
     </qresource>
 </RCC>

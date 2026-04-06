@@ -3,6 +3,16 @@
 #include <qjsonarray.h>
 #include <qhash.h>
 
+enum TimeInterval {
+    OneSecond = 1,
+    FiveSeconds = 5,
+    TenSeconds = 10,
+    ThirtySeconds = 30,
+    OneMinute = 60,
+    FiveMinutes = 300,
+    TenMinutes = 600
+};
+
 struct ComputationSettings
 {
     // Порождающая матрица кода
@@ -30,6 +40,13 @@ struct ComputationSettings
         int threadsGpu = 1;
     } compDevSet;
 
+    struct timeIntervalSettings {
+        // Частота сохранения спектра в реестр
+        int saveSpectrumInterval = TenSeconds;
+        // Частота обновления спетрка в gui 
+        int updateSpectrumInterval = OneSecond;
+    } timeIntSet;
+
     ComputationSettings() noexcept = default;
 
     // Конструктор копирования
@@ -38,7 +55,8 @@ struct ComputationSettings
         , enumType(other.enumType)
         , maxRows(other.maxRows)
         , compDev(other.compDev)
-        , compDevSet(other.compDevSet){ }
+        , compDevSet(other.compDevSet)
+        , timeIntSet(other.timeIntSet) { }
 
     // Рекомендуется также явно определить оператор присваивания
     ComputationSettings& operator=(const ComputationSettings& other) noexcept
@@ -50,10 +68,12 @@ struct ComputationSettings
         maxRows = other.maxRows;
         compDev = other.compDev;
         compDevSet = other.compDevSet;
+        timeIntSet = other.timeIntSet;
         return *this;
     }
     bool operator==(const ComputationSettings& other) const
     {
+        // Не сравниваем между собой настройки времени
         return matrix == other.matrix &&
             algorithmType == other.algorithmType &&
             enumType == other.enumType &&
@@ -97,6 +117,10 @@ struct ComputationSettings
 
         obj["compDevSet"] = dev;
 
+        QJsonObject timeInt;
+        timeInt["saveSpectrumInterval"]   = timeIntSet.saveSpectrumInterval;
+        timeInt["updateSpectrumInterval"] = timeIntSet.updateSpectrumInterval;
+        obj["timeIntSet"] = timeInt;
         return obj;
     }
 
@@ -124,6 +148,9 @@ struct ComputationSettings
         s.compDevSet.blocksGpu = dev["blocksGpu"].toInt();
         s.compDevSet.threadsGpu = dev["threadsGpu"].toInt();
 
+        QJsonObject timeInt = obj["timeIntSet"].toObject();
+        s.timeIntSet.saveSpectrumInterval   = timeInt["saveSpectrumInterval"].toInt();
+        s.timeIntSet.updateSpectrumInterval = timeInt["updateSpectrumInterval"].toInt();
         return s;
     }
     quint64 computeHash(quint64 seed = 0ULL) const

@@ -9,6 +9,11 @@
 
 #include <qmainwindow.h>
 
+#ifdef Q_OS_WIN
+    #include <windows.h>
+    #include <shobjidl.h>
+#endif
+
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
 QT_END_NAMESPACE
@@ -62,7 +67,7 @@ private slots:
     void handleError(const QString& message);
     void handleFinished(int);
     void handleUpdateRemainingMinutes(int, int);
-
+    void showSaveLBL();
     void handleMatrixChanged();
 
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -82,8 +87,8 @@ private:
     QMenu          *deleteMenu       = nullptr;
     QTimer         *matrixMenuTimer  = nullptr;
     // Переписать
-    QPointer<QAction> pendingHover;
-
+    QPointer<QAction>       pendingHover;
+    QGraphicsOpacityEffect* saveLBLOpacityEffect;
     // состояние выполнения: Idle / Running / Paused
     enum class RunState { Idle, Running, Paused };
     RunState runState = RunState::Idle;
@@ -128,7 +133,11 @@ private:
     QString defaultMatrixName();
 
 
-    
+    // Атрибуты, нужные для отображения прогресс бара под иконкой приложения
+    #ifdef Q_OS_WIN
+        ITaskbarList3* taskbar = nullptr;
+        HWND hwnd = nullptr;
+    #endif
 };
 
 #endif // WIDGET_H

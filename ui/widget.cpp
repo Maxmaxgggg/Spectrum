@@ -20,6 +20,10 @@ MainWindow::MainWindow(QWidget* parent)
         ui->verticalLayout->setStretch(1, 1);
         ui->verticalLayout->setStretch(3, 1);
         splitter->setSizes({ 1, 1 });
+        saveLBLOpacityEffect = new QGraphicsOpacityEffect(ui->saveLBL);
+        ui->saveLBL->setGraphicsEffect(saveLBLOpacityEffect);
+        ui->saveLBL->setToolTip("В момент сохранения спектра тут появится значок");
+        saveLBLOpacityEffect->setOpacity(0.0);
     /********                      ********/
     if( settingsDialog == nullptr )
         settingsDialog = new SettingsDialog(this);
@@ -32,7 +36,7 @@ MainWindow::MainWindow(QWidget* parent)
     msg->setText(QString::fromUtf8(
         "Спектральные компоненты слишком велики\n"
         "Невозможно отобразить графически"));
-
+    //ui->saveLBL->setVisible(false);
     QFont f;
     f.setPointSize(12);
     f.setBold(true);
@@ -63,7 +67,19 @@ MainWindow::MainWindow(QWidget* parent)
     setMatrixMenu();
     setToolTips();
     emit handleMatrixChanged();
-    
+    #ifdef Q_OS_WIN
+        hwnd = reinterpret_cast<HWND>(this->winId());
+
+        if (SUCCEEDED(CoCreateInstance(
+            CLSID_TaskbarList,
+            nullptr,
+            CLSCTX_ALL,
+            IID_ITaskbarList3,
+            (void**)&taskbar)))
+        {
+            taskbar->HrInit();
+        }
+    #endif
     //emit requestInitialSettings();
 }
 
@@ -82,6 +98,12 @@ MainWindow::~MainWindow()
         workerPtr = nullptr;
     }
     this->setWindowTitle(UIStrings::MAIN_TITLE);
+    #ifdef Q_OS_WIN
+        if (taskbar) {
+            taskbar->Release();
+            taskbar = nullptr;
+        }
+    #endif
     delete ui;
 }
 void MainWindow::rebuildMatrixMenuActions()
@@ -190,7 +212,7 @@ void MainWindow::setWorker()
     connect( workerPtr,       &Worker::updateRemainingMinutes,         this,      &MainWindow::handleUpdateRemainingMinutes,         Qt::QueuedConnection );
     connect( workerPtr,       &Worker::errorOccurred,                  this,      &MainWindow::handleError,                          Qt::QueuedConnection );
     connect( workerPtr,       &Worker::finished,                       this,      &MainWindow::handleFinished,                       Qt::QueuedConnection );
-
+    connect( workerPtr,       &Worker::showSaveLBL,                    this,      &MainWindow::showSaveLBL,                          Qt::QueuedConnection );
 
     connect( this, static_cast<void (MainWindow::*)(const QJsonObject&)>( &MainWindow::sendSettingsToWorker ), workerPtr, &Worker::setSettings, Qt::QueuedConnection);
 
@@ -479,7 +501,24 @@ void MainWindow::handleStrValChanged()
 
 void MainWindow::handleUpdateInfoPBR(int percent)
 {
+    // Обновляем прогрессбар в ui
     ui->infoPBR->setValue(percent);
+    // Обновляем прогрессбар под иконкой приложения
+    #ifdef Q_OS_WIN
+        if (taskbar && hwnd) {
+            if (percent <= 0 || percent >= 100) {
+                taskbar->SetProgressState(hwnd, TBPF_NOPROGRESS);
+            }
+            else {
+                taskbar->SetProgressState(hwnd, TBPF_NORMAL);
+                taskbar->SetProgressValue(
+                    hwnd,
+                    static_cast<ULONGLONG>(percent),
+                    100
+                );
+            }
+        }
+    #endif
 }
 
 void MainWindow::sendSettingsToWorker()
@@ -526,6 +565,28 @@ void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft)
     ui->infoLBL->setText(infoText);
     this->setWindowTitle(formatRemainingTime(remainingMinutes));
     ui->infoLBL->show();
+}
+void MainWindow::showSaveLBL()
+{
+    ui->saveLBL->setToolTip("Сейчас сохраняется спектр");
+    QPropertyAnimation* anim = new QPropertyAnimation(saveLBLOpacityEffect, "opacity", this);
+    if (ui->saveLBL->underMouse()) {
+        QToolTip::showText(QCursor::pos(), "Сейчас сохраняется спектр", ui->saveLBL);
+    }
+
+    anim->setDuration(1000); // общая длительность
+    anim->setStartValue(0.0);
+    anim->setKeyValueAt(0.5, 1.0); // середина — полностью видно
+    anim->setEndValue(0.0);
+    connect(anim, &QPropertyAnimation::finished, this, [this]() {
+        // Возвращаем базовый tooltip
+        ui->saveLBL->setToolTip("В момент сохранения спектра тут появится значок");
+        if (ui->saveLBL->underMouse()) {
+            QToolTip::showText(QCursor::pos(), "В момент сохранения спектра тут появится значок", ui->saveLBL);
+        }
+        });
+
+    anim->start(QAbstractAnimation::DeleteWhenStopped);
 }
 void MainWindow::handleMatrixChanged()
 {

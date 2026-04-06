@@ -9,6 +9,8 @@ using Algorithm       = ComputationSettings::Algorithm;
 using EnumerationType = ComputationSettings::EnumerationType;
 using ComputeDevice   = ComputationSettings::ComputeDevice;
 
+
+
 SettingsDialog::SettingsDialog(QWidget *parent)
     : QDialog(parent), ui(new Ui::SettingsDialog)
 {
@@ -27,6 +29,18 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     computeDeviceBGP->addButton( ui->cpuRB, ComputeDevice::CPU );
     computeDeviceBGP->addButton( ui->gpuRB, ComputeDevice::GPU );
 
+    // Устанавливаем данные для save и update
+    ui->saveSpectrumIntervalCBX->setItemData(0, TenSeconds);
+    ui->saveSpectrumIntervalCBX->setItemData(1, ThirtySeconds);
+    ui->saveSpectrumIntervalCBX->setItemData(2, OneMinute);
+    ui->saveSpectrumIntervalCBX->setItemData(3, FiveMinutes);
+    ui->saveSpectrumIntervalCBX->setItemData(4, TenMinutes);
+
+    ui->updateSpectrumIntervalCBX->setItemData(0, OneSecond);
+    ui->updateSpectrumIntervalCBX->setItemData(1, FiveSeconds);
+    ui->updateSpectrumIntervalCBX->setItemData(2, TenSeconds);
+    ui->updateSpectrumIntervalCBX->setItemData(3, ThirtySeconds);
+    ui->updateSpectrumIntervalCBX->setItemData(4, OneMinute);
 
     loadSettings();
     checkGpuAvailable();
@@ -78,6 +92,11 @@ SettingsDialog::SettingsDialog(QWidget *parent)
             emit sendSettingsToWidget(settings.toJson());
             reject();
         });
+
+
+
+
+
     // Отключаем кнопку помощи
     setWindowFlags( windowFlags()  & ~Qt::WindowContextHelpButtonHint );
 }
@@ -100,6 +119,7 @@ void SettingsDialog::setInterfaceEnabled( bool enabled )
         ui->enumTypeGBX->setEnabled(              false );
         ui->computeDeviceGBX->setEnabled(         false );
         ui->computeDeviceSettingsGBX->setEnabled( false );
+        ui->saveAndUpdateSpectrumGBX->setEnabled( false );
     }
     else {
         // Включаем весь интерфейс
@@ -107,6 +127,7 @@ void SettingsDialog::setInterfaceEnabled( bool enabled )
         ui->enumTypeGBX->setEnabled(              true  );
         ui->computeDeviceGBX->setEnabled(         true  );
         ui->computeDeviceSettingsGBX->setEnabled( true  );
+        ui->saveAndUpdateSpectrumGBX->setEnabled( true  );
         // Частично выключаем его
         if ( codeLength == Length::Short ) {
             ui->grayCodeRB->setEnabled(true);
@@ -234,6 +255,9 @@ void SettingsDialog::saveSettings() {
     settings.compDevSet.blocksGpu = ui->blocksGpuSPB->value();
     settings.compDevSet.threadsGpu = ui->threadsGpuSPB->value();
 
+    settings.timeIntSet.saveSpectrumInterval = ui->saveSpectrumIntervalCBX->currentData().toInt();
+    settings.timeIntSet.updateSpectrumInterval = ui->updateSpectrumIntervalCBX->currentData().toInt();
+
     QJsonDocument doc(settings.toJson());
     s.setValue(SettingsKeys::COMPUTATION_SETTINGS, doc.toJson());
 
@@ -275,4 +299,13 @@ void SettingsDialog::loadSettings() {
     ui->threadsCpuSPB->setValue(std::min(maxThreads, settings.compDevSet.threadsCpu));
     ui->blocksGpuSPB->setValue(settings.compDevSet.blocksGpu);
     ui->threadsGpuSPB->setValue(settings.compDevSet.threadsGpu);
+
+    int index = ui->saveSpectrumIntervalCBX->findData(settings.timeIntSet.saveSpectrumInterval);
+    if (index != -1) {
+        ui->saveSpectrumIntervalCBX->setCurrentIndex(index);
+    }
+    index = ui->updateSpectrumIntervalCBX->findData(settings.timeIntSet.updateSpectrumInterval);
+    if (index != -1) {
+        ui->updateSpectrumIntervalCBX->setCurrentIndex(index);
+    }
 }

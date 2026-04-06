@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>357</width>
-    <height>516</height>
+    <width>361</width>
+    <height>701</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -23,10 +23,7 @@
    <iconset resource="../q.qrc">
     <normaloff>:/ui/icons/gear.png</normaloff>:/ui/icons/gear.png</iconset>
   </property>
-  <layout class="QVBoxLayout" name="verticalLayout_3">
-   <property name="sizeConstraint">
-    <enum>QLayout::SetMinimumSize</enum>
-   </property>
+  <layout class="QVBoxLayout" name="verticalLayout_4">
    <item>
     <widget class="QGroupBox" name="algorithmGBX">
      <property name="title">
@@ -222,6 +219,121 @@
          <number>32</number>
         </property>
        </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="saveAndUpdateSpectrumGBX">
+     <property name="title">
+      <string>Обновление и сохранение:</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_3">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_4">
+        <item>
+         <widget class="QLabel" name="saveSpectrumInteravlLBL">
+          <property name="text">
+           <string>Интервал сохранения спектра</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_3">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QComboBox" name="saveSpectrumIntervalCBX">
+          <item>
+           <property name="text">
+            <string>10 с</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>30 с</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>1 мин</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>5 мин</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>10 мин</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_5">
+        <item>
+         <widget class="QLabel" name="updateSpectrumIntervalLBL">
+          <property name="text">
+           <string>Интервал обновления спектра</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_4">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QComboBox" name="updateSpectrumIntervalCBX">
+          <item>
+           <property name="text">
+            <string>1 с</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>5 с</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>10 с</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>30 с</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>1 мин</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+       </layout>
       </item>
      </layout>
     </widget>

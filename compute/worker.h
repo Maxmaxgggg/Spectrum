@@ -50,7 +50,8 @@ signals:
     void finished( int );
     // Сигнал для обновления таймера
     void updateRemainingMinutes(int elapsedSec, int minutesLeft);
-
+    // Сигнал того, что надо показать значок сохранения
+    void showSaveLBL();
 private:
     /* Функции для работы с биноминальными коэффициентами */
     static    quint64 sumCombinations(quint64 k, quint64 maxComb);
@@ -117,8 +118,6 @@ private:
     std::atomic<int> paused    { 0 };
     std::atomic<int> cancelled { 0 };
     
-    std::atomic<quint64> refreshProgressbarMs = DefaultValues::PROGRESSBAR_MS;
-    std::atomic<quint64> refreshSpectrumMs    = DefaultValues::SPECTRUM_MS;
 
     ComputationSettings         settings;
     RunState                    runState;
@@ -127,7 +126,11 @@ private:
     steady_clock::time_point    lastTimeBar;
     steady_clock::time_point    lastEstimateTime;
     steady_clock::time_point    lastCheckpointTime;
-    const std::chrono::seconds  checkpointPeriod = std::chrono::seconds(10);
+
+    std::chrono::seconds        updateSpectrumSec{ 1 };
+    std::chrono::seconds        saveSpectrumSec{ 10 };
+    std::chrono::seconds        updateProgressBarSec{ 1 };
+
     bool                        exportSpectrum = false;
 
 
