@@ -177,7 +177,7 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
                 double estSec = speed > 0 ? remainingOps / speed : 0.0;
 
                 int minutesLeft = int(std::ceil(estSec / 60.0));
-                emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft);
+                emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
 
             }
             if (!copyPending && (now - lastTimeSpectrum > updateSpectrumSec)) {
@@ -277,7 +277,7 @@ void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, 
             double estSec = speed > 0 ? remainingOps / speed : 0.0;
 
             int minutesLeft = int(std::ceil(estSec / 60.0));
-            emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft);
+            emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
 
         }
         if (!copyPending && (now - lastTimeSpectrum > updateSpectrumSec )) {
@@ -519,7 +519,7 @@ void Worker::computeSpectrumGpuNoGrayLong(
                 double estSec = speed > 0 ? remainingOps / speed : 0.0;
 
                 int minutesLeft = int(std::ceil(estSec / 60.0));
-                emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft);
+                emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
 
             }
             if ( now - lastCheckpointTime >= saveSpectrumSec ) {
@@ -776,7 +776,7 @@ void Worker::computeSpectrumCpuNoGrayLong(
                 quint64 remainingOps = (totalOps > runState.doneOps) ? (totalOps - runState.doneOps) : 0;
                 double estSec = (speed > 0.0) ? (remainingOps / speed) : 0.0;
                 int minutesLeft = (int)std::ceil(estSec / 60.0);
-                emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft);
+                emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
             }
             if ( now - lastCheckpointTime >= saveSpectrumSec ) {
                 lastCheckpointTime = now;
@@ -988,9 +988,7 @@ void Worker::computeSpectrumCpuGrayShort(
             int minutesLeft =
                 int(std::ceil(estSec / 60.0));
 
-            emit updateRemainingMinutes(
-                (int)runState.elapsedSec,
-                minutesLeft);
+            emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
         } // if (now - lastEstimateTime >= seconds(1))
         if ( now - lastCheckpointTime >= saveSpectrumSec )
         {
@@ -1047,8 +1045,6 @@ void Worker::computeSpectrumCpuNoGrayShort(
                 if (cancelled.load())
                     break;
             }
-            if (cancelled.load())
-                break;
 
             quint64 thisChunkSize = qMin(chunkSize, combCount - offset);
 
@@ -1123,7 +1119,7 @@ void Worker::computeSpectrumCpuNoGrayShort(
                 double estSec = speed > 0 ? remainingOps / speed : 0.0;
 
                 int minutesLeft = int(std::ceil(estSec / 60.0));
-                emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft);
+                emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft, speed);
             }
 
             // Чекпоинт после завершения чанка
@@ -1148,7 +1144,7 @@ void Worker::updateSpectrum(int numOfCols)
         return;
     bool spectrumEmpty = true;
     QStringList spectrumCopyPTE;
-    QVector<float> spectrumCopyPlot;
+    SpectrumFloat spectrumCopyPlot;
 
     quint64 val = 0;
     for (quint64 w = 0; w <= numOfCols; ++w) {
@@ -1172,7 +1168,7 @@ void Worker::updateSpectrumDual(int numOfCols, int numOfRows)
     bool spectrumEmpty = true;
     // Считаем текстовый спектр из дуального
     QStringList spectrumCopyPTE = computeSpectrumFromDual( h_spectrum, numOfCols, numOfRows );
-    QVector<float> spectrumCopyPlot;
+    SpectrumFloat spectrumCopyPlot;
     spectrumCopyPlot.reserve(numOfCols+1);
 
     for (int i = 0; i <= numOfCols; i++) { spectrumCopyPlot.push_back(0.f); }
@@ -1252,7 +1248,7 @@ void Worker::computeSpectrum()
         /* ДОПИСАТЬ КОПИРОВАНИЕ МАТРИЦЫ В ПАМЯТЬ ДЛЯ КОРОТКИХ КОДОВ */
         if (numOfRows < 64) {
             emit errorOccurred("Ошибка, матрица слишком большая");
-            emit finished(-1);
+            emit finished(Constants::ERROR_OCCURED);
             return;
         }
         CUDA_CALL(cudaMalloc((void**)&d_matrix, matrixSizeInWords * Constants::WORD_SIZE));
@@ -1262,7 +1258,7 @@ void Worker::computeSpectrum()
     h_matrix = (quint64*)calloc(matrixSizeInWords, Constants::WORD_SIZE);
     if (!h_matrix) {
         emit errorOccurred("Ошибка выделения памяти");
-        emit finished(-1);
+        emit finished(Constants::ERROR_OCCURED);
         return;
     }
     // Копируем из QStringList-а
@@ -1443,7 +1439,7 @@ void Worker::computeSpectrum()
     initializeRunState(LoadMode::Reset);
     if ( cancelled.load() ) {
 
-        emit finished(-1);
+        emit finished(Constants::ERROR_OCCURED);
         emit updateInfoPBR(0);
 
         updateSpectrum( numOfCols );

@@ -70,17 +70,27 @@ MainWindow::MainWindow(QWidget* parent)
     #ifdef Q_OS_WIN
         hwnd = reinterpret_cast<HWND>(this->winId());
 
-        if (SUCCEEDED(CoCreateInstance(
+        HRESULT hr = CoCreateInstance(
             CLSID_TaskbarList,
             nullptr,
             CLSCTX_ALL,
             IID_ITaskbarList3,
-            (void**)&taskbar)))
-        {
-            taskbar->HrInit();
+            (void**)&taskbar
+        );
+
+        if (SUCCEEDED(hr) && taskbar) {
+            if (SUCCEEDED(taskbar->HrInit())) {
+                taskbarAvailable = true;
+            }
+            else {
+                taskbar->Release();
+                taskbar = nullptr;
+            }
+        }
+        else {
+            taskbar = nullptr;
         }
     #endif
-    //emit requestInitialSettings();
 }
 
 MainWindow::~MainWindow()
@@ -359,7 +369,7 @@ void MainWindow::on_executePBN_clicked()
                 handleFinished(-1);
                 return;
             }
-            QStringList rows = ui->matrixPTE->toStringList();
+            Matrix rows = ui->matrixPTE->toStringList();
             if ( rows.isEmpty()) {
                 QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString::fromUtf8("Матрица пустая"));
                 handleFinished(-1);
@@ -481,6 +491,79 @@ void MainWindow::on_cancelPBN_clicked()
     ui->cancelPBN->setEnabled(  false );
 }
 
+void MainWindow::on_saveSpectrumACN_triggered()
+{
+    //// 1. Путь к exe
+    //QString basePath = QCoreApplication::applicationDirPath();
+    //
+    //// 2. Базовое имя (размер матрицы)
+    //QString baseName = buildBaseName(settings.matrix);
+    //
+    //// 3. Ищем папку с такой же матрицей
+    //QString foundFolder = findFirstMatchingFolder(basePath, settings.matrix);
+    //
+    //// Если нашли папку с матрицей, для которой сохраняем - предлагаем сохранить в неё
+    //if (!foundFolder.isEmpty()) {
+    //    QMessageBox::StandardButton reply = QMessageBox::question(
+    //        this,
+    //        "Найдена папка",
+    //        "Найдена папка «" + foundFolder + "» для данной матрицы.\nСохранить спектр в неё?",
+    //        QMessageBox::Yes | QMessageBox::No
+    //    );
+    //
+    //    if (reply == QMessageBox::Yes) {
+    //        QString fullPath = QDir(basePath).filePath(foundFolder);
+    //
+    //        // TODO: сохранить спектр сюда
+    //        // saveSpectrum(fullPath);
+    //
+    //        return;
+    //    }
+    //}
+    //
+    //// 4. Генерируем уникальное имя
+    //QString uniqueName = makeUniqueFolderName(basePath, baseName);
+    //
+    //// 5. Диалог
+    //QInputDialog dialog(this);
+    //dialog.setWindowTitle("Создать папку со спектром");
+    //dialog.setLabelText("Введите имя папки:");
+    //dialog.setTextValue(uniqueName);
+    //
+    //// Убираем кнопку "?"
+    //dialog.setWindowFlags(dialog.windowFlags() & ~Qt::WindowContextHelpButtonHint);
+    //QString folderName = uniqueName;
+    //if (dialog.exec() == QDialog::Accepted) {
+    //    folderName = dialog.textValue();
+    //}
+    //
+    //
+    //// 6. Ещё раз проверка уникальности
+    //folderName = makeUniqueFolderName(basePath, folderName);
+    //
+    //QString fullPath = QDir(basePath).filePath(folderName);
+    //
+    //// 7. Создаём папку
+    //if (!QDir().mkpath(fullPath)) {
+    //    QMessageBox::warning(this, "Ошибка", "Не удалось создать папку");
+    //    return;
+    //}
+    //
+    //// 8. (опционально) создаём структуру
+    //QDir dir(fullPath);
+    //dir.mkdir(QString::fromUtf8("Спектры"));
+    //dir.mkdir(QString::fromUtf8("Сохранения"));
+    //
+    //// 9. сохраняем матрицу
+    //QString matrixPath = dir.filePath( baseName += ".mtrx" );
+    //
+    //if (!writeMatrixFile(matrixPath, settings.matrix)) {
+    //    QMessageBox::warning(this, "Ошибка", "Не удалось сохранить матрицу");
+    //}
+    //// 9. TODO: сохранить спектр
+    //// saveSpectrum(fullPath);
+}
+
 void MainWindow::handleStrValChanged()
 {
     if( workerPtr )
@@ -503,20 +586,17 @@ void MainWindow::handleUpdateInfoPBR(int percent)
 {
     // Обновляем прогрессбар в ui
     ui->infoPBR->setValue(percent);
+
     // Обновляем прогрессбар под иконкой приложения
     #ifdef Q_OS_WIN
-        if (taskbar && hwnd) {
-            if (percent <= 0 || percent >= 100) {
-                taskbar->SetProgressState(hwnd, TBPF_NOPROGRESS);
-            }
-            else {
-                taskbar->SetProgressState(hwnd, TBPF_NORMAL);
-                taskbar->SetProgressValue(
-                    hwnd,
-                    static_cast<ULONGLONG>(percent),
-                    100
-                );
-            }
+        if (!taskbarAvailable) return;
+    
+        if (percent <= 0 || percent >= 100) {
+            taskbar->SetProgressState(hwnd, TBPF_NOPROGRESS);
+        }
+        else {
+            taskbar->SetProgressState(hwnd, TBPF_NORMAL);
+            taskbar->SetProgressValue(hwnd, percent, 100);
         }
     #endif
 }
@@ -526,12 +606,12 @@ void MainWindow::sendSettingsToWorker()
     MainWindow::sendSettingsToWorker(settings.toJson());
 }
 
-void MainWindow::handleUpdateSpectrumPlot(const QVector<float> spectrum)
+void MainWindow::handleUpdateSpectrumPlot(const SpectrumFloat spectrum)
 {
     updatePlot(spectrum);
 }
 
-void MainWindow::handleUpdateSpectrumPTE(const QStringList spectrum)
+void MainWindow::handleUpdateSpectrumPTE( const SpectrumText spectrum )
 {
     QString str = spectrum.join('\n');
     if (!str.isEmpty() && str.endsWith('\n'))
@@ -541,14 +621,17 @@ void MainWindow::handleUpdateSpectrumPTE(const QStringList spectrum)
     ui->spectrumPTE->setPlainText( str );
     vbar->setValue(pos);
 }
-void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft)
+void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed)
 {
     remainingMinutes = minutesLeft;
+
     int days = elapsedSec / 86400;
     int hours = (elapsedSec % 86400) / 3600;
     int minutes = (elapsedSec % 3600) / 60;
     int seconds = elapsedSec % 60;
+
     QStringList parts;
+
     if (days > 0)
         parts << QString("%1 д").arg(days);
     if (hours > 0)
@@ -559,19 +642,24 @@ void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft)
         parts << QString("%1 с").arg(seconds);
 
     QString elapsedStr = parts.join(' ');
-    QString infoText = tr("Прошло времени    %1").arg(elapsedStr) + \
-        "\n" +         tr("Осталось примерно %1").arg(formatRemainingTime(remainingMinutes));
+
+    QString infoText =
+        tr("Прошло времени:     %1").arg(elapsedStr) + "\n" +
+        tr("Осталось времени:   %1").arg(formatRemainingTime(remainingMinutes)) + "\n" +
+        tr("Средняя скорость:   %1").arg(formatSpeed(speed));
 
     ui->infoLBL->setText(infoText);
+
+    // В заголовок можно оставить только ETA (это правильно)
     this->setWindowTitle(formatRemainingTime(remainingMinutes));
     ui->infoLBL->show();
 }
 void MainWindow::showSaveLBL()
 {
-    ui->saveLBL->setToolTip("Сейчас сохраняется спектр");
+    ui->saveLBL->setToolTip(UIStrings::SAVE_LBL_ICON_TOOLTIP);
     QPropertyAnimation* anim = new QPropertyAnimation(saveLBLOpacityEffect, "opacity", this);
     if (ui->saveLBL->underMouse()) {
-        QToolTip::showText(QCursor::pos(), "Сейчас сохраняется спектр", ui->saveLBL);
+        QToolTip::showText(QCursor::pos(), UIStrings::SAVE_LBL_ICON_TOOLTIP, ui->saveLBL);
     }
 
     anim->setDuration(1000); // общая длительность
@@ -580,9 +668,9 @@ void MainWindow::showSaveLBL()
     anim->setEndValue(0.0);
     connect(anim, &QPropertyAnimation::finished, this, [this]() {
         // Возвращаем базовый tooltip
-        ui->saveLBL->setToolTip("В момент сохранения спектра тут появится значок");
+        ui->saveLBL->setToolTip(UIStrings::SAVE_LBL_BASE_TOOLTIP);
         if (ui->saveLBL->underMouse()) {
-            QToolTip::showText(QCursor::pos(), "В момент сохранения спектра тут появится значок", ui->saveLBL);
+            QToolTip::showText(QCursor::pos(), UIStrings::SAVE_LBL_BASE_TOOLTIP, ui->saveLBL);
         }
         });
 
@@ -590,7 +678,7 @@ void MainWindow::showSaveLBL()
 }
 void MainWindow::handleMatrixChanged()
 {
-    QStringList rows = ui->matrixPTE->toStringList();
+    Matrix rows = ui->matrixPTE->toStringList();
     int maxLen = 0;
     for (const QString& row : rows)
         maxLen = qMax(maxLen, row.length());
@@ -623,12 +711,12 @@ void MainWindow::handleFinished(int elapsedSec)
     ui->cancelPBN->setEnabled(  false );
     setMatrixActionsEnabled(    true  );
 
-    ui->executePBN->setText(UIStrings::START_TEXT  );
-    ui->executePBN->setToolTip(UIStrings::START_TOOLTIP);
-    this->setWindowTitle(UIStrings::MAIN_TITLE  );
+    ui->executePBN->setText( UIStrings::START_TEXT  );
+    ui->executePBN->setToolTip( UIStrings::START_TOOLTIP );
+    this->setWindowTitle( UIStrings::MAIN_TITLE  );
     if ( workerPtr->isCancelled() ) {
         workerPtr->uncancel();
-        ui->infoLBL->setText(UIStrings::CANCEL_TEXT );
+        ui->infoLBL->setText( UIStrings::CANCEL_TEXT );
         return;
     }
     int days = elapsedSec / 86400;
@@ -645,13 +733,11 @@ void MainWindow::handleFinished(int elapsedSec)
     if (seconds > 0 )
         parts << QString("%1 с").arg(seconds);
     if (parts.isEmpty()) {
-        ui->infoLBL->setText("Готово. Расчёт занял < 1 с");
+        ui->infoLBL->setText( UIStrings::READY_TEXT + QString( "< 1 с" ) );
         return;
     }
     QString elapsedStr = parts.join(' ');
-    ui->infoLBL->setText("Готово. Расчёт занял " + elapsedStr);
-
-
+    ui->infoLBL->setText( UIStrings::READY_TEXT + elapsedStr );
 }
 
 
@@ -660,7 +746,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
     // При изменение размера обновляем подписи под графиком
     if (watched == ui->spectrumCPT && event->type() == QEvent::Resize) {
-        QVector<float> vec(yCache.size());
+        SpectrumFloat vec(yCache.size());
         for (int i = 0; i < yCache.size(); ++i) {
             vec[i] = (float) yCache.at(i);
         }
@@ -721,16 +807,6 @@ void MainWindow::onAddMatrixTriggered()
     // Включаем подменю удаления (если оно было выключено)
     if (deleteMenu)
         deleteMenu->setEnabled(!matrices.isEmpty());
-
-    // Небольшое уведомление пользователю (опционально)
-    // QMessageBox::information(this, tr("Сохранено"), tr("Матрица \"%1\" сохранена.").arg(name));
-
-    // (опционально) если меню сейчас открыто и ты хочешь его обновить немедленно:
-    // if (matrixMenu && matrixMenu->isVisible()) {
-    //     // закроем и откроем заново, чтобы вызвать aboutToShow
-    //     matrixMenu->hide();
-    //     matrixMenu->show();
-    // }
 }
 
 bool MainWindow::hasCheckpoint() const
@@ -760,7 +836,7 @@ bool MainWindow::hasCheckpoint() const
     return true;
 }
 
-void MainWindow::updatePlot(const QVector<float>& spectrum)
+void MainWindow::updatePlot(const SpectrumFloat& spectrum)
 {
     if (spectrum.isEmpty()) return;
     
@@ -910,7 +986,7 @@ void MainWindow::loadSettings()
     ui->matrixPTE->setPlainText(              s.value(SettingsKeys::CODE_MATRIX                    ).toString()          );
     if (s.contains(SettingsKeys::SPECTRUM_VALUES)) {
         QVariantList values = s.value(SettingsKeys::SPECTRUM_VALUES).toList();
-        QVector<float> spectrum;
+        SpectrumFloat spectrum;
         spectrum.reserve(values.size());
         for (const QVariant &v : values)
             spectrum.append(v.toFloat());
@@ -937,6 +1013,39 @@ QString MainWindow::formatRemainingTime(int minutesTotal)
         parts << QObject::tr("%1 мин").arg(minutes);
 
     return parts.join(" ");
+}
+
+QString MainWindow::formatSpeed(double speed)
+{
+    QString suffix = "кс/с";
+    double value = speed;
+
+    if (speed >= 1e12) {
+        value = speed / 1e12;
+        suffix = "трлн кс/с";
+    }
+    else if (speed >= 1e9) {
+        value = speed / 1e9;
+        suffix = "млрд кс/с";
+    }
+    else if (speed >= 1e6) {
+        value = speed / 1e6;
+        suffix = "млн кс/с";
+    }
+    else if (speed >= 1e3) {
+        value = speed / 1e3;
+        suffix = "тыс кс/с";
+    }
+
+    int precision;
+    if (std::abs(value) >= 100) precision = 0;
+    else if (std::abs(value) >= 10) precision = 1;
+    else precision = 2;
+
+    QString str = QString::number(value, 'f', precision);
+    str.replace('.', ',');
+
+    return str + " " + suffix;
 }
 
 void MainWindow::loadMatricesArray()
@@ -1033,16 +1142,14 @@ QStringList MainWindow::listMatrixNames()
 
 QString MainWindow::defaultMatrixName()
 {
-    QString text = ui->matrixPTE->toPlainText();
-    QStringList rows = text.split('\n', Qt::SkipEmptyParts);
+    Matrix rows = ui->matrixPTE->toStringList();
     int maxLen = 0;
     for (const QString& row : rows)
         maxLen = qMax(maxLen, row.length());
-    if (text.isEmpty()) return "(0,0)";
+    if (rows.isEmpty()) return "(0,0)";
 
     int cols = 0;
-    QStringList lines = text.split('\n');
-    for (const QString& line : lines) {
+    for (const QString& line : rows) {
         // элементы через пробел, таб или что у тебя в формате матрицы
         int cnt = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts).size();
         if (cnt > cols) cols = cnt;

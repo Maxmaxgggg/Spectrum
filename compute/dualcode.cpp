@@ -1,9 +1,9 @@
-﻿#include "dualcode.h"
-#include <iostream>
+﻿#include <iostream>
 
+#include "dualcode.h"
 
 // Функция для генерации дуальной матрицы (писал GPT)
-QStringList generatorToParity(const QStringList& gen)
+Matrix generatorToParity(const Matrix& gen)
 {
     if (gen.isEmpty()) return {};
 
@@ -49,7 +49,7 @@ QStringList generatorToParity(const QStringList& gen)
     int rank = r;
     QVector<int> free_cols;
     for (int c = 0; c < n; ++c) if (pivot_row[c] == -1) free_cols.append(c);
-    QStringList parity;
+    Matrix parity;
     parity.reserve(free_cols.size());
     for (int fcol : free_cols) {
         QVector<uint64_t> vec(words, 0);
@@ -96,7 +96,7 @@ static mpz_class krawtchouk(const std::vector<std::vector<mpz_class>>& C, int n,
 }
 
 // Функция, которая рассчитывает спектр из дуального и записывает его в QStringList
-QStringList computeSpectrumFromDual(quint64* dualSpectrum, int numOfCols, int numOfRows) {
+SpectrumText computeSpectrumFromDual(quint64* dualSpectrum, int numOfCols, int numOfRows) {
 
     // Переводим параметры дуального кода в обычный
     numOfRows = numOfCols - numOfRows;
@@ -126,7 +126,7 @@ QStringList computeSpectrumFromDual(quint64* dualSpectrum, int numOfCols, int nu
         A[i] = Ai;
     }
 
-    QStringList result;
+    SpectrumText result;
     for (int i = 0; i <= numOfCols; ++i) {
         QString Ai_str = QString::fromStdString(A[i].get_str(10));
         if (Ai_str != "0") {

@@ -14,11 +14,15 @@
 #include "computeSpectrumKernel.cuh"
 #include "bitmask.h"
 #include "settings.h"
+#include "save.h"
+
 using namespace std::chrono;
 enum LoadMode {
     Reset,
-    FromCheckpoint
+    FromCheckpoint,
+    FromSave
 };
+
 Q_DECLARE_METATYPE(LoadMode)
 class Worker : public QObject
 {
@@ -41,15 +45,15 @@ signals:
     // Сигнал для обновления progressbar-а
     void updateInfoPBR(       int percent                       );
     // Сигнал для обновления текстового спектра
-    void updateSpectrumPTE(   const QStringList spectrum        );
+    void updateSpectrumPTE(   const SpectrumText spectrum       );
     // Сигнал для обновления графического спектра
-    void updateSpectrumPlot(  const QVector<float> spectrum     );
+    void updateSpectrumPlot(  const SpectrumFloat spectrum      );
     // Сигнал, посылаемый при возникновении ошибки
     void errorOccurred(       const QString& message            );
     // Сигнал, посылаемый при окончании расчета спектра
     void finished( int );
     // Сигнал для обновления таймера
-    void updateRemainingMinutes(int elapsedSec, int minutesLeft);
+    void updateRemainingMinutes( int elapsedSec, int minutesLeft, double speed );
     // Сигнал того, что надо показать значок сохранения
     void showSaveLBL();
 private:
@@ -117,7 +121,7 @@ private:
     
     std::atomic<int> paused    { 0 };
     std::atomic<int> cancelled { 0 };
-    
+    std::atomic_bool requestRunState = false;
 
     ComputationSettings         settings;
     RunState                    runState;

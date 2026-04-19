@@ -34,7 +34,7 @@ public:
 protected:
     void resizeEvent(QResizeEvent *event) override {
         QMainWindow::resizeEvent(event);
-        QVector<float> vec(yCache.size());
+        SpectrumFloat vec(yCache.size());
         for (int i = 0; i < yCache.size(); ++i) {
             vec[i] = (float) yCache.at(i);
         }
@@ -58,15 +58,15 @@ private slots:
     void on_exitPBN_clicked();
     void on_settingsPBN_clicked();
     void on_cancelPBN_clicked();
-
+    void on_saveSpectrumACN_triggered();
     void handleStrValChanged();
     void handleUpdateInfoPBR(int percent);
     void sendSettingsToWorker();
-    void handleUpdateSpectrumPlot( const QVector<float> spectrum ); // сигнал от воркера
-    void handleUpdateSpectrumPTE(  const QStringList    spectrum );
+    void handleUpdateSpectrumPlot( const SpectrumFloat   spectrum ); // сигнал от воркера
+    void handleUpdateSpectrumPTE(  const SpectrumText    spectrum );
     void handleError(const QString& message);
     void handleFinished(int);
-    void handleUpdateRemainingMinutes(int, int);
+    void handleUpdateRemainingMinutes(int, int, double);
     void showSaveLBL();
     void handleMatrixChanged();
 
@@ -105,7 +105,7 @@ private:
     int remainingMinutes = -1;
 
 
-    void updatePlot(const QVector<float>& spectrum);
+    void updatePlot(const SpectrumFloat& spectrum);
     QVector<QString> buildAxisLabels(int size, int step) const;
     void setWorker();
     void setMatrixMenu();
@@ -119,7 +119,7 @@ private:
     void saveSettings(); 
     void loadSettings(); 
     QString formatRemainingTime(int minutesTotal);
-
+    QString formatSpeed(double speed);
 
 
     QJsonArray matrices;
@@ -137,6 +137,7 @@ private:
     #ifdef Q_OS_WIN
         ITaskbarList3* taskbar = nullptr;
         HWND hwnd = nullptr;
+        bool taskbarAvailable = false;
     #endif
 };
 

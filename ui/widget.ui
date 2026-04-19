@@ -218,6 +218,8 @@
     <property name="title">
      <string>Спектры</string>
     </property>
+    <addaction name="saveSpectrumACN"/>
+    <addaction name="loadSpectrumACN"/>
    </widget>
    <addaction name="settingsACN"/>
    <addaction name="matrixMNU"/>
@@ -267,6 +269,16 @@
   <action name="loadMatrixFromFileACN">
    <property name="text">
     <string>Загрузить матрицу из файла</string>
+   </property>
+  </action>
+  <action name="saveSpectrumACN">
+   <property name="text">
+    <string>Сохранить спектр</string>
+   </property>
+  </action>
+  <action name="loadSpectrumACN">
+   <property name="text">
+    <string>Загрузить спектр</string>
    </property>
   </action>
  </widget>

@@ -3,6 +3,8 @@
 
 #include <QPlainTextEdit>
 #include <QRegularExpression>
+#include "defines.h"
+
 class FilterPlainTextEdit : public QPlainTextEdit
 {
     Q_OBJECT
