@@ -567,11 +567,14 @@ static void testOversizedMatrixRejected()
 // Запуск: SpectrumTests.exe --dump <файл>
 static int dumpGolden(const QString& path)
 {
-    struct Case { QString name; RunConfig cfg; };
+    // analytic заполняется там, где спектр известен из теории; пустой означает,
+    // что абсолютной проверки распределения для случая нет.
+    struct Case { QString name; RunConfig cfg; Spectrum analytic; };
     QVector<Case> cases;
 
     auto add = [&cases](const QString& name, const QStringList& m, Algorithm alg,
-                        int maxRows, ComputeDevice dev, int blocks = 64, int threads = 256) {
+                        int maxRows, ComputeDevice dev, int blocks = 64, int threads = 256,
+                        const Spectrum& analytic = Spectrum()) {
         RunConfig c;
         c.matrix     = m;
         c.algorithm  = alg;
@@ -579,7 +582,7 @@ static int dumpGolden(const QString& path)
         c.device     = dev;
         c.blocksGpu  = blocks;
         c.threadsGpu = threads;
-        cases.append({ name, c });
+        cases.append({ name, c, analytic });
     };
 
     const QStringList golay = Reference::golay24_12();
@@ -611,6 +614,25 @@ static int dumpGolden(const QString& path)
     add("GPU XOR rnd(50,100) r<=10 (8x64)", m50, Algorithm::SimpleXor, 10,
         ComputeDevice::GPU, 8, 64);
 
+    // Единичные матрицы: I(n) порождает вообще все слова, поэтому спектр равен
+    // C(n,w) точно, а при частичном переборе — C(n,w) для w <= maxRows.
+    // На случайных матрицах сверять можно только количество слов; здесь
+    // проверяется всё распределение целиком, без всякого предыдущего прогона.
+    for (ComputeDevice d : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+        const QString dn = d == ComputeDevice::CPU ? QStringLiteral("CPU") : QStringLiteral("GPU");
+        add(dn + " XOR I(40) r<=7", Reference::identity(40), Algorithm::SimpleXor, 7, d,
+            64, 256, Reference::identityPartialSpectrum(40, 7));
+        add(dn + " XOR I(20) полный", Reference::identity(20), Algorithm::SimpleXor, 20, d,
+            64, 256, Reference::identityPartialSpectrum(20, 20));
+        add(dn + " Грей I(24)", Reference::identity(24), Algorithm::GrayCode, 24, d,
+            64, 256, Reference::identityPartialSpectrum(24, 24));
+    }
+    add("GPU XOR I(50) r<=10", Reference::identity(50), Algorithm::SimpleXor, 10,
+        ComputeDevice::GPU, 64, 256, Reference::identityPartialSpectrum(50, 10));
+    // Тот же расчёт при мелком разбиении — распределение обязано не измениться.
+    add("GPU XOR I(50) r<=10 (8x64)", Reference::identity(50), Algorithm::SimpleXor, 10,
+        ComputeDevice::GPU, 8, 64, Reference::identityPartialSpectrum(50, 10));
+
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
         out << QStringLiteral("не удалось открыть ") << path << Qt::endl;
@@ -637,13 +659,49 @@ static int dumpGolden(const QString& path)
             fs << "  " << it.key() << ' ' << it.value() << '\n';
         fs << "  всего " << totalWords << '\n';
 
-        out << QStringLiteral("  %1  %2 с, слов %3")
-                   .arg(c.name, -34).arg(sec, 0, 'f', 2).arg(totalWords) << Qt::endl;
+        // Абсолютные проверки — не сравнение с прошлым прогоном, а с теорией.
+        //
+        // 1. Число перебранных слов равно сумме сочетаний и не зависит от
+        //    содержимого матрицы: ловит потерянные и посчитанные дважды
+        //    комбинации.
+        QString verdict;
+        const quint64 wantTotal = expectedTotalOps(c.cfg);
+        if (totalWords != wantTotal) {
+            ++g_failed;
+            verdict = QStringLiteral("  ПРОВАЛ: слов %1, а должно быть %2")
+                          .arg(totalWords).arg(wantTotal);
+        }
+        // 2. Там, где спектр известен из теории, сверяем распределение целиком.
+        else if (!c.analytic.isEmpty()) {
+            if (s == stripZeros(c.analytic)) {
+                ++g_passed;
+                verdict = QStringLiteral("  == C(n,w)");
+            } else {
+                ++g_failed;
+                verdict = QStringLiteral("  ПРОВАЛ: спектр разошёлся с C(n,w)");
+                for (auto it = stripZeros(c.analytic).constBegin();
+                     it != stripZeros(c.analytic).constEnd(); ++it)
+                    if (s.value(it.key(), 0) != it.value())
+                        verdict += QStringLiteral("\n      вес %1: ожидалось %2, получено %3")
+                                       .arg(it.key()).arg(it.value())
+                                       .arg(s.value(it.key(), 0));
+            }
+        }
+        else {
+            ++g_passed;
+        }
+
+        out << QStringLiteral("  %1  %2 с, слов %3%4")
+                   .arg(c.name, -34).arg(sec, 0, 'f', 2).arg(totalWords).arg(verdict)
+            << Qt::endl;
         out.flush();
     }
     f.close();
-    out << QStringLiteral("записано в ") << path << Qt::endl;
-    return 0;
+    out << Qt::endl
+        << QStringLiteral("записано в ") << path << Qt::endl
+        << QStringLiteral("проверок пройдено ") << g_passed
+        << QStringLiteral(", провалено ") << g_failed << Qt::endl;
+    return g_failed == 0 ? 0 : 1;
 }
 
 // ------------------------------------------------------------------- замер
