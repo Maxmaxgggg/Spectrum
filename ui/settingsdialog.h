@@ -22,7 +22,7 @@ public:
     ~SettingsDialog() override;
 
 public: signals:
-    // Сигнал для отправки настроек виджету
+    // РЎРёРіРЅР°Р» РґР»СЏ РѕС‚РїСЂР°РІРєРё РЅР°СЃС‚СЂРѕРµРє РІРёРґР¶РµС‚Сѓ
     void sendSettingsToWidget( const QJsonObject& settings );
 public slots:
     void handleMatrixChanged(int rows, int cols);

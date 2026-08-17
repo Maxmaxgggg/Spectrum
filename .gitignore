@@ -1,7 +1,9 @@
 x64/
-*.vcxproj
-*.vcxproj.filters
+GeneratedFiles/
+
+# Файлы проекта версионируются: без них (и без /utf-8 в них) сборка
+# невоспроизводима на другой машине.
 *.vcxproj.user
 *.aps
-/.vs/VSWorkspaceState.json
-/.vs/SpectrumCUDA2/v17
+
+.vs/

@@ -6,7 +6,7 @@
 typedef uint64_t quint64;
 #pragma once
 
-// Макрос для проверки ошибок
+// РњР°РєСЂРѕСЃ РґР»СЏ РїСЂРѕРІРµСЂРєРё РѕС€РёР±РѕРє
 #ifndef CUDA_CALL
 #define CUDA_CALL(call) do { \
     cudaError_t err = (call); \

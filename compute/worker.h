@@ -42,28 +42,28 @@ public slots:
     void setSettings( const QJsonObject& jsonSettings );
     void initializeRunState(LoadMode lm);
 signals:
-    // Сигнал для обновления progressbar-а
+    // РЎРёРіРЅР°Р» РґР»СЏ РѕР±РЅРѕРІР»РµРЅРёСЏ progressbar-Р°
     void updateInfoPBR(       int percent                       );
-    // Сигнал для обновления текстового спектра
+    // РЎРёРіРЅР°Р» РґР»СЏ РѕР±РЅРѕРІР»РµРЅРёСЏ С‚РµРєСЃС‚РѕРІРѕРіРѕ СЃРїРµРєС‚СЂР°
     void updateSpectrumPTE(   const SpectrumText spectrum       );
-    // Сигнал для обновления графического спектра
+    // РЎРёРіРЅР°Р» РґР»СЏ РѕР±РЅРѕРІР»РµРЅРёСЏ РіСЂР°С„РёС‡РµСЃРєРѕРіРѕ СЃРїРµРєС‚СЂР°
     void updateSpectrumPlot(  const SpectrumFloat spectrum      );
-    // Сигнал, посылаемый при возникновении ошибки
+    // РЎРёРіРЅР°Р», РїРѕСЃС‹Р»Р°РµРјС‹Р№ РїСЂРё РІРѕР·РЅРёРєРЅРѕРІРµРЅРёРё РѕС€РёР±РєРё
     void errorOccurred(       const QString& message            );
-    // Сигнал, посылаемый при окончании расчета спектра
+    // РЎРёРіРЅР°Р», РїРѕСЃС‹Р»Р°РµРјС‹Р№ РїСЂРё РѕРєРѕРЅС‡Р°РЅРёРё СЂР°СЃС‡РµС‚Р° СЃРїРµРєС‚СЂР°
     void finished( int );
-    // Сигнал для обновления таймера
+    // РЎРёРіРЅР°Р» РґР»СЏ РѕР±РЅРѕРІР»РµРЅРёСЏ С‚Р°Р№РјРµСЂР°
     void updateRemainingMinutes( int elapsedSec, int minutesLeft, double speed );
-    // Сигнал того, что надо показать значок сохранения
+    // РЎРёРіРЅР°Р» С‚РѕРіРѕ, С‡С‚Рѕ РЅР°РґРѕ РїРѕРєР°Р·Р°С‚СЊ Р·РЅР°С‡РѕРє СЃРѕС…СЂР°РЅРµРЅРёСЏ
     void showSaveLBL();
 private:
-    /* Функции для работы с биноминальными коэффициентами */
+    /* Р¤СѓРЅРєС†РёРё РґР»СЏ СЂР°Р±РѕС‚С‹ СЃ Р±РёРЅРѕРјРёРЅР°Р»СЊРЅС‹РјРё РєРѕСЌС„С„РёС†РёРµРЅС‚Р°РјРё */
     static    quint64 sumCombinations(quint64 k, quint64 maxComb);
     void      freeBinomTable(quint64** C, unsigned maxN);
     quint64** buildBinomTable(unsigned maxN, unsigned maxComb);
 
 
-    /* Функции для расчета спектра кода */
+    /* Р¤СѓРЅРєС†РёРё РґР»СЏ СЂР°СЃС‡РµС‚Р° СЃРїРµРєС‚СЂР° РєРѕРґР° */
     void      computeSpectrumGpuGrayShort(  
         quint64 numOfRows,
         quint64 numOfCols,
@@ -109,12 +109,12 @@ private:
         quint64 maxComb 
     );
 
-    /* Функции, посылающие сигнал для обновления интерфейса */
+    /* Р¤СѓРЅРєС†РёРё, РїРѕСЃС‹Р»Р°СЋС‰РёРµ СЃРёРіРЅР°Р» РґР»СЏ РѕР±РЅРѕРІР»РµРЅРёСЏ РёРЅС‚РµСЂС„РµР№СЃР° */
     void updateSpectrum(int numOfCols);
     void updateSpectrumDual( int numOfCols, int numOfRows );
 
 
-    /* Функции для работы с чекпоинтами */
+    /* Р¤СѓРЅРєС†РёРё РґР»СЏ СЂР°Р±РѕС‚С‹ СЃ С‡РµРєРїРѕРёРЅС‚Р°РјРё */
     void    makeCheckpoint(int numOfCols);
     void    loadCheckpoint();
 
@@ -140,7 +140,7 @@ private:
 
 
 
-    // Число масок между двумя чекпоинтами
+    // Р§РёСЃР»Рѕ РјР°СЃРѕРє РјРµР¶РґСѓ РґРІСѓРјСЏ С‡РµРєРїРѕРёРЅС‚Р°РјРё
     quint64 chunkSize = 1 << 20;
 
 

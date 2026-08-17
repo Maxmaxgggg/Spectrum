@@ -15,41 +15,41 @@ enum TimeInterval {
 
 struct ComputationSettings
 {
-    // Порождающая матрица кода
+    // РџРѕСЂРѕР¶РґР°СЋС‰Р°СЏ РјР°С‚СЂРёС†Р° РєРѕРґР°
     QStringList matrix;
-    // Тип используемого алгоритма (Простой XOR, Код Грея, Дуальный код)
+    // РўРёРї РёСЃРїРѕР»СЊР·СѓРµРјРѕРіРѕ Р°Р»РіРѕСЂРёС‚РјР° (РџСЂРѕСЃС‚РѕР№ XOR, РљРѕРґ Р“СЂРµСЏ, Р”СѓР°Р»СЊРЅС‹Р№ РєРѕРґ)
     enum Algorithm { SimpleXor = 0, GrayCode = 1, DualCode = 2 };
-    // Тип перебора (Полный, Частичный)
+    // РўРёРї РїРµСЂРµР±РѕСЂР° (РџРѕР»РЅС‹Р№, Р§Р°СЃС‚РёС‡РЅС‹Р№)
     enum EnumerationType { Full = 0, Partial = 1 };
-    // Тип вычислителя (ЦП, ГП)
+    // РўРёРї РІС‹С‡РёСЃР»РёС‚РµР»СЏ (Р¦Рџ, Р“Рџ)
     enum ComputeDevice { CPU = 0, GPU = 1 };
 
     Algorithm       algorithmType = SimpleXor;
     EnumerationType enumType = Full;
     ComputeDevice   compDev = CPU;
-    // Максимальное число перебираемых строк
+    // РњР°РєСЃРёРјР°Р»СЊРЅРѕРµ С‡РёСЃР»Рѕ РїРµСЂРµР±РёСЂР°РµРјС‹С… СЃС‚СЂРѕРє
     int             maxRows = 0;
 
-    // Настройки вычислителя
+    // РќР°СЃС‚СЂРѕР№РєРё РІС‹С‡РёСЃР»РёС‚РµР»СЏ
     struct computeDeviceSettings {
-        // Число потоков ЦП
+        // Р§РёСЃР»Рѕ РїРѕС‚РѕРєРѕРІ Р¦Рџ
         int threadsCpu = 1;
-        // Число блоков ГП
+        // Р§РёСЃР»Рѕ Р±Р»РѕРєРѕРІ Р“Рџ
         int blocksGpu = 1;
-        // Число нитей ГП
+        // Р§РёСЃР»Рѕ РЅРёС‚РµР№ Р“Рџ
         int threadsGpu = 1;
     } compDevSet;
 
     struct timeIntervalSettings {
-        // Частота сохранения спектра в реестр
+        // Р§Р°СЃС‚РѕС‚Р° СЃРѕС…СЂР°РЅРµРЅРёСЏ СЃРїРµРєС‚СЂР° РІ СЂРµРµСЃС‚СЂ
         int saveSpectrumInterval = TenSeconds;
-        // Частота обновления спетрка в gui 
+        // Р§Р°СЃС‚РѕС‚Р° РѕР±РЅРѕРІР»РµРЅРёСЏ СЃРїРµС‚СЂРєР° РІ gui 
         int updateSpectrumInterval = OneSecond;
     } timeIntSet;
 
     ComputationSettings() noexcept = default;
 
-    // Конструктор копирования
+    // РљРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ РєРѕРїРёСЂРѕРІР°РЅРёСЏ
     ComputationSettings(const ComputationSettings& other) noexcept
         : algorithmType(other.algorithmType)
         , enumType(other.enumType)
@@ -58,7 +58,7 @@ struct ComputationSettings
         , compDevSet(other.compDevSet)
         , timeIntSet(other.timeIntSet) { }
 
-    // Рекомендуется также явно определить оператор присваивания
+    // Р РµРєРѕРјРµРЅРґСѓРµС‚СЃСЏ С‚Р°РєР¶Рµ СЏРІРЅРѕ РѕРїСЂРµРґРµР»РёС‚СЊ РѕРїРµСЂР°С‚РѕСЂ РїСЂРёСЃРІР°РёРІР°РЅРёСЏ
     ComputationSettings& operator=(const ComputationSettings& other) noexcept
     {
         if (this == &other) return *this;
@@ -73,7 +73,7 @@ struct ComputationSettings
     }
     bool operator==(const ComputationSettings& other) const
     {
-        // Не сравниваем между собой настройки времени
+        // РќРµ СЃСЂР°РІРЅРёРІР°РµРј РјРµР¶РґСѓ СЃРѕР±РѕР№ РЅР°СЃС‚СЂРѕР№РєРё РІСЂРµРјРµРЅРё
         return matrix == other.matrix &&
             algorithmType == other.algorithmType &&
             enumType == other.enumType &&
@@ -83,7 +83,7 @@ struct ComputationSettings
             compDevSet.blocksGpu == other.compDevSet.blocksGpu &&
             compDevSet.threadsGpu == other.compDevSet.threadsGpu;
     }
-    // Отдельный случай, когда простой XOR, все параметры совпадают, но новое maxRows больше
+    // РћС‚РґРµР»СЊРЅС‹Р№ СЃР»СѓС‡Р°Р№, РєРѕРіРґР° РїСЂРѕСЃС‚РѕР№ XOR, РІСЃРµ РїР°СЂР°РјРµС‚СЂС‹ СЃРѕРІРїР°РґР°СЋС‚, РЅРѕ РЅРѕРІРѕРµ maxRows Р±РѕР»СЊС€Рµ
     /*bool operator<=(const ComputationSettings & other) const
     {
         return matrix == other.matrix &&
@@ -159,7 +159,7 @@ struct ComputationSettings
         seed = qHash(static_cast<int>(algorithmType), seed);
         seed = qHash(static_cast<int>(enumType), seed);
 
-        // Подумать, как реализовать, чтобы можно было сначала перебрать для maxRows = n, а потом для n+1
+        // РџРѕРґСѓРјР°С‚СЊ, РєР°Рє СЂРµР°Р»РёР·РѕРІР°С‚СЊ, С‡С‚РѕР±С‹ РјРѕР¶РЅРѕ Р±С‹Р»Рѕ СЃРЅР°С‡Р°Р»Р° РїРµСЂРµР±СЂР°С‚СЊ РґР»СЏ maxRows = n, Р° РїРѕС‚РѕРј РґР»СЏ n+1
         seed = qHash(maxRows, seed);
         seed = qHash(static_cast<int>(compDev), seed);
 
@@ -172,18 +172,18 @@ struct ComputationSettings
 };
 
 struct RunState {
-    // Текущее перебираемое число строк
+    // РўРµРєСѓС‰РµРµ РїРµСЂРµР±РёСЂР°РµРјРѕРµ С‡РёСЃР»Рѕ СЃС‚СЂРѕРє
     quint64 rOffset = 0ULL;
-    // Индекс чанка
+    // РРЅРґРµРєСЃ С‡Р°РЅРєР°
     quint64 chunkOffset = 0ULL;
-    // Число произведенных операций
+    // Р§РёСЃР»Рѕ РїСЂРѕРёР·РІРµРґРµРЅРЅС‹С… РѕРїРµСЂР°С†РёР№
     quint64 doneOps = 0ULL;
-    // Число прошедних секунд
+    // Р§РёСЃР»Рѕ РїСЂРѕС€РµРґРЅРёС… СЃРµРєСѓРЅРґ
     long long elapsedSec = 0;
-    // Текущий спектр
+    // РўРµРєСѓС‰РёР№ СЃРїРµРєС‚СЂ
     QVector<quint64> spectrum;
 
-    // Функция для сохранения текущего состояния вычислений
+    // Р¤СѓРЅРєС†РёСЏ РґР»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ С‚РµРєСѓС‰РµРіРѕ СЃРѕСЃС‚РѕСЏРЅРёСЏ РІС‹С‡РёСЃР»РµРЅРёР№
     void saveProgress(
         quint64 rOffset,
         quint64 chunkOffset,
@@ -243,10 +243,10 @@ struct Checkpoint : public ComputationSettings, public RunState
     {
         QJsonObject obj;
 
-        // Настройки
+        // РќР°СЃС‚СЂРѕР№РєРё
         obj["settings"] = ComputationSettings::toJson();
 
-        // Состояние
+        // РЎРѕСЃС‚РѕСЏРЅРёРµ
         obj["runState"] = RunState::toJson();
 
         return obj;
@@ -255,13 +255,13 @@ struct Checkpoint : public ComputationSettings, public RunState
     {
         Checkpoint c;
 
-        // Загружаем настройки
+        // Р—Р°РіСЂСѓР¶Р°РµРј РЅР°СЃС‚СЂРѕР№РєРё
         if (obj.contains("settings") && obj["settings"].isObject()) {
             ComputationSettings s = ComputationSettings::fromJson(obj["settings"].toObject());
             static_cast<ComputationSettings&>(c) = s;
         }
 
-        // Загружаем состояние вычислений
+        // Р—Р°РіСЂСѓР¶Р°РµРј СЃРѕСЃС‚РѕСЏРЅРёРµ РІС‹С‡РёСЃР»РµРЅРёР№
         if (obj.contains("runState") && obj["runState"].isObject()) {
             RunState rs = RunState::fromJson(obj["runState"].toObject());
 

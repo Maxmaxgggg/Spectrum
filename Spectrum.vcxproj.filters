@@ -1,0 +1,129 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>qml;cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;hm;inl;inc;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>qrc;rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Form Files">
+      <UniqueIdentifier>{99349809-55BA-4b9d-BF79-8FDBB0286EB3}</UniqueIdentifier>
+      <Extensions>ui</Extensions>
+    </Filter>
+    <Filter Include="Translation Files">
+      <UniqueIdentifier>{639EADAA-A684-42e4-A9AD-28FC9BCB8F7C}</UniqueIdentifier>
+      <Extensions>ts</Extensions>
+    </Filter>
+    <Filter Include="ui">
+      <UniqueIdentifier>{126b5552-1f85-41a0-84c9-11f695a0842c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="compute">
+      <UniqueIdentifier>{76f4944d-8bdf-47e5-b510-dcad4546a4e6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="helpers">
+      <UniqueIdentifier>{7018f3f2-811c-4419-b4f0-199d93f8c6aa}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="save">
+      <UniqueIdentifier>{5f3c0076-b36f-4ea9-be9a-d532e251fb08}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="qcustomplot.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\widget.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\settingsdialog.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\filterplaintextedit.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="compute\worker.cpp">
+      <Filter>compute</Filter>
+    </ClCompile>
+    <ClCompile Include="compute\dualcode.cpp">
+      <Filter>compute</Filter>
+    </ClCompile>
+    <ClCompile Include="helpers\workwithmatrix.cpp">
+      <Filter>helpers</Filter>
+    </ClCompile>
+    <ClCompile Include="save.cpp">
+      <Filter>save</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="compute\computeSpectrumKernel.cuh">
+      <Filter>compute</Filter>
+    </ClInclude>
+    <ClInclude Include="compute\dualcode.h">
+      <Filter>compute</Filter>
+    </ClInclude>
+    <ClInclude Include="helpers\workwithmatrix.h">
+      <Filter>helpers</Filter>
+    </ClInclude>
+    <ClInclude Include="settings.h">
+      <Filter>compute</Filter>
+    </ClInclude>
+    <ClInclude Include="save.h">
+      <Filter>save</Filter>
+    </ClInclude>
+    <ClInclude Include="defines.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="types.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="qcustomplot.h">
+      <Filter>Header Files</Filter>
+    </QtMoc>
+    <QtMoc Include="ui\widget.h">
+      <Filter>ui</Filter>
+    </QtMoc>
+    <QtMoc Include="ui\settingsdialog.h">
+      <Filter>ui</Filter>
+    </QtMoc>
+    <QtMoc Include="ui\filterplaintextedit.h">
+      <Filter>ui</Filter>
+    </QtMoc>
+    <QtMoc Include="compute\worker.h">
+      <Filter>compute</Filter>
+    </QtMoc>
+  </ItemGroup>
+  <ItemGroup>
+    <QtUic Include="ui\widget.ui">
+      <Filter>Form Files</Filter>
+    </QtUic>
+    <QtUic Include="ui\settingsdialog.ui">
+      <Filter>Form Files</Filter>
+    </QtUic>
+  </ItemGroup>
+  <ItemGroup>
+    <QtRcc Include="q.qrc">
+      <Filter>Resource Files</Filter>
+    </QtRcc>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Spectrum.rc">
+      <Filter>Resource Files</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CudaCompile Include="compute\computeSpectrumKernel.cu">
+      <Filter>compute</Filter>
+    </CudaCompile>
+  </ItemGroup>
+</Project>
