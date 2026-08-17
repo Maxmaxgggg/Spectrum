@@ -1206,9 +1206,6 @@ void Worker::makeCheckpoint(int numOfCols)
     s.endGroup();
     emit showSaveLBL();
 }
-void Worker::loadCheckpoint()
-{
-}
 void Worker::computeSpectrum()
 {
 

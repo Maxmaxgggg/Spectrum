@@ -83,18 +83,6 @@ struct ComputationSettings
             compDevSet.blocksGpu == other.compDevSet.blocksGpu &&
             compDevSet.threadsGpu == other.compDevSet.threadsGpu;
     }
-    // Отдельный случай, когда простой XOR, все параметры совпадают, но новое maxRows больше
-    /*bool operator<=(const ComputationSettings & other) const
-    {
-        return matrix == other.matrix &&
-            (algorithmType == other.algorithmType) && (algorithmType == Algorithm::SimpleXor) &&
-            enumType == other.enumType &&
-            maxRows <= other.maxRows &&
-            compDev == other.compDev &&
-            compDevSet.threadsCpu == other.compDevSet.threadsCpu &&
-            compDevSet.blocksGpu == other.compDevSet.blocksGpu &&
-            compDevSet.threadsGpu == other.compDevSet.threadsGpu;
-    }*/
     QJsonObject toJson() const
     {
         QJsonObject obj;
@@ -235,39 +223,5 @@ struct RunState {
         }
 
         return s;
-    }
-};
-struct Checkpoint : public ComputationSettings, public RunState
-{
-    QJsonObject toJson() const
-    {
-        QJsonObject obj;
-
-        // Настройки
-        obj["settings"] = ComputationSettings::toJson();
-
-        // Состояние
-        obj["runState"] = RunState::toJson();
-
-        return obj;
-    }
-    static Checkpoint fromJson(const QJsonObject& obj)
-    {
-        Checkpoint c;
-
-        // Загружаем настройки
-        if (obj.contains("settings") && obj["settings"].isObject()) {
-            ComputationSettings s = ComputationSettings::fromJson(obj["settings"].toObject());
-            static_cast<ComputationSettings&>(c) = s;
-        }
-
-        // Загружаем состояние вычислений
-        if (obj.contains("runState") && obj["runState"].isObject()) {
-            RunState rs = RunState::fromJson(obj["runState"].toObject());
-
-            static_cast<RunState&>(c) = rs;
-        }
-
-        return c;
     }
 };

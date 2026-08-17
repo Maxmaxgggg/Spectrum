@@ -59,9 +59,6 @@
     <ClCompile Include="helpers\workwithmatrix.cpp">
       <Filter>helpers</Filter>
     </ClCompile>
-    <ClCompile Include="save.cpp">
-      <Filter>save</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="compute\computeSpectrumKernel.cuh">
@@ -75,9 +72,6 @@
     </ClInclude>
     <ClInclude Include="settings.h">
       <Filter>compute</Filter>
-    </ClInclude>
-    <ClInclude Include="save.h">
-      <Filter>save</Filter>
     </ClInclude>
     <ClInclude Include="defines.h">
       <Filter>Source Files</Filter>

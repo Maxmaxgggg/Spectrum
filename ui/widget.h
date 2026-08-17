@@ -58,8 +58,6 @@ private slots:
     void on_exitPBN_clicked();
     void on_settingsPBN_clicked();
     void on_cancelPBN_clicked();
-    void on_saveSpectrumACN_triggered();
-    void handleStrValChanged();
     void handleUpdateInfoPBR(int percent);
     void sendSettingsToWorker();
     void handleUpdateSpectrumPlot( const SpectrumFloat   spectrum ); // сигнал от воркера

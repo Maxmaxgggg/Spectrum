@@ -16,7 +16,6 @@
     <ClCompile Include="helpers\workwithmatrix.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="qcustomplot.cpp" />
-    <ClCompile Include="save.cpp" />
     <ClCompile Include="ui\filterplaintextedit.cpp" />
     <ClCompile Include="ui\settingsdialog.cpp" />
     <ClCompile Include="ui\widget.cpp" />
@@ -25,7 +24,6 @@
     <ClInclude Include="compute\computeSpectrumKernel.cuh" />
     <ClInclude Include="compute\dualcode.h" />
     <ClInclude Include="defines.h" />
-    <ClInclude Include="save.h" />
     <ClInclude Include="settings.h" />
     <ClInclude Include="types.h" />
     <QtMoc Include="compute\worker.h" />

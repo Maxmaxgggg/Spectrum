@@ -12,9 +12,7 @@
 #include "defines.h"
 #include "dualcode.h"
 #include "computeSpectrumKernel.cuh"
-#include "bitmask.h"
 #include "settings.h"
-#include "save.h"
 
 using namespace std::chrono;
 enum LoadMode {
@@ -116,7 +114,6 @@ private:
 
     /* Функции для работы с чекпоинтами */
     void    makeCheckpoint(int numOfCols);
-    void    loadCheckpoint();
 
     
     std::atomic<int> paused    { 0 };

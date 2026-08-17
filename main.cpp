@@ -1,6 +1,5 @@
 #include "widget.h"
 #include "workwithmatrix.h"
-#include "bitmask.h"
 
 int main(int argc, char *argv[])
 {

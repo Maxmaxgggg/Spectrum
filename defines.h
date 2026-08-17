@@ -18,32 +18,18 @@ namespace Constants
 
 namespace SettingsKeys
 {
-    constexpr const char PROGRESSBAR_MS[]           = "refreshProgressbarMs";
-    constexpr const char SPECTRUM_MS[]              = "refreshSpectrumMs";
-    constexpr const char SPECTRUM_COLOR[]           = "spectrumColor";
     constexpr const char WIDGET_GEOMETRY[]          = "geometry";
-    constexpr const char SETTINGS_GEOMETRY[]        = "settingsGeometry";
     constexpr const char SPLITTER_STATE[]           = "splitterState";
     constexpr const char COMPUTATION_SETTINGS[]     = "computationSettings";
     constexpr const char CODE_MATRIX[]              = "matrix";
     constexpr const char SPECTRUM_TEXT[]            = "spectrumText";
     constexpr const char SPECTRUM_VALUES[]          = "spectrumValues";
-    constexpr const char TRANSPARENCY_VALUE[]       = "transparencyValue";
     constexpr const char MATRICES_JSON[]            = "matricesJson";
 }
 
 namespace DefaultValues
 {
-    constexpr int  PROGRESSBAR_MS       = 100;
-    constexpr int  TRANSPARENCY_VALUE   = 50;
-    constexpr int  SPECTRUM_MS          = 500;
-    constexpr int  STRINGS_VALUE        = 1;
-    constexpr int  STRINGS_MAX_VALUE    = 1;
     constexpr int  SPECTRUM_COLOR       = 0;
-
-    constexpr bool USE_GPU              = true;
-    constexpr bool USE_GRAY_CODE        = false;
-    constexpr bool USE_DUAL_CODE        = false;
 }
 
 
