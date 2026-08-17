@@ -53,6 +53,24 @@ __device__ inline quint64 generateBitMaskGPU(const quint64* binomTable, unsigned
 __device__ inline int bitPosFromSingleBit(quint64 x) {
     return __ffsll(x) - 1;
 }
+
+// Следующая маска с тем же числом единиц в возрастающем числовом порядке —
+// приём Госпера. Деление из классической записи заменено сдвигом: младший
+// установленный бит есть степень двойки, и его позиция и есть величина сдвига.
+//
+// Вызывать только при v != 0 и только когда следующая комбинация существует.
+__device__ __forceinline__ quint64 gosperNext(quint64 v)
+{
+    const int     t  = __ffsll(v) - 1;      // позиция младшей единицы
+    const quint64 rr = v + (1ULL << t);
+    return rr | ((v ^ rr) >> (t + 2));
+}
+
+// Разворот младших k бит: бит p переходит в позицию k-1-p.
+__device__ __forceinline__ quint64 reverseLowBits(quint64 v, int k)
+{
+    return __brevll(v) >> (64 - k);
+}
 // Функция для генерации следующего массива позиций из текущего
 __device__ __forceinline__ bool nextPositions(int16_t* a, int k, int n)
 {
@@ -190,45 +208,61 @@ __global__ void computeSpectrumKernelShort(
     if (start < chunkSize) {
         quint64 end = start + combosPerThread;
         if (end > chunkSize) end = chunkSize;
+        const quint64 count = end - start;
 
         quint64 codeword[Constants::MAX_BLOCKWORDS];
         for (int b = 0; b < blockCount; ++b) codeword[b] = 0ULL;
 
-        quint64 mask = generateBitMaskGPU(d_binomTable, (unsigned)k, (unsigned)r,
-                                          chunkOffset + start);
+        // Комбинации нумеруются лексикографически по возрастанию позиций —
+        // этот порядок задаёт смысл chunkOffset и менять его нельзя, иначе
+        // старые чекпоинты станут указывать не туда.
+        //
+        // Развернув биты маски (позиция p -> k-1-p), получаем ту же
+        // последовательность в убывающем ЧИСЛОВОМ порядке. А по числовому
+        // порядку умеет шагать приём Госпера — за несколько операций вместо
+        // разбора ранга по таблице биномов, то есть до k обращений в память.
+        //
+        // Поэтому берём последний ранг диапазона (ему отвечает наименьший
+        // числовой индекс) и идём Госпером вперёд. Внутри нити порядок обхода
+        // получается обратным, но для гистограммы это безразлично: набор
+        // комбинаций тот же самый.
+        quint64 revMask = reverseLowBits(
+            generateBitMaskGPU(d_binomTable, (unsigned)k, (unsigned)r,
+                               chunkOffset + end - 1), k);
 
-        quint64 temp = mask;
+        // Бит p развёрнутой маски соответствует строке k-1-p.
+        quint64 temp = revMask;
         while (temp) {
-            const int pos = bitPosFromSingleBit(temp & -temp);
+            const int p = bitPosFromSingleBit(temp & -temp);
             temp &= (temp - 1);
             for (int w = 0; w < blockCount; ++w)
-                codeword[w] ^= readConstMatrixWord(pos, w, blockCount);
+                codeword[w] ^= readConstMatrixWord(k - 1 - p, w, blockCount);
         }
 
         int weight = 0;
         for (int w = 0; w < blockCount; ++w) weight += __popcll(codeword[w]);
         atomicAdd(&s_spectrum[weight], 1ULL);
 
-        for (quint64 idx = start + 1; idx < end; ++idx) {
-            const quint64 next_mask = generateBitMaskGPU(d_binomTable, (unsigned)k,
-                                                         (unsigned)r, chunkOffset + idx);
-            const quint64 diff = mask ^ next_mask;
+        // При r = 0 и r = k комбинация всего одна, и цикл не выполняется —
+        // gosperNext на нулевой маске звать нельзя.
+        for (quint64 i = 1; i < count; ++i) {
+            const quint64 nextRev = gosperNext(revMask);
 
-            // Строки, вошедшие и вышедшие из набора, XOR-ятся одинаково:
-            // XOR — сам себе обратная операция, разделять их незачем.
-            quint64 changed = diff;
+            // Вошедшие и вышедшие строки XOR-ятся одинаково: XOR сам себе
+            // обратен, разделять их незачем.
+            quint64 changed = revMask ^ nextRev;
             while (changed) {
-                const int pos = bitPosFromSingleBit(changed & -changed);
+                const int p = bitPosFromSingleBit(changed & -changed);
                 changed &= (changed - 1);
                 for (int w = 0; w < blockCount; ++w)
-                    codeword[w] ^= readConstMatrixWord(pos, w, blockCount);
+                    codeword[w] ^= readConstMatrixWord(k - 1 - p, w, blockCount);
             }
 
             int weight2 = 0;
             for (int w = 0; w < blockCount; ++w) weight2 += __popcll(codeword[w]);
             atomicAdd(&s_spectrum[weight2], 1ULL);
 
-            mask = next_mask;
+            revMask = nextRev;
         }
     }
 

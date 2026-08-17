@@ -106,6 +106,32 @@ inline QStringList identity(int n)
     return rows;
 }
 
+// Псевдослучайная матрица с фиксированным зерном: на единичной матрице спектр
+// биномиальный и слишком «гладкий», а тут распределение весов настоящее.
+// Генератор свой, а не из <random>, чтобы результат не зависел от реализации
+// стандартной библиотеки и совпадал от машины к машине.
+inline QStringList randomMatrix(int rows, int cols, quint64 seed)
+{
+    quint64 state = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+    auto next = [&state]() -> quint64 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        return state;
+    };
+
+    QStringList m;
+    for (int r = 0; r < rows; ++r) {
+        QString row(cols, QLatin1Char('0'));
+        for (int c = 0; c < cols; ++c)
+            if (next() & 1ULL) row[c] = QLatin1Char('1');
+        // Строка из одних нулей вырождает код — ставим бит по диагонали.
+        if (!row.contains(QLatin1Char('1'))) row[r % cols] = QLatin1Char('1');
+        m << row;
+    }
+    return m;
+}
+
 inline Spectrum identityPartialSpectrum(int n, int maxRows)
 {
     Spectrum spec;

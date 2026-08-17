@@ -9,6 +9,7 @@
 // (float), не теряет разрядность на больших значениях.
 
 #include <QCoreApplication>
+#include <QFile>
 #include <QJsonObject>
 #include <QSettings>
 #include <QTextStream>
@@ -554,6 +555,97 @@ static void testOversizedMatrixRejected()
     }
 }
 
+// ------------------------------------------------- золотой файл спектров
+
+// Тяжёлые прогоны с записью точных спектров в файл.
+//
+// Нужны, когда правка затрагивает сам перебор: тестовые матрицы маленькие и
+// «удобные», на них легко не заметить расхождение, которое вылезет на объёме.
+// Порядок действий — выгрузить до правки, выгрузить после, сравнить файлы
+// побайтово. Любое расхождение означает, что перебор изменился.
+//
+// Запуск: SpectrumTests.exe --dump <файл>
+static int dumpGolden(const QString& path)
+{
+    struct Case { QString name; RunConfig cfg; };
+    QVector<Case> cases;
+
+    auto add = [&cases](const QString& name, const QStringList& m, Algorithm alg,
+                        int maxRows, ComputeDevice dev, int blocks = 64, int threads = 256) {
+        RunConfig c;
+        c.matrix     = m;
+        c.algorithm  = alg;
+        c.maxRows    = maxRows;
+        c.device     = dev;
+        c.blocksGpu  = blocks;
+        c.threadsGpu = threads;
+        cases.append({ name, c });
+    };
+
+    const QStringList golay = Reference::golay24_12();
+    const QStringList m40   = Reference::randomMatrix(40,  60, 1);
+    const QStringList m45   = Reference::randomMatrix(45,  80, 2);
+    const QStringList m50   = Reference::randomMatrix(50, 100, 3);
+    const QStringList m52   = Reference::randomMatrix(52, 120, 4);
+    const QStringList m30   = Reference::randomMatrix(30,  64, 5);
+    const QStringList m70   = Reference::randomMatrix(70, 120, 6);
+
+    for (ComputeDevice d : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+        const QString dn = d == ComputeDevice::CPU ? QStringLiteral("CPU") : QStringLiteral("GPU");
+
+        // Короткий путь, простой XOR — то, что меняется.
+        add(dn + " XOR Голей полный",    golay, Algorithm::SimpleXor, 12, d);
+        add(dn + " XOR rnd(40,60) r<=7", m40,   Algorithm::SimpleXor,  7, d);
+        // Код Грея и дуальный — контроль, они меняться не должны.
+        add(dn + " Грей rnd(30,64)",     m30,   Algorithm::GrayCode,   30, d);
+        add(dn + " дуальный Голей",      golay, Algorithm::DualCode,   12, d);
+        // Длинный путь — тоже контроль.
+        add(dn + " XOR rnd(70,120) r<=5", m70,  Algorithm::SimpleXor,   5, d);
+    }
+
+    // Объёмные прогоны только на видеокарте: на процессоре это часы.
+    add("GPU XOR rnd(45,80) r<=9",  m45, Algorithm::SimpleXor,  9, ComputeDevice::GPU);
+    add("GPU XOR rnd(50,100) r<=10", m50, Algorithm::SimpleXor, 10, ComputeDevice::GPU);
+    add("GPU XOR rnd(52,120) r<=11", m52, Algorithm::SimpleXor, 11, ComputeDevice::GPU);
+    // Другое разбиение: результат обязан не зависеть от числа блоков и нитей.
+    add("GPU XOR rnd(50,100) r<=10 (8x64)", m50, Algorithm::SimpleXor, 10,
+        ComputeDevice::GPU, 8, 64);
+
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        out << QStringLiteral("не удалось открыть ") << path << Qt::endl;
+        return 1;
+    }
+    QTextStream fs(&f);
+    fs.setCodec("UTF-8");
+
+    for (const Case& c : cases) {
+        if (c.cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+            out << QStringLiteral("  ПРОПУСК  ") << c.name << Qt::endl;
+            continue;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        const Spectrum s = runWorker(c.cfg);
+        const double sec = std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() - t0).count();
+
+        quint64 totalWords = 0;
+        for (auto it = s.constBegin(); it != s.constEnd(); ++it) totalWords += it.value();
+
+        fs << c.name << '\n';
+        for (auto it = s.constBegin(); it != s.constEnd(); ++it)
+            fs << "  " << it.key() << ' ' << it.value() << '\n';
+        fs << "  всего " << totalWords << '\n';
+
+        out << QStringLiteral("  %1  %2 с, слов %3")
+                   .arg(c.name, -34).arg(sec, 0, 'f', 2).arg(totalWords) << Qt::endl;
+        out.flush();
+    }
+    f.close();
+    out << QStringLiteral("записано в ") << path << Qt::endl;
+    return 0;
+}
+
 // ------------------------------------------------------------------- замер
 
 // Замер скорости ядер. Тестовые матрицы намеренно маленькие — на них разницы
@@ -645,10 +737,19 @@ int main(int argc, char* argv[])
                            : QStringLiteral("не найден, GPU-тесты пропускаются"))
         << Qt::endl;
 
-    if (app.arguments().contains(QStringLiteral("--bench"))) {
+    const QStringList args = app.arguments();
+
+    if (args.contains(QStringLiteral("--bench"))) {
         benchmark();
         out.flush();
         return 0;
+    }
+
+    const int dumpAt = args.indexOf(QStringLiteral("--dump"));
+    if (dumpAt >= 0 && dumpAt + 1 < args.size()) {
+        const int rc = dumpGolden(args.at(dumpAt + 1));
+        out.flush();
+        return rc;
     }
 
     testShortCode(QStringLiteral("Хэмминг (7,4)"),
