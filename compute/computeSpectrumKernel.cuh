@@ -45,17 +45,20 @@ __host__ void launchSpectrumKernelShort(
 );
 
 __global__ void computeSpectrumKernelLong(
-    uint64_t*        d_spectrum,       
-    const uint64_t*  d_matrix,   
-    int              numCols,     
-    int              numRows,     
-    int              wordsPerRow, 
-    uint64_t         chunkSize,   
-    int16_t*         d_startPositions, 
+    uint64_t*        d_spectrum,
+    const uint64_t*  matrixGlobal,
+    int              numCols,
+    int              numRows,
+    int              wordsPerRow,
+    uint64_t         chunkSize,
+    int16_t*         d_startPositions,
     uint64_t         masksPerThread,
-    uint64_t         numStartMasks, 
+    uint64_t         numStartMasks,
     uint64_t         numOfOnes,
-    uint64_t*        d_maskCounter
+    uint64_t*        d_maskCounter,
+    // Копировать ли матрицу в разделяемую память. Решает хост: у длинных кодов
+    // она бывает до полумегабайта и тогда туда не помещается.
+    bool             stageMatrix
 );
 
 __host__ void launchSpectrumKernelLong(
@@ -63,7 +66,7 @@ __host__ void launchSpectrumKernelLong(
     int              threadsPerBlock,
     cudaStream_t     stream,
     uint64_t*        d_spectrum,
-    const uint64_t*  d_matrix,
+    const uint64_t*  matrixGlobal,
     int              numCols,
     int              numRows,
     int              wordsPerRow,

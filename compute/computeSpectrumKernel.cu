@@ -16,6 +16,11 @@ __device__ __forceinline__ quint64 readConstMatrixWord(int row, int wordIdx, int
 
 // Длинный код может не влезть в константную память — тогда матрица лежит в
 // глобальной и приходит указателем. nullptr означает «она в константной».
+//
+// Чтение через __ldg здесь пробовалось и было убрано: на матрице в 180 КБ оно
+// дало 0.48-0.53 с против 0.44-0.50 без него, то есть не помогло, а скорее
+// чуть помешало. Матрица такого размера в кэш неизменяемых данных всё равно не
+// помещается, а доступ разбросанный.
 __device__ __forceinline__ quint64 readMatrixWord(const quint64* matrixGlobal, int row, int wordIdx, int wordsPerRow)
 {
     return matrixGlobal ? matrixGlobal[(size_t)row * wordsPerRow + wordIdx]
@@ -329,7 +334,16 @@ __host__ void launchSpectrumKernelLong(
         throw std::invalid_argument(
             "число складываемых строк больше MAX_POSITIONS");
 
-    size_t sharedBytes = (size_t)(numCols + 1) * sizeof(uint64_t);
+    // Матрицу выгодно держать в разделяемой памяти: нити варпа читают разные
+    // строки, а и константная память такой запрос дробит, и глобальная тут не
+    // лучший вариант. Но у длинных кодов матрица бывает до полумегабайта, и
+    // тогда она туда просто не помещается — в этом случае читаем как раньше.
+    const size_t histogramBytes = (size_t)(numCols + 1) * sizeof(uint64_t);
+    const size_t matrixBytes    = (size_t)numRows * wordsPerRow * sizeof(uint64_t);
+
+    const bool   stageMatrix = (histogramBytes + matrixBytes) <= Constants::MAX_SHARED_BYTES;
+    const size_t sharedBytes = histogramBytes + (stageMatrix ? matrixBytes : 0);
+
     computeSpectrumKernelLong <<< numBlocks, threadsPerBlock, sharedBytes, stream >>> (
         d_spectrum,
         matrixGlobal,
@@ -341,7 +355,8 @@ __host__ void launchSpectrumKernelLong(
         masksPerThread,
         numStartMasks,
         numOfOnes,
-        d_maskCounter
+        d_maskCounter,
+        stageMatrix
         );
 }
 __global__ void computeSpectrumKernelLong(
@@ -355,10 +370,15 @@ __global__ void computeSpectrumKernelLong(
     uint64_t        masksPerThread,
     uint64_t        numStartMasks,
     uint64_t        numOfOnes,
-    uint64_t*       d_maskCounter
+    uint64_t*       d_maskCounter,
+    bool            stageMatrix
 )
 {
-    extern __shared__ uint64_t s_spectrum[];
+    extern __shared__ uint64_t s_mem[];
+    uint64_t* const s_spectrum = s_mem;
+    // Копия матрицы идёт следом за гистограммой. Если она не влезла, хост
+    // передаёт stageMatrix = false, и этой части просто нет.
+    uint64_t* const s_matrix   = s_mem + (numCols + 1);
 
     int tid = threadIdx.x;
     uint64_t gtid =
@@ -368,15 +388,26 @@ __global__ void computeSpectrumKernelLong(
     for (int i = tid; i <= numCols; i += blockDim.x)
         s_spectrum[i] = 0ULL;
 
+    /* -------- копия матрицы, если она туда влезла -------- */
+    if (stageMatrix) {
+        const int matrixWords = numRows * wordsPerRow;
+        for (int i = tid; i < matrixWords; i += blockDim.x)
+            s_matrix[i] = readMatrixWord(matrixGlobal, i / wordsPerRow,
+                                         i % wordsPerRow, wordsPerRow);
+    }
+
     __syncthreads();
+
+    // Условие одинаково для всего блока, поэтому ветвление здесь не разводит
+    // нити варпа — компилятор выносит проверку из цикла.
+    const uint64_t* const matrixSrc = stageMatrix ? s_matrix : nullptr;
 
     /* -------- activity predicate -------- */
     uint64_t startRank = gtid * masksPerThread;
 
     bool threadIsActive =
         (gtid < numStartMasks) &&
-        (startRank < chunkSize) &&
-        true;
+        (startRank < chunkSize);
 
     /* -------- per-thread work -------- */
     if (threadIsActive) {
@@ -398,7 +429,8 @@ __global__ void computeSpectrumKernelLong(
         for (int i = 0; i < numOfOnes; ++i) {
             int row = a[i];
             for (int w = 0; w < wordsPerRow; ++w)
-                codeword[w] ^= readMatrixWord(matrixGlobal, row, w, wordsPerRow);
+                codeword[w] ^= matrixSrc ? matrixSrc[(size_t)row * wordsPerRow + w]
+                                  : readMatrixWord(matrixGlobal, row, w, wordsPerRow);
         }
 
         int weight = 0;
@@ -435,14 +467,16 @@ __global__ void computeSpectrumKernelLong(
                 for (int i = 0; i < numOfOnes; ++i) {
                     int row = a[i];
                     for (int w = 0; w < wordsPerRow; ++w)
-                        codeword[w] ^= readMatrixWord(matrixGlobal, row, w, wordsPerRow);
+                        codeword[w] ^= matrixSrc ? matrixSrc[(size_t)row * wordsPerRow + w]
+                                  : readMatrixWord(matrixGlobal, row, w, wordsPerRow);
                 }
             }
             else {
                 for (int t = 0; t < numChanged; ++t) {
                     int row = changed[t];
                     for (int w = 0; w < wordsPerRow; ++w)
-                        codeword[w] ^= readMatrixWord(matrixGlobal, row, w, wordsPerRow);
+                        codeword[w] ^= matrixSrc ? matrixSrc[(size_t)row * wordsPerRow + w]
+                                  : readMatrixWord(matrixGlobal, row, w, wordsPerRow);
                 }
             }
 

@@ -12,6 +12,9 @@ namespace Constants
     constexpr  int MAX_ROWS = 2048;
     constexpr  int MAX_COLS = 2048;
     constexpr  int MAX_SHORT_CODE_LENGTH = 63;
+    // Сколько разделяемой памяти на блок готовы занять под гистограмму и копию
+    // матрицы. Предел устройства 48 КБ, немного оставляем про запас.
+    constexpr  int MAX_SHARED_BYTES = 40 * 1024;
     constexpr  int BINOM_TABLE_SIZE_FOR_SHORT_CODES = ( MAX_SHORT_CODE_LENGTH + 1 ) * ( MAX_SHORT_CODE_LENGTH + 1 );
     constexpr  int ERROR_OCCURED = -1;
 }

@@ -597,6 +597,12 @@ static int runSingleForProfiling(const QString& which)
         // влезает в константную память, поэтому лежит в глобальной.
         cfg.matrix  = Reference::randomMatrix(70, 2000, 11);
         cfg.maxRows = 6;
+    } else if (which == QStringLiteral("hugelong")) {
+        // Матрица 900 x 1600 занимает 180 КБ: не помещается ни в константную
+        // память, ни в разделяемую. Единственный путь — глобальная память,
+        // здесь и проверяется чтение через __ldg.
+        cfg.matrix  = Reference::randomMatrix(900, 1600, 13);
+        cfg.maxRows = 3;
     } else if (which == QStringLiteral("graywide")) {
         // Код Грея на широкой матрице: тот же расходящийся доступ к строкам,
         // что и в ядре простого XOR, только маски идут подряд.
