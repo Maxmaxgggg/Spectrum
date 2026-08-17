@@ -69,6 +69,35 @@ static quint64 unrankCombination( unsigned K, unsigned R, quint64 rank, const Bi
 
     return mask;
 }
+// Следующая маска с тем же числом единиц в возрастающем числовом порядке —
+// приём Госпера. Деление из классической записи заменено сдвигом: младший
+// установленный бит есть степень двойки, его позиция и есть величина сдвига.
+// Вызывать только при v != 0 и когда следующая комбинация существует.
+static inline quint64 gosperNext(quint64 v)
+{
+    unsigned long t;
+    _BitScanForward64(&t, v);
+    const quint64 rr = v + (1ULL << t);
+    return rr | ((v ^ rr) >> (t + 2));
+}
+
+// Разворот всех 64 бит.
+static inline quint64 reverseBits64(quint64 v)
+{
+    v = ((v >> 1)  & 0x5555555555555555ULL) | ((v & 0x5555555555555555ULL) << 1);
+    v = ((v >> 2)  & 0x3333333333333333ULL) | ((v & 0x3333333333333333ULL) << 2);
+    v = ((v >> 4)  & 0x0F0F0F0F0F0F0F0FULL) | ((v & 0x0F0F0F0F0F0F0F0FULL) << 4);
+    v = ((v >> 8)  & 0x00FF00FF00FF00FFULL) | ((v & 0x00FF00FF00FF00FFULL) << 8);
+    v = ((v >> 16) & 0x0000FFFF0000FFFFULL) | ((v & 0x0000FFFF0000FFFFULL) << 16);
+    return (v >> 32) | (v << 32);
+}
+
+// Разворот младших k бит: бит p переходит в позицию k-1-p.
+static inline quint64 reverseLowBits(quint64 v, quint64 k)
+{
+    return reverseBits64(v) >> (64 - k);
+}
+
 // Вычисляет сумму сочетаний C(k,i) где i пробегает от 0 до maxComb
 quint64 Worker::sumCombinations(quint64 k, quint64 maxComb)
 {
@@ -945,40 +974,80 @@ void Worker::computeSpectrumCpuNoGrayShort(
             // Локальный результат чанка
             QVector<quint64> chunkSpectrum(numOfCols + 1, 0);
 
+            // Каждый поток берёт непрерывный кусок диапазона рангов и идёт по
+            // нему приёмом Госпера — так же, как ядро коротких кодов.
+            //
+            // Раньше на каждую комбинацию звался unrankCombination (разбор
+            // ранга по таблице биномов, O(k)) и кодовое слово собиралось с
+            // нуля перебором всех numOfRows строк. Теперь ранг разбирается
+            // один раз на поток, а дальше маска шагает за несколько операций,
+            // и XOR-ятся только изменившиеся строки.
+            //
+            // Нумерация комбинаций лексикографическая — её задаёт смысл
+            // chunkOffset, и менять её нельзя. Госпер идёт по числовому
+            // порядку, но развёрнутая по битам маска (позиция p -> k-1-p)
+            // превращает одно в другое. Поэтому берётся последний ранг куска,
+            // и обход идёт в обратную сторону: для гистограммы порядок
+            // безразличен.
             #pragma omp parallel
             {
-                QVector<quint64> localSpectrum(numOfCols + 1, 0);
-                QVector<quint64> localCodeword(wordsPerRow, 0);
+                const int tid      = omp_get_thread_num();
+                const int nthreads = omp_get_num_threads();
 
-                #pragma omp for schedule(static)
-                for (qint64 idx = (qint64)offset; idx < (qint64)(offset + thisChunkSize); ++idx)
-                {
-                    if (cancelled.load())
-                        continue;
+                const quint64 perThread = (thisChunkSize + nthreads - 1) / nthreads;
+                const quint64 startIdx  = offset + quint64(tid) * perThread;
+                const quint64 endIdx    = std::min(startIdx + perThread, offset + thisChunkSize);
 
-                    quint64 mask = unrankCombination(numOfRows, r, (quint64)idx, binomTable);
-                    std::fill(localCodeword.begin(), localCodeword.end(), 0);
+                // Отмена проверяется только между чанками. Прерывать перебор
+                // внутри нельзя: частичный чанк всё равно прибавится к спектру,
+                // и если на него выпадет чекпоинт, сохранится испорченное
+                // состояние. Чанк короткий, задержка отмены незаметна.
+                if (startIdx < endIdx) {
+                    QVector<quint64> localSpectrum(numOfCols + 1, 0);
+                    QVector<quint64> localCodeword(wordsPerRow, 0);
 
-                    for (quint64 i = 0; i < numOfRows; ++i) {
-                        if (mask & (1ULL << i)) {
-                            quint64* rowData = h_matrix.get() + i * wordsPerRow;
+                    quint64 revMask = reverseLowBits(
+                        unrankCombination(unsigned(numOfRows), unsigned(r),
+                                          endIdx - 1, binomTable), numOfRows);
+
+                    // Бит p развёрнутой маски отвечает строке numOfRows-1-p.
+                    auto xorRows = [&](quint64 bits) {
+                        while (bits) {
+                            unsigned long p;
+                            _BitScanForward64(&p, bits);
+                            bits &= (bits - 1);
+                            const quint64* rowData =
+                                h_matrix.get() + (numOfRows - 1 - p) * wordsPerRow;
                             for (quint64 b = 0; b < wordsPerRow; ++b)
                                 localCodeword[b] ^= rowData[b];
                         }
+                    };
+                    auto accumulate = [&]() {
+                        quint64 weight = 0;
+                        for (quint64 b = 0; b < wordsPerRow; ++b)
+                            weight += __popcnt64(localCodeword[b]);
+                        if (weight <= numOfCols)
+                            localSpectrum[weight]++;
+                    };
+
+                    xorRows(revMask);
+                    accumulate();
+
+                    // При r = 0 и r = numOfRows комбинация одна, и цикл не
+                    // выполняется — gosperNext на нулевой маске звать нельзя.
+                    const quint64 count = endIdx - startIdx;
+                    for (quint64 i = 1; i < count; ++i) {
+                        const quint64 nextRev = gosperNext(revMask);
+                        xorRows(revMask ^ nextRev);
+                        accumulate();
+                        revMask = nextRev;
                     }
 
-                    quint64 weight = 0;
-                    for (quint64 b = 0; b < wordsPerRow; ++b)
-                        weight += __popcnt64(localCodeword[b]);
-
-                    if (weight <= numOfCols)
-                        localSpectrum[weight]++;
-                }
-
-                #pragma omp critical
-                {
-                    for (quint64 w = 0; w <= numOfCols; ++w)
-                        chunkSpectrum[w] += localSpectrum[w];
+                    #pragma omp critical
+                    {
+                        for (quint64 w = 0; w <= numOfCols; ++w)
+                            chunkSpectrum[w] += localSpectrum[w];
+                    }
                 }
             }
 

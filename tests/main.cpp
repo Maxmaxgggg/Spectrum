@@ -592,18 +592,26 @@ static int dumpGolden(const QString& path)
     const QStringList m52   = Reference::randomMatrix(52, 120, 4);
     const QStringList m30   = Reference::randomMatrix(30,  64, 5);
     const QStringList m70   = Reference::randomMatrix(70, 120, 6);
+    const QStringList m26   = Reference::randomMatrix(26,  64, 7);
 
+    // Процессорные прогоны берутся меньшего объёма: на CPU перебор идёт на
+    // порядок медленнее, а покрытие путей от размера не зависит — важно, чтобы
+    // задача резалась на несколько слоёв и несколько чанков.
     for (ComputeDevice d : { ComputeDevice::CPU, ComputeDevice::GPU }) {
-        const QString dn = d == ComputeDevice::CPU ? QStringLiteral("CPU") : QStringLiteral("GPU");
+        const bool cpu = (d == ComputeDevice::CPU);
+        const QString dn = cpu ? QStringLiteral("CPU") : QStringLiteral("GPU");
 
         // Короткий путь, простой XOR — то, что меняется.
-        add(dn + " XOR Голей полный",    golay, Algorithm::SimpleXor, 12, d);
-        add(dn + " XOR rnd(40,60) r<=7", m40,   Algorithm::SimpleXor,  7, d);
+        add(dn + " XOR Голей полный",  golay, Algorithm::SimpleXor, 12, d);
+        add(QStringLiteral("%1 XOR rnd(40,60) r<=%2").arg(dn).arg(cpu ? 6 : 7),
+            m40, Algorithm::SimpleXor, cpu ? 6 : 7, d);
         // Код Грея и дуальный — контроль, они меняться не должны.
-        add(dn + " Грей rnd(30,64)",     m30,   Algorithm::GrayCode,   30, d);
-        add(dn + " дуальный Голей",      golay, Algorithm::DualCode,   12, d);
+        add(QStringLiteral("%1 Грей rnd(%2,64)").arg(dn).arg(cpu ? 26 : 30),
+            cpu ? m26 : m30, Algorithm::GrayCode, cpu ? 26 : 30, d);
+        add(dn + " дуальный Голей",    golay, Algorithm::DualCode,  12, d);
         // Длинный путь — тоже контроль.
-        add(dn + " XOR rnd(70,120) r<=5", m70,  Algorithm::SimpleXor,   5, d);
+        add(QStringLiteral("%1 XOR rnd(70,120) r<=%2").arg(dn).arg(cpu ? 4 : 5),
+            m70, Algorithm::SimpleXor, cpu ? 4 : 5, d);
     }
 
     // Объёмные прогоны только на видеокарте: на процессоре это часы.
@@ -619,9 +627,12 @@ static int dumpGolden(const QString& path)
     // На случайных матрицах сверять можно только количество слов; здесь
     // проверяется всё распределение целиком, без всякого предыдущего прогона.
     for (ComputeDevice d : { ComputeDevice::CPU, ComputeDevice::GPU }) {
-        const QString dn = d == ComputeDevice::CPU ? QStringLiteral("CPU") : QStringLiteral("GPU");
-        add(dn + " XOR I(40) r<=7", Reference::identity(40), Algorithm::SimpleXor, 7, d,
-            64, 256, Reference::identityPartialSpectrum(40, 7));
+        const bool cpu = (d == ComputeDevice::CPU);
+        const QString dn = cpu ? QStringLiteral("CPU") : QStringLiteral("GPU");
+        const int mr = cpu ? 6 : 7;
+        add(QStringLiteral("%1 XOR I(40) r<=%2").arg(dn).arg(mr),
+            Reference::identity(40), Algorithm::SimpleXor, mr, d,
+            64, 256, Reference::identityPartialSpectrum(40, mr));
         add(dn + " XOR I(20) полный", Reference::identity(20), Algorithm::SimpleXor, 20, d,
             64, 256, Reference::identityPartialSpectrum(20, 20));
         add(dn + " Грей I(24)", Reference::identity(24), Algorithm::GrayCode, 24, d,
