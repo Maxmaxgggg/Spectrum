@@ -122,16 +122,81 @@ quint64 Worker::sumCombinations(quint64 k, quint64 maxComb)
     }
     return sum;
 }
+// Отчёт об оценке оставшегося времени и средней скорости.
+void Worker::reportEstimate()
+{
+    progress.markEstimate();
+    runState.elapsedSec = progress.elapsedSec();
+    emit updateRemainingMinutes(int(progress.elapsedSec()),
+                                progress.minutesLeft(),
+                                progress.speed());
+}
+
+void Worker::reportProgressBar()
+{
+    progress.markBar();
+    emit updateInfoPBR(progress.percent());
+}
+
+// Сохраняет чекпоинт для GPU-путей.
+//
+// Спектр забирается синхронно, а не через уже начатое асинхронное копирование:
+// нужно, чтобы сохранённые данные точно соответствовали посчитанным чанкам.
+//
+// false означает ошибку CUDA. Раньше в этом случае расчёт просто обрывался и
+// рапортовал об успехе — пользователь получал неполный спектр как готовый.
+bool Worker::saveGpuCheckpoint(cudaStream_t s, int numOfCols,
+                               quint64 rOffset, quint64 chunkOffset)
+{
+    progress.markCheckpoint();
+
+    cudaError_t err = cudaStreamSynchronize(s);
+    if (err == cudaSuccess)
+        err = cudaMemcpy(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64),
+                         cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) {
+        emit errorOccurred(QStringLiteral("Ошибка CUDA при сохранении состояния: %1")
+                               .arg(QString::fromLatin1(cudaGetErrorString(err))));
+        return false;
+    }
+
+    runState.rOffset     = rOffset;
+    runState.chunkOffset = chunkOffset;
+    makeCheckpoint(numOfCols);
+    return true;
+}
+
+// Чекпоинт для CPU-путей: спектр уже в h_spectrum, забирать его неоткуда.
+// Копированием в runState.spectrum занимается makeCheckpoint().
+void Worker::saveCpuCheckpoint(int numOfCols, quint64 rOffset, quint64 chunkOffset)
+{
+    progress.markCheckpoint();
+    runState.rOffset     = rOffset;
+    runState.chunkOffset = chunkOffset;
+    makeCheckpoint(numOfCols);
+}
+
+// Возвращает false, если во время паузы расчёт отменили.
+bool Worker::waitWhilePaused()
+{
+    while (paused.load() != 0) {
+        if (cancelled.load()) return false;
+        QThread::msleep(50);
+    }
+    return !cancelled.load();
+}
+
 void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols, quint64 wordsPerRow, quint64 chunkSize, int blockCount, int threadsPerBlock, quint64 maxComb)
 {
-    bool    copyPending = false;
-    quint64 totalOps = sumCombinations(numOfRows, maxComb);
+    bool copyPending = false;
+    progress.begin(sumCombinations(numOfRows, maxComb), runState.doneOps, runState.elapsedSec);
 
-    for (int r = runState.rOffset; r <= maxComb; r++)
+    // rOffset — число единиц в маске; счётчик обязан быть беззнаковым, иначе
+    // при сравнении с maxComb получается знаковое/беззнаковое сравнение.
+    for (quint64 r = runState.rOffset; r <= maxComb; r++)
     {
         quint64 startOffset = 0;
 
-        
         quint64 curOps = h_binomTable[numOfRows][r];
 
         if (r == runState.rOffset)
@@ -140,13 +205,8 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
         for ( quint64 offset = startOffset; offset < curOps; offset += chunkSize )
         {
             quint64 thisChunkSize = qMin(chunkSize, curOps - offset); // последний чанк может быть меньше
-            while (paused.load() != 0) {
-                QThread::msleep(50);
-                if (cancelled.load()) break;
-            }
-            if (cancelled.load()) {
+            if (!waitWhilePaused())
                 break;
-            }
 
             // Запуск ядра
             launchSpectrumKernelShort(
@@ -162,63 +222,35 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
                 thisChunkSize,         // Размер чанка
                 r                      // Число единиц в битовой маске (число складываемых строк)
             );
-            runState.doneOps += thisChunkSize;
+            progress.addOps(thisChunkSize);
+            runState.doneOps = progress.doneOps();
 
-            auto now = steady_clock::now();
-            if (now - lastEstimateTime >= std::chrono::seconds(1)) {
-                lastEstimateTime = now;
-                runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
-                double speed = 1.0;
+            const ProgressTracker::Due due = progress.due();
 
-                if (runState.doneOps != 0)
-                    speed = double(runState.doneOps) / runState.elapsedSec;
+            if (due.estimate)
+                reportEstimate();
 
-                quint64 remainingOps = totalOps > runState.doneOps ? totalOps - runState.doneOps : 0;
-                double estSec = speed > 0 ? remainingOps / speed : 0.0;
-
-                int minutesLeft = int(std::ceil(estSec / 60.0));
-                emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
-
-            }
-            if (!copyPending && (now - lastTimeSpectrum > updateSpectrumSec)) {
-                lastTimeSpectrum = now;
+            // Метка спектра двигается только когда копирование реально
+            // началось: иначе при занятом копировании следующая попытка
+            // откладывалась бы на целый интервал.
+            if (!copyPending && due.spectrum) {
+                progress.markSpectrum();
                 cudaMemcpyAsync(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream);
                 cudaEventRecord(ev, stream);
                 copyPending = true;
             }
-            if (copyPending) {
-                cudaError_t q = cudaEventQuery(ev);
-                if (q == cudaSuccess) {
-                    copyPending = false;
-                    updateSpectrum(numOfCols);
-                }
-            }
-            if (now - lastTimeBar > updateProgressBarSec) {
-                lastTimeBar = now;
-                emit updateInfoPBR(runState.doneOps * 100 / totalOps);
-            }
-            if (now - lastCheckpointTime >= saveSpectrumSec) {
-                lastCheckpointTime = now;
-                // 1. Ждём завершения всех операций в stream
-                cudaError_t err = cudaStreamSynchronize(stream);
-                if (err != cudaSuccess) {
-                    return;
-                }
-                // 2. Синхронная копия (данные гарантированно относятся к текущему чанку)
-                err = cudaMemcpy(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost);
-                if (err != cudaSuccess) {
-                    return;
-                }
-                // 3. Обновляем интерфейс
-                //updateSpectrum(numOfCols);
-                // 4. Сохраняем чекпоинт
-                runState.rOffset = r;
-                runState.chunkOffset = offset + thisChunkSize; // ВАЖНО!
-                makeCheckpoint(numOfCols);
-                // 5. Сбрасываем async-копирование
+            if (copyPending && cudaEventQuery(ev) == cudaSuccess) {
                 copyPending = false;
+                updateSpectrum(numOfCols);
             }
+            if (due.bar)
+                reportProgressBar();
 
+            if (due.checkpoint) {
+                if (!saveGpuCheckpoint(stream, numOfCols, r, offset + thisChunkSize))
+                    return;
+                copyPending = false;   // синхронная копия сделала async-копию ненужной
+            }
         }
         if (cancelled.load()) {
             break;
@@ -238,21 +270,17 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
 }
 void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, quint64 wordsPerRow, quint64 chunkSize, int blockCount, int threadsPerBlock )
 {
-    bool    copyPending = false;
-    quint64 totalOps = 1ULL << numOfRows;
+    bool          copyPending = false;
+    const quint64 totalOps    = 1ULL << numOfRows;
+
+    progress.begin(totalOps, runState.doneOps, runState.elapsedSec);
     // Обновление на случай, когда загружаем чекпоинт
-    emit updateInfoPBR(runState.doneOps * 100 / totalOps);
+    emit updateInfoPBR(progress.percent());
+
     for (quint64 chunkOffset = runState.chunkOffset; chunkOffset < totalOps; chunkOffset += chunkSize) {
         quint64 thisChunkSize = qMin(chunkSize, totalOps - chunkOffset);
-        while (paused.load() != 0) {
-            QThread::msleep(50);
-            if (cancelled.load()) {
-                break;
-            } 
-        }
-        if (cancelled.load()) {
+        if (!waitWhilePaused())
             break;
-        }
         launchSpectrumKernelGrayShort(
             blockCount,
             threadsPerBlock,
@@ -264,60 +292,32 @@ void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, 
             chunkOffset,
             thisChunkSize
         );
-        auto now = steady_clock::now();
-        if (now - lastEstimateTime >= std::chrono::seconds(1)) {
-            lastEstimateTime = now;
-            runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
-            double speed = 1.0;
+        progress.addOps(thisChunkSize);
+        runState.doneOps = progress.doneOps();
 
-            if (runState.doneOps != 0)
-                speed = double(runState.doneOps) / runState.elapsedSec;
+        const ProgressTracker::Due due = progress.due();
 
-            quint64 remainingOps = totalOps > runState.doneOps ? totalOps - runState.doneOps : 0;
-            double estSec = speed > 0 ? remainingOps / speed : 0.0;
+        if (due.estimate)
+            reportEstimate();
 
-            int minutesLeft = int(std::ceil(estSec / 60.0));
-            emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
-
-        }
-        if (!copyPending && (now - lastTimeSpectrum > updateSpectrumSec )) {
-            lastTimeSpectrum = now;
+        if (!copyPending && due.spectrum) {
+            progress.markSpectrum();
             cudaMemcpyAsync(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream);
             cudaEventRecord(ev, stream);
             copyPending = true;
         }
-        if (copyPending) {
-            cudaError_t q = cudaEventQuery(ev);
-            if (q == cudaSuccess) {
-                copyPending = false;
-                updateSpectrum(numOfCols);
-            }
+        if (copyPending && cudaEventQuery(ev) == cudaSuccess) {
+            copyPending = false;
+            updateSpectrum(numOfCols);
         }
-        if (now - lastTimeBar > updateProgressBarSec) {
-            lastTimeBar = now;
-            emit updateInfoPBR(runState.doneOps * 100 / totalOps);
-        }
-        // ПРОТЕСТИРОВАТЬ
-        runState.doneOps += thisChunkSize;
-        runState.chunkOffset = chunkOffset + thisChunkSize;
-        if ( now - lastCheckpointTime >= saveSpectrumSec ) {
-            lastCheckpointTime = now;
-            // 1. Ждём завершения всех операций в stream
-            cudaError_t err = cudaStreamSynchronize(stream);
-            if (err != cudaSuccess) {
+        if (due.bar)
+            reportProgressBar();
+
+        if (due.checkpoint) {
+            // Код Грея идёт сплошной нумерацией масок, слоёв по числу единиц
+            // нет — rOffset здесь всегда 0.
+            if (!saveGpuCheckpoint(stream, numOfCols, 0, chunkOffset + thisChunkSize))
                 return;
-            }
-            // 2. Синхронная копия (данные гарантированно относятся к текущему чанку)
-            err = cudaMemcpy(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost);
-            if (err != cudaSuccess) {
-                return;
-            }
-            // 3. Обновляем интерфейс
-            //updateSpectrum(numOfCols);
-            // 4. Сохраняем чекпоинт
-            
-            makeCheckpoint(numOfCols);
-            // 5. Сбрасываем async-копирование
             copyPending = false;
         }
     }
@@ -373,9 +373,11 @@ void Worker::computeSpectrumGpuNoGrayLong(
     CUDA_CALL(cudaMallocHost( (void**)&h_maskCounter, sizeof(uint64_t) ) );
     CUDA_CALL(cudaMalloc(     (void**)&d_maskCounter, sizeof(uint64_t) ) );
     #endif
-    cudaStream_t stream = 0;
-    cudaEvent_t evCopy = nullptr;
-    CUDA_CALL(cudaStreamCreate(&stream));
+    // Собственный поток, а не поле класса: имя намеренно отличается, чтобы
+    // не перекрывать Worker::stream и не синхронизировать по ошибке чужой.
+    cudaStream_t localStream = nullptr;
+    cudaEvent_t  evCopy      = nullptr;
+    CUDA_CALL(cudaStreamCreate(&localStream));
     CUDA_CALL(cudaEventCreate(&evCopy));
 
     bool copyPending = false;
@@ -383,8 +385,10 @@ void Worker::computeSpectrumGpuNoGrayLong(
     // Размер чанка в масках
     const quint64 chunkSizeTarget = maxThreads * masksPerThread;
 
+    progress.begin(totalOps, runState.doneOps, runState.elapsedSec);
+
     // Внешний цикл по числу единиц в маске
-    for (unsigned r = runState.rOffset; r <= maxComb; ++r) {
+    for (quint64 r = runState.rOffset; r <= maxComb; ++r) {
 
         quint64 startOffset = 0;
 
@@ -422,7 +426,7 @@ void Worker::computeSpectrumGpuNoGrayLong(
                 h_slots,
                 numStartMasks * slotBytes,
                 cudaMemcpyHostToDevice,
-                stream));
+                localStream));
 
             // Запускаем ядро: numStartMasks потоков (упаковано в grid)
             int grid = (numStartMasks + threadsPerBlock - 1) / threadsPerBlock;
@@ -436,7 +440,7 @@ void Worker::computeSpectrumGpuNoGrayLong(
             launchSpectrumKernelLong(
                 grid,
                 threadsPerBlock,
-                stream,
+                localStream,
                 d_spectrum,
                 d_matrix,
                 static_cast<int>(numOfCols),
@@ -452,7 +456,7 @@ void Worker::computeSpectrumGpuNoGrayLong(
             launchSpectrumKernelLong(
                 grid,
                 threadsPerBlock,
-                stream,
+                localStream,
                 d_spectrum,
                 d_matrix,
                 static_cast<int>(numOfCols),
@@ -465,7 +469,17 @@ void Worker::computeSpectrumGpuNoGrayLong(
                 r,
                 nullptr);
             #endif
-            // Пиздец важная хуйня, без неё спектр считается не корректно
+            // НЕ УДАЛЯТЬ. Без этой синхронизации спектр считается неверно.
+            //
+            // h_slots — pinned-память, из которой идёт асинхронное копирование
+            // на устройство. На следующей итерации цикл начинает переписывать
+            // h_slots стартовыми позициями нового чанка, а копия предыдущего
+            // может быть ещё в полёте — хост затирает данные под работающим
+            // DMA, и часть масок теряется.
+            //
+            // Убрать синхронизацию можно только вместе с двойной буферизацией
+            // h_slots, и это отдельная задача со своим прогоном против эталона,
+            // а не побочный эффект рефакторинга.
             cudaDeviceSynchronize();
 
             #ifdef _DEBUG
@@ -476,71 +490,36 @@ void Worker::computeSpectrumGpuNoGrayLong(
             }
             #endif
             // Учёт прогресса
-            runState.doneOps += chunkSize;
+            progress.addOps(chunkSize);
+            runState.doneOps = progress.doneOps();
 
-            auto now = steady_clock::now();
+            const ProgressTracker::Due due = progress.due();
 
-            // Асинхронное копирование спектра для апдейта UI (по refreshSpectrumMs)
-            if (!copyPending && (now - lastTimeSpectrum > updateSpectrumSec )) {
-                lastTimeSpectrum = now;
+            // Асинхронное копирование спектра для обновления интерфейса
+            if (!copyPending && due.spectrum) {
+                progress.markSpectrum();
                 CUDA_CALL(cudaMemcpyAsync(
                     h_spectrum,
                     d_spectrum,
                     (numOfCols + 1) * sizeof(quint64),
                     cudaMemcpyDeviceToHost,
-                    stream));
-                CUDA_CALL(cudaEventRecord(evCopy, stream));
+                    localStream));
+                CUDA_CALL(cudaEventRecord(evCopy, localStream));
                 copyPending = true;
             }
-            
-            // Проверяем завершение копии
-            if (copyPending) {
-                cudaError_t evq = cudaEventQuery(evCopy);
-                if (evq == cudaSuccess) {
-                    copyPending = false;
-                    updateSpectrum(numOfCols);
-                }
+            if (copyPending && cudaEventQuery(evCopy) == cudaSuccess) {
+                copyPending = false;
+                updateSpectrum(numOfCols);
             }
 
-            // Обновляем progress bar по таймеру
-            if ( now - lastTimeBar > updateProgressBarSec ) {
-                lastTimeBar = now;
-                emit updateInfoPBR(runState.doneOps * 100 / totalOps);
-            }
-            if (now - lastEstimateTime >= std::chrono::seconds(1)) {
-                lastEstimateTime = now;
-                runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
-                double speed = 1.0;
+            if (due.bar)
+                reportProgressBar();
+            if (due.estimate)
+                reportEstimate();
 
-                if (runState.doneOps != 0)
-                    speed = double(runState.doneOps) / runState.elapsedSec;
-
-                quint64 remainingOps = totalOps > runState.doneOps ? totalOps - runState.doneOps : 0;
-                double estSec = speed > 0 ? remainingOps / speed : 0.0;
-
-                int minutesLeft = int(std::ceil(estSec / 60.0));
-                emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
-
-            }
-            if ( now - lastCheckpointTime >= saveSpectrumSec ) {
-                lastCheckpointTime = now;
-                // 1. Ждём завершения всех операций в stream
-                cudaError_t err = cudaStreamSynchronize(stream);
-                if (err != cudaSuccess) {
+            if (due.checkpoint) {
+                if (!saveGpuCheckpoint(localStream, numOfCols, r, chunkOffset + chunkSize))
                     return;
-                }
-                // 2. Синхронная копия (данные гарантированно относятся к текущему чанку)
-                err = cudaMemcpy(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost);
-                if (err != cudaSuccess) {
-                    return;
-                }
-                // 3. Обновляем интерфейс
-                //updateSpectrum(numOfCols);
-                // 4. Сохраняем чекпоинт
-                runState.rOffset = r;
-                runState.chunkOffset = chunkOffset + chunkSize;
-                makeCheckpoint(numOfCols);
-                // 5. Сбрасываем async-копирование
                 copyPending = false;
             }
 
@@ -555,16 +534,16 @@ void Worker::computeSpectrumGpuNoGrayLong(
         d_spectrum,
         (numOfCols + 1) * sizeof(quint64),
         cudaMemcpyDeviceToHost,
-        stream));
-    CUDA_CALL(cudaEventRecord(evCopy, stream));
-    CUDA_CALL(cudaStreamSynchronize(stream));
+        localStream));
+    CUDA_CALL(cudaEventRecord(evCopy, localStream));
+    CUDA_CALL(cudaStreamSynchronize(localStream));
 
     updateSpectrum(numOfCols);
     // Очистка
     cudaFree(d_slots);
     cudaFreeHost(h_slots);
     //cudaFree(d_maskCounter);
-    cudaStreamDestroy(stream);
+    cudaStreamDestroy(localStream);
     cudaEventDestroy(evCopy);
 }
 
@@ -622,6 +601,9 @@ void Worker::computeSpectrumCpuNoGrayLong(
     const quint64 chunkSizeTarget = numThreads * masksPerThread;
 
     std::vector<std::vector<quint64>> threadSpectrum( numThreads, std::vector<quint64>(numOfCols + 1, 0ULL) );
+
+    progress.begin(totalOps, runState.doneOps, runState.elapsedSec);
+
     // Основной внешний цикл по числу единиц в маске
     for (quint64 r = runState.rOffset; r <= maxComb; ++r)
     {
@@ -659,8 +641,11 @@ void Worker::computeSpectrumCpuNoGrayLong(
                 // локальное кодовое слово (wordsPerRow слов)
                 std::vector<quint64> codeword((size_t)wordsPerRow, 0ULL);
 
+                // Счётчик знаковый: OpenMP до версии 3.0 не допускает
+                // беззнаковых индексов в parallel for. numStartMasks заведомо
+                // помещается в int64_t, поэтому приводим его, а не счётчик.
                 #pragma omp for schedule(dynamic)
-                for (int64_t gtid = 0; gtid < numStartMasks; ++gtid) {
+                for (int64_t gtid = 0; gtid < int64_t(numStartMasks); ++gtid) {
                     if (cancelled.load()) continue;
 
                     // стартовый ранг и сколько итераций реально нужно
@@ -756,44 +741,24 @@ void Worker::computeSpectrumCpuNoGrayLong(
                     h_spectrum[w] += threadSpectrum[t][w];
                 }
             }
-            // После расчёта чанка — увеличиваем doneOps, делаем чекпоинт и апдейтим UI
-            runState.doneOps += chunkSize;
-            // Обновление спектра в UI (копия h_spectrum уже актуальна)
-            auto now = steady_clock::now();
+            // После расчёта чанка — учитываем прогресс и обновляем интерфейс.
+            // Спектр в h_spectrum уже актуален, копировать ниоткуда не надо.
+            progress.addOps(chunkSize);
+            runState.doneOps = progress.doneOps();
 
-            if ( now - lastTimeSpectrum >=  updateSpectrumSec ) {
-                lastTimeSpectrum = now;
-                updateSpectrum((int)numOfCols); // предполагаем, что этот метод формирует QStringList и plot
-            }
-            if ( now - lastTimeBar >= updateProgressBarSec ) {
-                lastTimeBar = now;
-                emit updateInfoPBR((int)(runState.doneOps * 100 / totalOps));
-            }
-            if ( now - lastEstimateTime >= seconds(1)) {
-                lastEstimateTime = now;
-                runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
-                double speed = (runState.doneOps != 0) ? double(runState.doneOps) / runState.elapsedSec : 1.0;
-                quint64 remainingOps = (totalOps > runState.doneOps) ? (totalOps - runState.doneOps) : 0;
-                double estSec = (speed > 0.0) ? (remainingOps / speed) : 0.0;
-                int minutesLeft = (int)std::ceil(estSec / 60.0);
-                emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
-            }
-            if ( now - lastCheckpointTime >= saveSpectrumSec ) {
-                lastCheckpointTime = now;
+            const ProgressTracker::Due due = progress.due();
 
-                // 1. Обновляем runState
-                runState.rOffset = r;
-                runState.chunkOffset = chunkOffset + chunkSize; // ВАЖНО!
-
-                // 2. Копируем спектр
-                runState.spectrum.resize(numOfCols + 1);
-                for (quint64 i = 0; i <= numOfCols; ++i) {
-                    runState.spectrum[i] = h_spectrum[i];
-                }
-
-                // 3. Сохраняем
-                makeCheckpoint(numOfCols);
+            if (due.spectrum) {
+                progress.markSpectrum();
+                updateSpectrum((int)numOfCols);
             }
+            if (due.bar)
+                reportProgressBar();
+            if (due.estimate)
+                reportEstimate();
+            if (due.checkpoint)
+                saveCpuCheckpoint((int)numOfCols, r, chunkOffset + chunkSize);
+
             if (cancelled.load()) break;
         } // chunkOffset
         if (cancelled.load()) break;
@@ -817,6 +782,8 @@ void Worker::computeSpectrumCpuGrayShort(
         {
             return (i ^ (i >> 1));
         };
+
+    progress.begin(totalOps, runState.doneOps, runState.elapsedSec);
 
     for (quint64 offset = runState.chunkOffset; offset < totalOps; offset += chunkSize)
     {
@@ -943,65 +910,23 @@ void Worker::computeSpectrumCpuGrayShort(
         } // ===== Конец omp parallel =====
         
 
-        // После расчета чанка создаём чекпоинт
+        // chunkEnd — абсолютный индекс маски, поэтому присваивание, а не +=
+        progress.setDoneOps(chunkEnd);
         runState.doneOps = chunkEnd;
 
-        // И обновляем интерфейс
-        auto now = steady_clock::now();
+        const ProgressTracker::Due due = progress.due();
 
-        if (now - lastTimeSpectrum >= updateSpectrumSec ) {
-            lastTimeSpectrum = now;
+        if (due.spectrum) {
+            progress.markSpectrum();
             updateSpectrum(numOfCols);
-
         }
-
-        if ( now - lastTimeBar >= updateProgressBarSec ) {
-            lastTimeBar = now;
-
-            int percent = int(100.0 * double(runState.doneOps) / double(totalOps));
-
-            emit updateInfoPBR(percent);
-        }
-
-        if (now - lastEstimateTime >= seconds(1)) {
-            lastEstimateTime = now;
-
-            runState.elapsedSec =
-                duration_cast<seconds>(
-                    now - startTime).count();
-
-            double speed =
-                runState.doneOps > 0
-                ? double(runState.doneOps) / runState.elapsedSec
-                : 1.0;
-
-            quint64 remaining =
-                totalOps > runState.doneOps
-                ? totalOps - runState.doneOps
-                : 0;
-
-            double estSec =
-                speed > 0
-                ? remaining / speed
-                : 0.0;
-
-            int minutesLeft =
-                int(std::ceil(estSec / 60.0));
-
-            emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
-        } // if (now - lastEstimateTime >= seconds(1))
-        if ( now - lastCheckpointTime >= saveSpectrumSec )
-        {
-            lastCheckpointTime = now;
-
-            // 1. Обновляем runState
-            runState.chunkOffset = runState.doneOps;
-
-            // 2. Копируем спектр
-            for (quint64 i = 0; i <= numOfCols; i++)
-                runState.spectrum[i] = h_spectrum[i];
-            // 4. Сохраняем
-            makeCheckpoint(numOfCols);
+        if (due.bar)
+            reportProgressBar();
+        if (due.estimate)
+            reportEstimate();
+        if (due.checkpoint) {
+            // Код Грея нумерует маски сплошь, слоёв по числу единиц нет.
+            saveCpuCheckpoint(numOfCols, 0, runState.doneOps);
         }
         if (cancelled.load())
             break;
@@ -1023,6 +948,8 @@ void Worker::computeSpectrumCpuNoGrayShort(
     // Если продолжаем после чекпоинта
     quint64 startR = runState.rOffset;
     quint64 startOffsetForStartR = runState.chunkOffset;
+
+    progress.begin(totalOps, runState.doneOps, runState.elapsedSec);
 
     for (quint64 r = startR; r <= maxComb; ++r)
     {
@@ -1092,48 +1019,22 @@ void Worker::computeSpectrumCpuNoGrayShort(
             for (quint64 w = 0; w <= numOfCols; ++w)
                 h_spectrum[w] += chunkSpectrum[w];
 
-            runState.doneOps += thisChunkSize;
+            progress.addOps(thisChunkSize);
+            runState.doneOps = progress.doneOps();
 
-            auto now = steady_clock::now();
+            const ProgressTracker::Due due = progress.due();
 
-            if (now - lastTimeSpectrum >= updateSpectrumSec ) {
-                lastTimeSpectrum = now;
+            if (due.spectrum) {
+                progress.markSpectrum();
                 updateSpectrum(numOfCols);
             }
-
-            if (now - lastTimeBar >= updateProgressBarSec ) {
-                lastTimeBar = now;
-                int percent = int(100.0 * double(runState.doneOps) / double(totalOps));
-                emit updateInfoPBR(percent);
-            }
-
-            if (now - lastEstimateTime >= seconds(1)) {
-                lastEstimateTime = now;
-
-                runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
-                double speed = (runState.doneOps != 0 && runState.elapsedSec > 0)
-                    ? double(runState.doneOps) / runState.elapsedSec
-                    : 1.0;
-
-                quint64 remainingOps = totalOps > runState.doneOps ? totalOps - runState.doneOps : 0;
-                double estSec = speed > 0 ? remainingOps / speed : 0.0;
-
-                int minutesLeft = int(std::ceil(estSec / 60.0));
-                emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft, speed);
-            }
-
-            // Чекпоинт после завершения чанка
-            if ( now - lastCheckpointTime >= saveSpectrumSec ) {
-                lastCheckpointTime = now;
-
-                runState.rOffset = r;
-                runState.chunkOffset = offset + thisChunkSize; // следующий необработанный
-
-                for (quint64 i = 0; i <= numOfCols; ++i)
-                    runState.spectrum[i] = h_spectrum[i];
-
-                makeCheckpoint(numOfCols);
-            }
+            if (due.bar)
+                reportProgressBar();
+            if (due.estimate)
+                reportEstimate();
+            // chunkOffset указывает на первый ещё не обработанный ранг
+            if (due.checkpoint)
+                saveCpuCheckpoint(numOfCols, r, offset + thisChunkSize);
         }
     }
     updateSpectrum(numOfCols);
@@ -1358,15 +1259,13 @@ void Worker::computeSpectrum()
         }
     }
 
-    startTime = steady_clock::now() - std::chrono::seconds(runState.elapsedSec);
-    lastTimeSpectrum = startTime;
-    lastTimeBar = startTime;
-    lastEstimateTime = startTime;
-    lastCheckpointTime = startTime;
+    // Частоты обновления из настроек. Отсчёт запускает сама функция расчёта:
+    // только она знает общее число операций.
+    progress.setIntervals(
+        std::chrono::seconds{ settings.timeIntSet.updateSpectrumInterval },
+        std::chrono::seconds{ settings.timeIntSet.saveSpectrumInterval });
 
-    // Загружаем частоты обновления из настроек
-    updateSpectrumSec = std::chrono::seconds{ settings.timeIntSet.updateSpectrumInterval };
-    saveSpectrumSec   = std::chrono::seconds{ settings.timeIntSet.saveSpectrumInterval };
+    const auto runStartedAt = steady_clock::now() - std::chrono::seconds(runState.elapsedSec);
 
     switch (settings.algorithmType) {
         // В дуальном коде для ускорения используется код Грея
@@ -1489,7 +1388,7 @@ void Worker::computeSpectrum()
         updateSpectrum( numOfCols );
     }
     emit updateInfoPBR(100);
-    emit finished(duration_cast<seconds>(steady_clock::now() - startTime).count());
+    emit finished(int(duration_cast<seconds>(steady_clock::now() - runStartedAt).count()));
 
     if ( h_spectrum != nullptr ) {
         if ( settings.compDev == ComputationSettings::ComputeDevice::GPU ) {

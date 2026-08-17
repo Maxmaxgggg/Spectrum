@@ -13,6 +13,7 @@
 #include "dualcode.h"
 #include "computeSpectrumKernel.cuh"
 #include "settings.h"
+#include "progresstracker.h"
 
 using namespace std::chrono;
 enum LoadMode {
@@ -114,23 +115,29 @@ private:
 
     /* Функции для работы с чекпоинтами */
     void    makeCheckpoint(int numOfCols);
+    // Чекпоинт для GPU-путей: спектр надо забрать с устройства синхронно.
+    // Поток передаётся явно — длинный путь работает на собственном, а не на
+    // потоке класса. false — ошибка CUDA, расчёт продолжать нельзя.
+    bool    saveGpuCheckpoint(cudaStream_t s, int numOfCols,
+                              quint64 rOffset, quint64 chunkOffset);
+    // Чекпоинт для CPU-путей: спектр уже лежит в h_spectrum.
+    void    saveCpuCheckpoint(int numOfCols, quint64 rOffset, quint64 chunkOffset);
 
-    
+    /* Отчёт о ходе расчёта — общий для всех шести вычислительных путей */
+    void    reportEstimate();
+    void    reportProgressBar();
+
+    // Ждёт снятия паузы. Возвращает false, если расчёт отменили.
+    bool    waitWhilePaused();
+
+
     std::atomic<int> paused    { 0 };
     std::atomic<int> cancelled { 0 };
     std::atomic_bool requestRunState = false;
 
     ComputationSettings         settings;
     RunState                    runState;
-    steady_clock::time_point    startTime;
-    steady_clock::time_point    lastTimeSpectrum;
-    steady_clock::time_point    lastTimeBar;
-    steady_clock::time_point    lastEstimateTime;
-    steady_clock::time_point    lastCheckpointTime;
-
-    std::chrono::seconds        updateSpectrumSec{ 1 };
-    std::chrono::seconds        saveSpectrumSec{ 10 };
-    std::chrono::seconds        updateProgressBarSec{ 1 };
+    ProgressTracker             progress;
 
     bool                        exportSpectrum = false;
 
