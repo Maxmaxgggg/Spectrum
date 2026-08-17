@@ -36,6 +36,13 @@ public:
     void uncancel();
     bool isCancelled();
 
+    // Воспроизводимое прерывание для тестов возобновления: сохранять чекпоинт
+    // каждые everyOps операций и остановиться, дойдя до stopAfterOps.
+    // Прерывание по таймеру для этого не годится — точка обрыва каждый раз
+    // разная, и результаты двух запусков не сравнить.
+    // Оба нуля — обычный режим работы.
+    void setCheckpointOpsPolicy(quint64 everyOps, quint64 stopAfterOps);
+
 public slots:
     void computeSpectrum( );
     void setSettings( const QJsonObject& jsonSettings );
@@ -122,6 +129,8 @@ private:
                               quint64 rOffset, quint64 chunkOffset);
     // Чекпоинт для CPU-путей: спектр уже лежит в h_spectrum.
     void    saveCpuCheckpoint(int numOfCols, quint64 rOffset, quint64 chunkOffset);
+    // Останавливает расчёт, если задан порог из setCheckpointOpsPolicy.
+    void    stopIfOpsLimitReached();
 
     /* Отчёт о ходе расчёта — общий для всех шести вычислительных путей */
     void    reportEstimate();
@@ -140,6 +149,9 @@ private:
     ProgressTracker             progress;
 
     bool                        exportSpectrum = false;
+    // 0 — обычный режим; см. setCheckpointOpsPolicy
+    quint64                     stopAfterOps   = 0;
+    quint64                     checkpointEveryOps = 0;
 
 
 

@@ -35,6 +35,18 @@ public:
         m_checkpointInterval = checkpoint;
     }
 
+    // Сохранять чекпоинт каждые everyOps операций вместо привязки к таймеру.
+    // 0 — обычный режим, по времени.
+    //
+    // Нужно тестам возобновления: момент срабатывания таймера от запуска к
+    // запуску разный, а «каждые N операций» — всегда одна и та же точка
+    // прерывания, и результат можно сравнивать побитово.
+    void setOpsCheckpoint(quint64 everyOps)
+    {
+        m_opsCheckpoint     = everyOps;
+        m_nextCheckpointOps = m_doneOps + everyOps;
+    }
+
     // resumeElapsedSec — время, потраченное до загрузки чекпоинта: старт
     // сдвигается назад, чтобы скорость и оценка учитывали прошлый прогон.
     void begin(quint64 totalOps, quint64 doneOps, qint64 resumeElapsedSec)
@@ -45,6 +57,10 @@ public:
 
         m_start = clock::now() - seconds(resumeElapsedSec);
         m_lastEstimate = m_lastBar = m_lastSpectrum = m_lastCheckpoint = m_start;
+
+        // Режим по операциям настраивают до begin(), а doneOps здесь меняется —
+        // порог надо пересчитать от новой отправной точки.
+        m_nextCheckpointOps = m_doneOps + m_opsCheckpoint;
     }
 
     void    addOps(quint64 n)     { m_doneOps += n; }
@@ -60,7 +76,9 @@ public:
         d.estimate   = (m_now - m_lastEstimate   >= seconds(1));
         d.bar        = (m_now - m_lastBar        >= m_barInterval);
         d.spectrum   = (m_now - m_lastSpectrum   >= m_spectrumInterval);
-        d.checkpoint = (m_now - m_lastCheckpoint >= m_checkpointInterval);
+        d.checkpoint = m_opsCheckpoint > 0
+                           ? (m_doneOps >= m_nextCheckpointOps)
+                           : (m_now - m_lastCheckpoint >= m_checkpointInterval);
         return d;
     }
 
@@ -69,9 +87,13 @@ public:
         m_lastEstimate = m_now;
         m_elapsedSec   = std::chrono::duration_cast<seconds>(m_now - m_start).count();
     }
-    void markBar()        { m_lastBar        = m_now; }
-    void markSpectrum()   { m_lastSpectrum   = m_now; }
-    void markCheckpoint() { m_lastCheckpoint = m_now; }
+    void markBar()      { m_lastBar      = m_now; }
+    void markSpectrum() { m_lastSpectrum = m_now; }
+    void markCheckpoint()
+    {
+        m_lastCheckpoint    = m_now;
+        m_nextCheckpointOps = m_doneOps + m_opsCheckpoint;
+    }
 
     qint64 elapsedSec() const { return m_elapsedSec; }
 
@@ -101,6 +123,10 @@ private:
     quint64 m_totalOps   = 0;
     quint64 m_doneOps    = 0;
     qint64  m_elapsedSec = 0;
+
+    // Чекпоинт по числу операций: 0 — режим по таймеру.
+    quint64 m_opsCheckpoint     = 0;
+    quint64 m_nextCheckpointOps = 0;
 
     clock::time_point m_start;
     clock::time_point m_now;

@@ -163,6 +163,7 @@ bool Worker::saveGpuCheckpoint(cudaStream_t s, int numOfCols,
     runState.rOffset     = rOffset;
     runState.chunkOffset = chunkOffset;
     makeCheckpoint(numOfCols);
+    stopIfOpsLimitReached();
     return true;
 }
 
@@ -174,6 +175,15 @@ void Worker::saveCpuCheckpoint(int numOfCols, quint64 rOffset, quint64 chunkOffs
     runState.rOffset     = rOffset;
     runState.chunkOffset = chunkOffset;
     makeCheckpoint(numOfCols);
+    stopIfOpsLimitReached();
+}
+
+// Прерывание сразу после сохранения: состояние на диске согласовано, и
+// возобновление начнётся ровно с той точки, которую записал чекпоинт.
+void Worker::stopIfOpsLimitReached()
+{
+    if (stopAfterOps > 0 && progress.doneOps() >= stopAfterOps)
+        cancelled.store(1);
 }
 
 // Возвращает false, если во время паузы расчёт отменили.
@@ -1264,6 +1274,7 @@ void Worker::computeSpectrum()
     progress.setIntervals(
         std::chrono::seconds{ settings.timeIntSet.updateSpectrumInterval },
         std::chrono::seconds{ settings.timeIntSet.saveSpectrumInterval });
+    progress.setOpsCheckpoint(checkpointEveryOps);
 
     const auto runStartedAt = steady_clock::now() - std::chrono::seconds(runState.elapsedSec);
 
@@ -1349,18 +1360,31 @@ void Worker::computeSpectrum()
         }
         if ( settings.algorithmType == ComputationSettings::SimpleXor ) {
             freeBinomTable( h_binomTable, numOfRows );
+            h_binomTable = nullptr;
         }
-        if ( h_matrix!= nullptr )
+        if ( h_matrix != nullptr ) {
             free( h_matrix );
+            h_matrix = nullptr;
+        }
         if (d_matrix != nullptr) {
             cudaFree(d_matrix);
             d_matrix = nullptr;
+        }
+        // Раньше на пути отмены эти два буфера не освобождались: каждое
+        // нажатие "Отмена" оставляло на видеокарте спектр и таблицу биномов.
+        if (d_spectrum != nullptr) {
+            cudaFree(d_spectrum);
+            d_spectrum = nullptr;
+        }
+        if (d_binomTable != nullptr) {
+            cudaFree(d_binomTable);
+            d_binomTable = nullptr;
         }
         if (ev != nullptr) {
             CUDA_CALL(cudaEventDestroy(ev));
             ev = nullptr;
         }
-            
+
         if (stream != nullptr) {
             CUDA_CALL(cudaStreamDestroy(stream));
             stream = nullptr;
@@ -1448,6 +1472,12 @@ bool Worker::isCancelled()
     return (bool)cancelled.load();
 }
 
+
+void Worker::setCheckpointOpsPolicy(quint64 everyOps, quint64 stopAfter)
+{
+    checkpointEveryOps = everyOps;
+    stopAfterOps       = stopAfter;
+}
 
 void Worker::setSettings(const QJsonObject& jsonSettings) {
     this->settings = ComputationSettings::fromJson(jsonSettings);

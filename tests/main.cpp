@@ -10,7 +10,7 @@
 
 #include <QCoreApplication>
 #include <QJsonObject>
-#include <QRegularExpression>
+#include <QSettings>
 #include <QTextStream>
 
 #include <cuda_runtime.h>
@@ -98,7 +98,13 @@ static ComputationSettings makeSettings(const RunConfig& cfg)
 }
 
 // Прогоняет расчёт синхронно и возвращает итоговый спектр.
-static Spectrum runWorker(const RunConfig& cfg)
+//
+// loadMode задаёт, начинать с нуля или продолжить с сохранённого состояния.
+// checkpointEveryOps/stopAfterOps включают воспроизводимое прерывание.
+static Spectrum runWorker(const RunConfig& cfg,
+                          LoadMode loadMode           = LoadMode::Reset,
+                          quint64  checkpointEveryOps = 0,
+                          quint64  stopAfterOps       = 0)
 {
     Worker worker;
     Spectrum captured;
@@ -111,7 +117,8 @@ static Spectrum runWorker(const RunConfig& cfg)
                      [&](const QString& m) { errored = true; errorMessage = m; });
 
     worker.setSettings(makeSettings(cfg).toJson());
-    worker.initializeRunState(LoadMode::Reset);
+    worker.setCheckpointOpsPolicy(checkpointEveryOps, stopAfterOps);
+    worker.initializeRunState(loadMode);
     worker.computeSpectrum();
 
     if (errored) {
@@ -119,6 +126,46 @@ static Spectrum runWorker(const RunConfig& cfg)
         return Spectrum();
     }
     return stripZeros(captured);
+}
+
+// Стирает все сохранённые чекпоинты, чтобы прогон не зависел от предыдущего.
+static void clearCheckpoints()
+{
+    QSettings s;
+    s.remove(QStringLiteral("checkpoints"));
+    s.sync();
+}
+
+// Полное число операций, которое должен выполнить расчёт при данных настройках.
+// Нужно, чтобы отличить настоящий обрыв на середине от «досчитали до конца и
+// только потом сохранились».
+static quint64 expectedTotalOps(const RunConfig& cfg)
+{
+    const quint64 k = quint64(cfg.matrix.size());
+    if (cfg.algorithm != Algorithm::SimpleXor)
+        return 1ULL << k;                    // код Грея перебирает все маски подряд
+
+    const quint64 maxRows = cfg.maxRows > 0 ? quint64(cfg.maxRows) : k;
+    quint64 total = 0;
+    for (quint64 r = 0; r <= maxRows; ++r)
+        total += Reference::binom(k, r);
+    return total;
+}
+
+// Сколько операций записано в единственном сохранённом чекпоинте.
+// -1 — чекпоинта нет вовсе.
+static qint64 savedDoneOps()
+{
+    QSettings s;
+    s.beginGroup(QStringLiteral("checkpoints"));
+    const QStringList groups = s.childGroups();
+    if (groups.isEmpty()) return -1;
+
+    s.beginGroup(groups.first());
+    const QJsonObject runState = s.value(QStringLiteral("runState")).toJsonObject();
+    if (runState.isEmpty()) return -1;
+
+    return runState[QStringLiteral("doneOps")].toVariant().toLongLong();
 }
 
 // ------------------------------------------------------------------ проверка
@@ -267,6 +314,206 @@ static void testDualCode(const QString& label, const QStringList& matrix)
     check("GPU  дуальный", cfg, brute);
 }
 
+// ---------------------------------------------------- чекпоинты
+
+// Общий сценарий: посчитать целиком, затем посчитать с прерыванием и
+// возобновлением — результаты обязаны совпасть точно.
+//
+// resumeCfg отличается от cfg, когда проверяется перенос состояния между
+// разными конфигурациями железа.
+static void checkResume(const QString& name, const RunConfig& cfg,
+                        const RunConfig& resumeCfg,
+                        quint64 checkpointEveryOps, quint64 stopAfterOps)
+{
+    const bool needsGpu = cfg.device == ComputeDevice::GPU
+                       || resumeCfg.device == ComputeDevice::GPU;
+    if (needsGpu && !g_gpuAvailable) {
+        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        return;
+    }
+
+    clearCheckpoints();
+    const Spectrum whole = runWorker(cfg);
+
+    clearCheckpoints();
+    // Первый проход: считаем до порога и останавливаемся на чекпоинте.
+    runWorker(cfg, LoadMode::Reset, checkpointEveryOps, stopAfterOps);
+
+    // Без этой проверки тест был бы бесполезен: если прерывание не сработало,
+    // второй проход просто посчитал бы всё заново и сравнение прошло бы само
+    // собой, ничего не проверив. Обрыв обязан быть строго внутри диапазона —
+    // сохранение уже на последнем чанке ничего не доказывает.
+    const qint64  saved = savedDoneOps();
+    const quint64 total = expectedTotalOps(cfg);
+    if (saved <= 0 || quint64(saved) >= total) {
+        ++g_failed;
+        out << QStringLiteral("  ПРОВАЛ   ") << name
+            << QStringLiteral("  — обрыва не было: сохранено ") << saved
+            << QStringLiteral(" из ") << total
+            << QStringLiteral(" операций, возобновление не проверено") << Qt::endl;
+        clearCheckpoints();
+        return;
+    }
+
+    // Второй проход: продолжаем с сохранённого состояния до конца.
+    const Spectrum resumed = runWorker(resumeCfg, LoadMode::FromCheckpoint);
+
+    clearCheckpoints();
+
+    if (resumed == whole) {
+        ++g_passed;
+        out << "  ok       " << name
+            << QStringLiteral("  (обрыв на ") << saved << QStringLiteral(" оп.)") << Qt::endl;
+        return;
+    }
+
+    ++g_failed;
+    out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
+    out << QStringLiteral("      целиком:      ") << formatSpectrum(whole)   << Qt::endl;
+    out << QStringLiteral("      с прерыванием:") << formatSpectrum(resumed) << Qt::endl;
+
+    QList<int> weights = whole.keys();
+    for (int w : resumed.keys())
+        if (!weights.contains(w)) weights << w;
+    std::sort(weights.begin(), weights.end());
+    for (int w : weights) {
+        const quint64 e = whole.value(w, 0), a = resumed.value(w, 0);
+        if (e != a)
+            out << QStringLiteral("      вес ") << w << QStringLiteral(": целиком ") << e
+                << QStringLiteral(", с прерыванием ") << a
+                << QStringLiteral(" (разница ") << (qint64(a) - qint64(e)) << ")" << Qt::endl;
+    }
+}
+
+// Настройки длинного кода, при которых расчёт заведомо режется на несколько
+// чанков и его есть где прервать.
+static RunConfig longConfig(ComputeDevice dev)
+{
+    RunConfig cfg;
+    cfg.matrix     = Reference::identity(70);
+    cfg.algorithm  = Algorithm::SimpleXor;
+    cfg.maxRows    = 5;
+    cfg.device     = dev;
+    cfg.threadsCpu = 4;
+    // Чанк GPU = блоки * нити * 4096 масок. При штатных 64x256 это 67 млн —
+    // больше всей задачи, и обрыва не случилось бы.
+    cfg.blocksGpu  = 8;
+    cfg.threadsGpu = 32;
+    return cfg;
+}
+
+static void testCheckpoints()
+{
+    out << Qt::endl << QStringLiteral("Чекпоинты: прерывание и возобновление") << Qt::endl;
+
+    // Голей (24,12): 4096 комбинаций, прерывания в разных точках.
+    RunConfig golay;
+    golay.matrix = Reference::golay24_12();
+
+    golay.algorithm = Algorithm::SimpleXor;
+    for (ComputeDevice dev : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+        golay.device = dev;
+        const QString who = QStringLiteral("%1 XOR Голей")
+                                .arg(dev == ComputeDevice::CPU ? QStringLiteral("CPU")
+                                                               : QStringLiteral("GPU"));
+        // Прерывание около 10 %, 50 % и 90 % пройденного.
+        checkResume(who + QStringLiteral(", обрыв ~10%"), golay, golay, 400,  400);
+        checkResume(who + QStringLiteral(", обрыв ~50%"), golay, golay, 2000, 2000);
+        checkResume(who + QStringLiteral(", обрыв ~90%"), golay, golay, 3600, 3600);
+        // Несколько сохранений подряд за один проход.
+        checkResume(who + QStringLiteral(", много чекпоинтов"), golay, golay, 300, 2100);
+    }
+
+    // Коду Грея нужна матрица покрупнее: он идёт чанками по 2^20 масок, и на
+    // Голее (4096 масок) весь расчёт укладывается в один чанк — прерывать
+    // нечего. I(22) даёт 4.2 млн масок, то есть четыре чанка.
+    RunConfig gray;
+    gray.matrix    = Reference::identity(22);
+    gray.algorithm = Algorithm::GrayCode;
+    for (ComputeDevice dev : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+        gray.device = dev;
+        const QString who = QStringLiteral("%1 Грей I(22)")
+                                .arg(dev == ComputeDevice::CPU ? QStringLiteral("CPU")
+                                                               : QStringLiteral("GPU"));
+        checkResume(who + QStringLiteral(", обрыв ~25%"), gray, gray, 1000000, 1000000);
+        checkResume(who + QStringLiteral(", обрыв ~50%"), gray, gray, 2000000, 2000000);
+        checkResume(who + QStringLiteral(", много чекпоинтов"), gray, gray, 1000000, 3000000);
+    }
+
+    // Смена слоя r — самое рискованное место для XOR: обрыв должен попасть
+    // на границу между числом единиц в маске.
+    RunConfig layer;
+    layer.matrix    = Reference::golay24_12();
+    layer.algorithm = Algorithm::SimpleXor;
+    // C(12,0)+C(12,1)+C(12,2) = 1+12+66 = 79 — конец слоя r=2.
+    for (quint64 boundary : { 13ULL, 79ULL, 299ULL }) {
+        layer.device = ComputeDevice::CPU;
+        checkResume(QStringLiteral("CPU XOR, обрыв на границе слоя (%1)").arg(boundary),
+                    layer, layer, boundary, boundary);
+        layer.device = ComputeDevice::GPU;
+        checkResume(QStringLiteral("GPU XOR, обрыв на границе слоя (%1)").arg(boundary),
+                    layer, layer, boundary, boundary);
+    }
+
+    // Длинный код. При maxRows=3 всего 57 тыс. масок — это один чанк, обрывать
+    // нечего. maxRows=5 даёт 13 млн, и чанков становится несколько. GPU-чанк
+    // равен блоки*нити*4096, поэтому разбиение здесь намеренно мелкое.
+    RunConfig lng = longConfig(ComputeDevice::CPU);
+    checkResume(QStringLiteral("CPU XOR длинный, обрыв"), lng, lng, 3000000, 3000000);
+    lng = longConfig(ComputeDevice::GPU);
+    checkResume(QStringLiteral("GPU XOR длинный, обрыв"), lng, lng, 3000000, 3000000);
+}
+
+// Ключевая проверка: чекпоинт обязан переноситься между разными
+// конфигурациями железа. Точка возобновления хранится как абсолютный индекс
+// (ранг сочетания либо номер маски Грея), а не как номер чанка, поэтому смена
+// числа потоков, блоков и даже устройства не должна ни на что влиять.
+static void testCheckpointPortability()
+{
+    out << Qt::endl
+        << QStringLiteral("Чекпоинты: перенос между конфигурациями") << Qt::endl;
+
+    RunConfig base;
+    base.matrix    = Reference::golay24_12();
+    base.algorithm = Algorithm::SimpleXor;
+
+    // Другое число потоков CPU.
+    RunConfig other = base;
+    other.threadsCpu = 1;
+    RunConfig from = base;
+    from.threadsCpu = 8;
+    checkResume(QStringLiteral("CPU 8 потоков -> CPU 1 поток"), from, other, 1000, 1000);
+
+    // Другое разбиение на GPU.
+    from = base;              from.device = ComputeDevice::GPU;
+    from.blocksGpu = 64;      from.threadsGpu = 256;
+    other = base;             other.device = ComputeDevice::GPU;
+    other.blocksGpu = 8;      other.threadsGpu = 64;
+    checkResume(QStringLiteral("GPU 64x256 -> GPU 8x64"), from, other, 1000, 1000);
+
+    // Смена устройства в обе стороны.
+    from = base;  from.device  = ComputeDevice::CPU;
+    other = base; other.device = ComputeDevice::GPU;
+    checkResume(QStringLiteral("CPU -> GPU"), from, other, 1000, 1000);
+
+    from = base;  from.device  = ComputeDevice::GPU;
+    other = base; other.device = ComputeDevice::CPU;
+    checkResume(QStringLiteral("GPU -> CPU"), from, other, 1000, 1000);
+
+    // То же самое на коде Грея — на матрице, которая режется на чанки.
+    from = RunConfig();  from.matrix = Reference::identity(22);
+    from.algorithm = Algorithm::GrayCode; from.device = ComputeDevice::CPU;
+    other = from;        other.device = ComputeDevice::GPU;
+    checkResume(QStringLiteral("Грей: CPU -> GPU"), from, other, 2000000, 2000000);
+    checkResume(QStringLiteral("Грей: GPU -> CPU"), other, from, 2000000, 2000000);
+
+    // Длинный код: смена устройства в обе стороны.
+    const RunConfig lngCpu = longConfig(ComputeDevice::CPU);
+    const RunConfig lngGpu = longConfig(ComputeDevice::GPU);
+    checkResume(QStringLiteral("длинный: CPU -> GPU"), lngCpu, lngGpu, 3000000, 3000000);
+    checkResume(QStringLiteral("длинный: GPU -> CPU"), lngGpu, lngCpu, 3000000, 3000000);
+}
+
 // -------------------------------------------------------------------- main
 
 int main(int argc, char* argv[])
@@ -304,6 +551,9 @@ int main(int argc, char* argv[])
     testLongCode(64, 2);
 
     testDualCode(QStringLiteral("Хэмминг (7,4)"), Reference::hamming7_4());
+
+    testCheckpoints();
+    testCheckpointPortability();
 
     out << Qt::endl
         << QStringLiteral("итого: пройдено ") << g_passed << QStringLiteral(", провалено ") << g_failed << Qt::endl;
