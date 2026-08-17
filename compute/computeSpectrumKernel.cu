@@ -239,9 +239,18 @@ __global__ void computeSpectrumKernelShort(
                 codeword[w] ^= readConstMatrixWord(k - 1 - p, w, blockCount);
         }
 
-        int weight = 0;
-        for (int w = 0; w < blockCount; ++w) weight += __popcll(codeword[w]);
-        atomicAdd(&s_spectrum[weight], 1ULL);
+        // Подряд идущие кодовые слова часто имеют одинаковый вес, поэтому
+        // копим серию и сбрасываем её одной атомарной операцией.
+        //
+        // Это не микрооптимизация: у вырожденных матриц вес внутри слоя не
+        // меняется вообще. Скажем, у единичной матрицы строка i это e_i,
+        // кодовое слово равно самой маске, и все C(n,r) слов слоя имеют вес
+        // ровно r — весь блок бил атомарными операциями в одну ячейку общей
+        // памяти, и железо их сериализовало. Замерено: снятие конкуренции
+        // ускоряло такой расчёт втрое, до уровня случайной матрицы.
+        int     runWeight = 0;
+        for (int w = 0; w < blockCount; ++w) runWeight += __popcll(codeword[w]);
+        quint64 runLength = 1;
 
         // При r = 0 и r = k комбинация всего одна, и цикл не выполняется —
         // gosperNext на нулевой маске звать нельзя.
@@ -258,12 +267,20 @@ __global__ void computeSpectrumKernelShort(
                     codeword[w] ^= readConstMatrixWord(k - 1 - p, w, blockCount);
             }
 
-            int weight2 = 0;
-            for (int w = 0; w < blockCount; ++w) weight2 += __popcll(codeword[w]);
-            atomicAdd(&s_spectrum[weight2], 1ULL);
+            int weight = 0;
+            for (int w = 0; w < blockCount; ++w) weight += __popcll(codeword[w]);
+
+            if (weight == runWeight) {
+                ++runLength;
+            } else {
+                atomicAdd(&s_spectrum[runWeight], runLength);
+                runWeight = weight;
+                runLength = 1;
+            }
 
             revMask = nextRev;
         }
+        atomicAdd(&s_spectrum[runWeight], runLength);
     }
 
     __syncthreads();
@@ -510,10 +527,11 @@ __global__ void computeSpectrumKernelGrayShort(
                 codeword[w] ^= readConstMatrixWord(pos, w, blockCount);
         }
 
-        // 7) аккумулируем вес
-        int weight = 0;
-        for (int w = 0; w < blockCount; ++w) weight += __popcll(codeword[w]);
-        atomicAdd(&s_spectrum[weight], 1ULL);
+        // 7) аккумулируем вес. Как и в ядре простого XOR, копим серию
+        // одинаковых весов и сбрасываем её одной атомарной операцией.
+        int     runWeight = 0;
+        for (int w = 0; w < blockCount; ++w) runWeight += __popcll(codeword[w]);
+        quint64 runLength = 1;
 
         // 8) основной цикл по локальному диапазону (без перекрытий).
         // У соседних кодов Грея различается ровно один бит, поэтому цикл по
@@ -529,11 +547,19 @@ __global__ void computeSpectrumKernelGrayShort(
                     codeword[w] ^= readConstMatrixWord(pos, w, blockCount);
             }
 
-            int weight2 = 0;
-            for (int w = 0; w < blockCount; ++w) weight2 += __popcll(codeword[w]);
-            atomicAdd(&s_spectrum[weight2], 1ULL);
+            int weight = 0;
+            for (int w = 0; w < blockCount; ++w) weight += __popcll(codeword[w]);
+
+            if (weight == runWeight) {
+                ++runLength;
+            } else {
+                atomicAdd(&s_spectrum[runWeight], runLength);
+                runWeight = weight;
+                runLength = 1;
+            }
             mask = next_mask;
         }
+        atomicAdd(&s_spectrum[runWeight], runLength);
     }
 
     __syncthreads();

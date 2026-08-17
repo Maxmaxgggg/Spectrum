@@ -555,6 +555,41 @@ static void testOversizedMatrixRejected()
     }
 }
 
+// Один заданный расчёт и ничего больше — чтобы профилировщику было что
+// показывать без посторонних запусков ядер.
+// Запуск: SpectrumTests.exe --profile ident|rand
+static int runSingleForProfiling(const QString& which)
+{
+    RunConfig cfg;
+    cfg.algorithm = Algorithm::SimpleXor;
+    cfg.maxRows   = 8;
+    cfg.device    = ComputeDevice::GPU;
+
+    if (which == QStringLiteral("ident")) {
+        // Вырожденный случай: строка i единичной матрицы это e_i, поэтому вес
+        // кодового слова равен числу единиц в маске. Внутри слоя r он у всех
+        // одинаков, и весь блок бьёт атомарными операциями в одну ячейку.
+        cfg.matrix = Reference::identity(50);
+    } else if (which == QStringLiteral("rand")) {
+        // Контроль: те же размеры и то же число комбинаций, но веса размазаны.
+        cfg.matrix = Reference::randomMatrix(50, 50, 3);
+    } else {
+        out << QStringLiteral("ожидалось --profile ident|rand") << Qt::endl;
+        return 2;
+    }
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const Spectrum s = runWorker(cfg);
+    const double sec = std::chrono::duration<double>(
+                           std::chrono::steady_clock::now() - t0).count();
+
+    quint64 total = 0;
+    for (auto it = s.constBegin(); it != s.constEnd(); ++it) total += it.value();
+    out << which << QStringLiteral(": %1 с, слов %2, ненулевых весов %3")
+                        .arg(sec, 0, 'f', 2).arg(total).arg(s.size()) << Qt::endl;
+    return 0;
+}
+
 // ------------------------------------------------- золотой файл спектров
 
 // Тяжёлые прогоны с записью точных спектров в файл.
@@ -812,6 +847,13 @@ int main(int argc, char* argv[])
         benchmark();
         out.flush();
         return 0;
+    }
+
+    const int profAt = args.indexOf(QStringLiteral("--profile"));
+    if (profAt >= 0 && profAt + 1 < args.size()) {
+        const int rc = runSingleForProfiling(args.at(profAt + 1));
+        out.flush();
+        return rc;
     }
 
     const int dumpAt = args.indexOf(QStringLiteral("--dump"));
