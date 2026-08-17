@@ -25,6 +25,40 @@ enum LoadMode {
     FromSave
 };
 
+// Всё, что выводится из настроек и матрицы до начала расчёта.
+//
+// Раньше эти величины были локальными переменными computeSpectrumImpl и
+// передавались в вычислительные функции поштучно — по четыре-семь аргументов,
+// причём chunkSize при этом перекрывал одноимённое поле класса.
+struct CodeGeometry
+{
+    // Матрица, по которой идёт перебор. Для дуального кода это проверочная
+    // матрица, а не та, что ввёл пользователь.
+    QStringList matrix;
+
+    quint64 numOfRows    = 0;
+    quint64 numOfCols    = 0;
+    // Число 64-битных слов на одну строку
+    quint64 wordsPerRow  = 0;
+    quint64 matrixWords  = 0;
+    // Длина спектра: веса от 0 до numOfCols включительно
+    quint64 spectrumSize = 0;
+    // Максимальное число складываемых строк при частичном переборе
+    quint64 maxRows      = 0;
+    // Число масок в одном чанке
+    quint64 chunkSize    = 1 << 20;
+
+    int  blocksGpu  = 1;
+    int  threadsGpu = 1;
+
+    bool useGpu     = false;
+    // Длинные коды (больше 63 строк) считаются другими функциями: маска в одно
+    // слово туда уже не помещается.
+    bool isLongCode = false;
+    // Матрица не влезла в константную память и лежит в глобальной
+    bool matrixInGlobalMem = false;
+};
+
 Q_DECLARE_METATYPE(LoadMode)
 class Worker : public QObject
 {
@@ -70,49 +104,24 @@ private:
     static    quint64 sumCombinations(quint64 k, quint64 maxComb);
 
 
+    /* Подготовка расчёта */
+    // Выводит размеры и режимы из настроек и матрицы.
+    CodeGeometry describeTask() const;
+    // Упаковывает матрицу из строк QStringList в биты и раскладывает буферы
+    // по памяти хоста и устройства.
+    void prepareBuffers(const CodeGeometry& g);
+    // Выбирает вычислительную функцию по алгоритму, устройству и длине кода.
+    void dispatchComputation(const CodeGeometry& g);
+    // Финальная выгрузка спектра, сигналы и освобождение ресурсов.
+    void finishComputation(const CodeGeometry& g, steady_clock::time_point startedAt);
+
     /* Функции для расчета спектра кода */
-    void      computeSpectrumGpuGrayShort(  
-        quint64 numOfRows,
-        quint64 numOfCols,
-        quint64 wordsPerRow, 
-        quint64 chunkSize, 
-        int blockCount, 
-        int threadsPerBlock
-    );
-    void      computeSpectrumGpuNoGrayLong(
-        quint64 numOfRows,
-        quint64 numOfCols,
-        quint64 wordsPerRow,
-        int blockCount,
-        int threadsPerBlock,
-        quint64 maxComb
-    );
-    void computeSpectrumGpuNoGrayShort(
-        quint64 numOfRows,
-        quint64 numOfCols,
-        quint64 wordsPerRow,
-        quint64 chunkSize,
-        int blockCount,
-        int threadsPerBlock,
-        quint64 maxComb
-    );
-    void computeSpectrumCpuNoGrayLong(
-        quint64 numOfRows,
-        quint64 numOfCols,
-        quint64 wordsPerRow,
-        quint64 maxComb
-    );
-    void computeSpectrumCpuGrayShort(   
-        quint64 numOfRows,
-        quint64 numOfCols,
-        quint64 wordsPerRow
-    );
-    void computeSpectrumCpuNoGrayShort( 
-        quint64 numOfRows, 
-        quint64 numOfCols, 
-        quint64 wordsPerRow, 
-        quint64 maxComb 
-    );
+    void computeSpectrumGpuGrayShort  (const CodeGeometry& g);
+    void computeSpectrumGpuNoGrayShort(const CodeGeometry& g);
+    void computeSpectrumGpuNoGrayLong (const CodeGeometry& g);
+    void computeSpectrumCpuGrayShort  (const CodeGeometry& g);
+    void computeSpectrumCpuNoGrayShort(const CodeGeometry& g);
+    void computeSpectrumCpuNoGrayLong (const CodeGeometry& g);
 
     /* Функции, посылающие сигнал для обновления интерфейса */
     void updateSpectrum(int numOfCols);
@@ -151,12 +160,6 @@ private:
     // 0 — обычный режим; см. setCheckpointOpsPolicy
     quint64                     stopAfterOps   = 0;
     quint64                     checkpointEveryOps = 0;
-
-
-
-
-    // Число масок в одном чанке
-    quint64 chunkSize = 1 << 20;
 
     // Все ресурсы владеющие: освобождаются вместе с объектом, каким бы путём
     // ни завершился расчёт — успехом, отменой или исключением.

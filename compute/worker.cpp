@@ -185,8 +185,16 @@ bool Worker::waitWhilePaused()
     return !cancelled.load();
 }
 
-void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols, quint64 wordsPerRow, quint64 chunkSize, int blockCount, int threadsPerBlock, quint64 maxComb)
+void Worker::computeSpectrumGpuNoGrayShort(const CodeGeometry& g)
 {
+    const quint64 numOfRows       = g.numOfRows;
+    const quint64 numOfCols       = g.numOfCols;
+    const quint64 wordsPerRow     = g.wordsPerRow;
+    const quint64 chunkSize       = g.chunkSize;
+    const int     blockCount      = g.blocksGpu;
+    const int     threadsPerBlock = g.threadsGpu;
+    const quint64 maxComb         = g.maxRows;
+
     bool copyPending = false;
     progress.begin(sumCombinations(numOfRows, maxComb), runState.doneOps, runState.elapsedSec);
 
@@ -267,8 +275,15 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
 
     updateSpectrum(numOfCols);
 }
-void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, quint64 wordsPerRow, quint64 chunkSize, int blockCount, int threadsPerBlock )
+void Worker::computeSpectrumGpuGrayShort(const CodeGeometry& g)
 {
+    const quint64 numOfRows       = g.numOfRows;
+    const quint64 numOfCols       = g.numOfCols;
+    const quint64 wordsPerRow     = g.wordsPerRow;
+    const quint64 chunkSize       = g.chunkSize;
+    const int     blockCount      = g.blocksGpu;
+    const int     threadsPerBlock = g.threadsGpu;
+
     bool          copyPending = false;
     const quint64 totalOps    = 1ULL << numOfRows;
 
@@ -334,15 +349,15 @@ void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, 
     updateSpectrum(numOfCols);
 }
 
-void Worker::computeSpectrumGpuNoGrayLong(
-    quint64 numOfRows,
-    quint64 numOfCols,
-    quint64 wordsPerRow,
-    int     blockCount,
-    int     threadsPerBlock,
-    quint64 maxComb
-)
+void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
 {
+    const quint64 numOfRows       = g.numOfRows;
+    const quint64 numOfCols       = g.numOfCols;
+    const quint64 wordsPerRow     = g.wordsPerRow;
+    const int     blockCount      = g.blocksGpu;
+    const int     threadsPerBlock = g.threadsGpu;
+    const quint64 maxComb         = g.maxRows;
+
     quint64 totalOps = sumCombinations(numOfRows, maxComb);
 
     // Общее число нитей, запущенных на видеокарте
@@ -582,12 +597,13 @@ void diffPositions(const int16_t* old_a, const int16_t* a, int numOnes, int16_t*
     while (j < numOnes) changed[numChanged++] = a[j++];
 }
 
-void Worker::computeSpectrumCpuNoGrayLong(
-    quint64 numOfRows,
-    quint64 numOfCols,
-    quint64 wordsPerRow,
-    quint64 maxComb)
+void Worker::computeSpectrumCpuNoGrayLong(const CodeGeometry& g)
 {
+    const quint64 numOfRows   = g.numOfRows;
+    const quint64 numOfCols   = g.numOfCols;
+    const quint64 wordsPerRow = g.wordsPerRow;
+    const quint64 maxComb     = g.maxRows;
+
     using namespace std::chrono;
     int numThreads = omp_get_max_threads();
     quint64 totalOps = sumCombinations(numOfRows, maxComb);
@@ -763,12 +779,13 @@ void Worker::computeSpectrumCpuNoGrayLong(
     updateSpectrum((int)numOfCols);
 }
 
-void Worker::computeSpectrumCpuGrayShort(
-    quint64 numOfRows,
-    quint64 numOfCols,
-    quint64 wordsPerRow
-)
+void Worker::computeSpectrumCpuGrayShort(const CodeGeometry& g)
 {
+    const quint64 numOfRows   = g.numOfRows;
+    const quint64 numOfCols   = g.numOfCols;
+    const quint64 wordsPerRow = g.wordsPerRow;
+    const quint64 chunkSize   = g.chunkSize;
+
     using namespace std::chrono;
 
     // Число масок для обработки
@@ -930,13 +947,14 @@ void Worker::computeSpectrumCpuGrayShort(
     } // for (quint64 offset = startChunkInd; offset < totalOps; offset += chunkSize)
 }
 
-void Worker::computeSpectrumCpuNoGrayShort(
-    quint64 numOfRows,
-    quint64 numOfCols,
-    quint64 wordsPerRow,
-    quint64 maxComb
-)
+void Worker::computeSpectrumCpuNoGrayShort(const CodeGeometry& g)
 {
+    const quint64 numOfRows   = g.numOfRows;
+    const quint64 numOfCols   = g.numOfCols;
+    const quint64 wordsPerRow = g.wordsPerRow;
+    const quint64 chunkSize   = g.chunkSize;
+    const quint64 maxComb     = g.maxRows;
+
     using namespace std::chrono;
 
     quint64 totalOps = sumCombinations(numOfRows, maxComb);
@@ -1165,220 +1183,187 @@ void Worker::computeSpectrum()
     }
 }
 
-void Worker::computeSpectrumImpl()
+// Выводит из настроек и матрицы всё, что нужно для расчёта.
+CodeGeometry Worker::describeTask() const
 {
+    CodeGeometry g;
 
-    /*  РАБОТА С МАТРИЦЕЙ   */
-    QStringList matrix = settings.matrix;
-    // Если применяется дуальный код - генерируем проверочную матрицу
-    if (settings.algorithmType == ComputationSettings::DualCode) {
-        matrix = generatorToParity(matrix);
-    }
-    // Число строк и столбцов матрицы
-    quint64 numOfRows = matrix.length();
-    quint64 numOfCols = matrix[0].length();
-    quint64 maxRows = settings.maxRows;
-    quint64 spectrumSize = numOfCols + 1;
-    // Если спектр уже есть, то ничего не произойдет
-    if (runState.spectrum.size() != spectrumSize)
-        runState.spectrum.resize(spectrumSize);
+    g.matrix = settings.matrix;
+    // Для дуального кода перебор идёт по проверочной матрице, а не по той,
+    // что ввёл пользователь.
+    if (settings.algorithmType == ComputationSettings::DualCode)
+        g.matrix = generatorToParity(g.matrix);
 
-    /*  НАСТРОЙКИ ВЫЧИСЛИТЕЛЯ   */
-    // Устанавливаем число потоков CPU
-    int workerThreads = settings.compDevSet.threadsCpu;
-    omp_set_num_threads(workerThreads);
-    // Число блоков для запуска на видеокарте ( минимум - число мультипроцессоров )
-    int blockCount = settings.compDevSet.blocksGpu;
-    // Число нитей, запускаемых на одном блоке
-    int threadsPerBlock = settings.compDevSet.threadsGpu;
+    g.numOfRows    = quint64(g.matrix.length());
+    g.numOfCols    = quint64(g.matrix[0].length());
+    g.wordsPerRow  = (g.numOfCols + 63) / 64;
+    g.matrixWords  = g.numOfRows * g.wordsPerRow;
+    g.spectrumSize = g.numOfCols + 1;
+    g.maxRows      = quint64(settings.maxRows);
 
+    g.blocksGpu  = settings.compDevSet.blocksGpu;
+    g.threadsGpu = settings.compDevSet.threadsGpu;
+    g.useGpu     = settings.compDev == ComputationSettings::ComputeDevice::GPU;
+    g.isLongCode = g.numOfRows > Constants::MAX_SHORT_CODE_LENGTH;
 
-    // Число 64-битных слов на одну строку матрицы
-    quint64 wordsPerRow = (numOfCols + 63) / 64;
-    // Размер матрицы в 64-битных словах
-    quint64 matrixSizeInWords = numOfRows * wordsPerRow;
-    const bool useGpu = settings.compDev == ComputationSettings::ComputeDevice::GPU;
+    g.matrixInGlobalMem =
+        g.useGpu && (g.matrixWords * Constants::WORD_SIZE > Constants::CONST_MEM_SIZE);
 
-    bool matrixInGlobalMem = false;
-    if ((matrixSizeInWords * Constants::WORD_SIZE > Constants::CONST_MEM_SIZE) && useGpu) {
+    return g;
+}
 
+// Упаковывает матрицу в биты и раскладывает буферы по памяти.
+void Worker::prepareBuffers(const CodeGeometry& g)
+{
+    if (g.matrixInGlobalMem) {
         /* ДОПИСАТЬ КОПИРОВАНИЕ МАТРИЦЫ В ПАМЯТЬ ДЛЯ КОРОТКИХ КОДОВ */
-        if (numOfRows < 64) {
-            emit errorOccurred("Ошибка, матрица слишком большая");
-            emit finished(Constants::ERROR_OCCURED);
-            return;
-        }
-        d_matrix.allocate(matrixSizeInWords);
-        matrixInGlobalMem = true;
+        if (!g.isLongCode)
+            throw std::invalid_argument("матрица слишком большая для короткого кода");
+        d_matrix.allocate(g.matrixWords);
     }
-    // Выделяем матрицу на хосте (calloc внутри — она уже обнулена)
-    h_matrix.allocate(matrixSizeInWords, HostBuffer<quint64>::Kind::Paged);
-    // Копируем из QStringList-а
-    for (quint64 i = 0; i < numOfRows; ++i) {
-        quint64* rowData = h_matrix.get() + i * wordsPerRow;
-        const QString& row = matrix[(int)i];
-        for (quint64 j = 0; j < numOfCols; ++j) {
-            if (row.at((int)j) == QLatin1Char('1')) {
-                quint64 blockIdx = j / 64;
-                quint64 bitIdx = j % 64;
-                rowData[blockIdx] |= (1ull << bitIdx);
-            }
-        }
+
+    // calloc внутри, поэтому матрица уже обнулена
+    h_matrix.allocate(g.matrixWords, HostBuffer<quint64>::Kind::Paged);
+    for (quint64 i = 0; i < g.numOfRows; ++i) {
+        quint64* rowData = h_matrix.get() + i * g.wordsPerRow;
+        const QString& row = g.matrix[int(i)];
+        for (quint64 j = 0; j < g.numOfCols; ++j)
+            if (row.at(int(j)) == QLatin1Char('1'))
+                rowData[j / 64] |= (1ull << (j % 64));
     }
-    // Если используется простой перебор, то необходима таблица биноминальных коэффициентов
+
+    // Простому перебору нужна таблица биноминальных коэффициентов
     if (settings.algorithmType == ComputationSettings::SimpleXor) {
-        binomTable = numOfRows < 64
-            // Для коротких - строим всю таблицу. Не оптимально, но работает.
-            ? BinomTable(Constants::MAX_SHORT_CODE_LENGTH, Constants::MAX_SHORT_CODE_LENGTH)
+        binomTable = g.isLongCode
             // Для длинных кодов строим только часть таблицы
-            : BinomTable(numOfRows, settings.maxRows);
+            ? BinomTable(g.numOfRows, g.maxRows)
+            // Для коротких — всю. Не оптимально, но работает.
+            : BinomTable(Constants::MAX_SHORT_CODE_LENGTH, Constants::MAX_SHORT_CODE_LENGTH);
     }
 
     // Спектр на хосте. Для GPU нужна pinned-память — иначе не работает
     // асинхронное копирование; для CPU обычная, cudaMallocHost без видеокарты
     // недоступен.
-    h_spectrum.allocate(spectrumSize, useGpu ? HostBuffer<quint64>::Kind::Pinned
-                                             : HostBuffer<quint64>::Kind::Paged);
+    h_spectrum.allocate(g.spectrumSize, g.useGpu ? HostBuffer<quint64>::Kind::Pinned
+                                                 : HostBuffer<quint64>::Kind::Paged);
     if (exportSpectrum) {
         // Продолжаем с чекпоинта — переносим накопленный спектр
-        for (quint64 i = 0; i < spectrumSize; ++i)
+        for (quint64 i = 0; i < g.spectrumSize; ++i)
             h_spectrum[i] = runState.spectrum.at(int(i));
     } else {
         h_spectrum.fillZero();
     }
 
-    if (useGpu) {
-        if (!matrixInGlobalMem) {
-            // Копируем порождающую матрицу в константную память
-            CUDA_CALL(copyMatrixToConstant(h_matrix.get(), matrixSizeInWords));
-        }
-        else {
-            // Если матрица слишком большая - копируем её в глобальную память
-            CUDA_CALL(cudaMemcpy(d_matrix.get(), h_matrix.get(),
-                                 matrixSizeInWords * Constants::WORD_SIZE,
-                                 cudaMemcpyHostToDevice));
-        }
+    if (!g.useGpu)
+        return;
 
-        d_spectrum.allocate(spectrumSize);
-        if (exportSpectrum)
-            CUDA_CALL(cudaMemcpy(d_spectrum.get(), h_spectrum.get(),
-                                 spectrumSize * sizeof(quint64), cudaMemcpyHostToDevice));
-        else
-            d_spectrum.fillZero();
+    if (g.matrixInGlobalMem)
+        CUDA_CALL(cudaMemcpy(d_matrix.get(), h_matrix.get(),
+                             g.matrixWords * Constants::WORD_SIZE, cudaMemcpyHostToDevice));
+    else
+        CUDA_CALL(copyMatrixToConstant(h_matrix.get(), g.matrixWords));
 
-        ev.create();
-        stream.create();
+    d_spectrum.allocate(g.spectrumSize);
+    if (exportSpectrum)
+        CUDA_CALL(cudaMemcpy(d_spectrum.get(), h_spectrum.get(),
+                             g.spectrumSize * sizeof(quint64), cudaMemcpyHostToDevice));
+    else
+        d_spectrum.fillZero();
 
-        // Ядро коротких кодов читает таблицу как binomTable[n * 64 + k].
-        // BinomTable хранит её плоско ровно с таким шагом, поэтому промежуточное
-        // «уплощение» во временный буфер больше не нужно — копируем как есть.
-        if (settings.algorithmType == ComputationSettings::SimpleXor && numOfRows < 64) {
-            Q_ASSERT(binomTable.stride() == Constants::MAX_SHORT_CODE_LENGTH + 1);
-            d_binomTable.allocate(Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES);
-            CUDA_CALL(cudaMemcpy(d_binomTable.get(), binomTable.data(),
-                                 binomTable.bytes(), cudaMemcpyHostToDevice));
-        }
+    ev.create();
+    stream.create();
+
+    // Ядро коротких кодов читает таблицу как binomTable[n * 64 + k]. BinomTable
+    // хранит её плоско ровно с таким шагом, поэтому копируем как есть, без
+    // промежуточного «уплощения».
+    if (settings.algorithmType == ComputationSettings::SimpleXor && !g.isLongCode) {
+        Q_ASSERT(binomTable.stride() == Constants::MAX_SHORT_CODE_LENGTH + 1);
+        d_binomTable.allocate(Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES);
+        CUDA_CALL(cudaMemcpy(d_binomTable.get(), binomTable.data(),
+                             binomTable.bytes(), cudaMemcpyHostToDevice));
+    }
+}
+
+// Выбор вычислительной функции: алгоритм, устройство, длина кода.
+void Worker::dispatchComputation(const CodeGeometry& g)
+{
+    // Дуальный код считается по проверочной матрице тем же кодом Грея
+    const bool gray = settings.algorithmType != ComputationSettings::SimpleXor;
+
+    // Код Грея перебирает 2^k масок в одном 64-битном слове, поэтому длиннее
+    // 63 строк не бывает. Раньше это проверял только диалог настроек, а прямой
+    // вызов Worker давал сдвиг на 64 и больше — неопределённое поведение.
+    if (gray && g.isLongCode)
+        throw std::invalid_argument(
+            "код Грея неприменим: больше 63 строк не помещается в маску");
+
+    if (gray)
+        g.useGpu ? computeSpectrumGpuGrayShort(g)
+                 : computeSpectrumCpuGrayShort(g);
+    else if (g.isLongCode)
+        g.useGpu ? computeSpectrumGpuNoGrayLong(g)
+                 : computeSpectrumCpuNoGrayLong(g);
+    else
+        g.useGpu ? computeSpectrumGpuNoGrayShort(g)
+                 : computeSpectrumCpuNoGrayShort(g);
+}
+
+// Забирает итоговый спектр, рассылает сигналы и освобождает ресурсы.
+void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point startedAt)
+{
+    // Состояние сброшено, но сам чекпоинт на диске остаётся
+    initializeRunState(LoadMode::Reset);
+
+    if (cancelled.load()) {
+        emit finished(Constants::ERROR_OCCURED);
+        emit updateInfoPBR(0);
+        updateSpectrum(int(g.numOfCols));
+        releaseResources();
+        return;
     }
 
-    // Частоты обновления из настроек. Отсчёт запускает сама функция расчёта:
-    // только она знает общее число операций.
+    if (g.useGpu) {
+        CUDA_CALL(cudaDeviceSynchronize());
+        CUDA_CALL(cudaMemcpy(h_spectrum.get(), d_spectrum.get(),
+                             g.spectrumSize * sizeof(quint64), cudaMemcpyDeviceToHost));
+    }
+
+    // Дуальный расчёт даёт спектр проверочной матрицы — исходный получается
+    // из него преобразованием Мак-Вильямс.
+    if (settings.algorithmType == ComputationSettings::Algorithm::DualCode)
+        updateSpectrumDual(int(g.numOfCols), int(g.numOfRows));
+    else
+        updateSpectrum(int(g.numOfCols));
+
+    emit updateInfoPBR(100);
+    emit finished(int(duration_cast<seconds>(steady_clock::now() - startedAt).count()));
+
+    releaseResources();
+}
+
+void Worker::computeSpectrumImpl()
+{
+    const CodeGeometry g = describeTask();
+
+    // Спектр мог прийти из чекпоинта — тогда размер уже верный
+    if (quint64(runState.spectrum.size()) != g.spectrumSize)
+        runState.spectrum.resize(int(g.spectrumSize));
+
+    omp_set_num_threads(settings.compDevSet.threadsCpu);
+
+    prepareBuffers(g);
+
+    // Частоты обновления из настроек. Сам отсчёт запускает вычислительная
+    // функция: только она знает общее число операций.
     progress.setIntervals(
         std::chrono::seconds{ settings.timeIntSet.updateSpectrumInterval },
         std::chrono::seconds{ settings.timeIntSet.saveSpectrumInterval });
     progress.setOpsCheckpoint(checkpointEveryOps);
 
-    const auto runStartedAt = steady_clock::now() - std::chrono::seconds(runState.elapsedSec);
+    const auto startedAt = steady_clock::now() - std::chrono::seconds(runState.elapsedSec);
 
-    switch (settings.algorithmType) {
-        // В дуальном коде для ускорения используется код Грея
-        case ComputationSettings::Algorithm::DualCode:
-        case ComputationSettings::Algorithm::GrayCode: {
-            if (settings.compDev == ComputationSettings::ComputeDevice::GPU) {
-                computeSpectrumGpuGrayShort(
-                    numOfRows,
-                    numOfCols,
-                    wordsPerRow,
-                    chunkSize,
-                    settings.compDevSet.blocksGpu,
-                    settings.compDevSet.threadsGpu
-                );
-            }
-            else {
-                computeSpectrumCpuGrayShort(
-                    numOfRows,
-                    numOfCols,
-                    wordsPerRow
-                );
-            };
-        } break;
-        case ComputationSettings::Algorithm::SimpleXor: {
-            if ( settings.compDev == ComputationSettings::ComputeDevice::GPU ) {
-                if ( numOfRows <= 63 ) {
-                    computeSpectrumGpuNoGrayShort(
-                        numOfRows,
-                        numOfCols,
-                        wordsPerRow,
-                        chunkSize,
-                        settings.compDevSet.blocksGpu,
-                        settings.compDevSet.threadsGpu,
-                        maxRows
-                    );
-                } else {
-                    computeSpectrumGpuNoGrayLong(
-                        numOfRows,
-                        numOfCols,
-                        wordsPerRow,
-                        settings.compDevSet.blocksGpu,
-                        settings.compDevSet.threadsGpu,
-                        maxRows
-                    );
-                }
-            } else {
-                if ( numOfRows <= 63 ) {
-                    computeSpectrumCpuNoGrayShort(
-                        numOfRows,
-                        numOfCols,
-                        wordsPerRow,
-                        maxRows
-                    );
-                } else {
-                    computeSpectrumCpuNoGrayLong(
-                        numOfRows,
-                        numOfCols,
-                        wordsPerRow,
-                        maxRows
-                    );
-                }
-            }
-        } break;
-    }
-    // После того, как произвели расчеты - сбрасываем RunState
-    initializeRunState(LoadMode::Reset);
-
-    if ( cancelled.load() ) {
-        emit finished(Constants::ERROR_OCCURED);
-        emit updateInfoPBR(0);
-        updateSpectrum( numOfCols );
-        releaseResources();
-        return;
-    }
-
-    // Финальное обновление интерфейса
-    if ( useGpu ) {
-        CUDA_CALL(cudaDeviceSynchronize());
-        CUDA_CALL(cudaMemcpy(h_spectrum.get(), d_spectrum.get(),
-                             spectrumSize * sizeof(quint64), cudaMemcpyDeviceToHost));
-    }
-    // Если применялся дуальный код - рассчитываем спектр из дуального
-    if ( settings.algorithmType == ComputationSettings::Algorithm::DualCode ) {
-        updateSpectrumDual( numOfCols, numOfRows );
-    } else {
-        updateSpectrum( numOfCols );
-    }
-    emit updateInfoPBR(100);
-    emit finished(int(duration_cast<seconds>(steady_clock::now() - runStartedAt).count()));
-
-    releaseResources();
+    dispatchComputation(g);
+    finishComputation(g, startedAt);
 }
 
 // Освобождает всё, что выделено под расчёт.

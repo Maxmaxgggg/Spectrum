@@ -553,6 +553,36 @@ static void testOversizedMatrixRejected()
         out << QStringLiteral("  ПРОВАЛ   матрица шириной ") << tooWide
             << QStringLiteral(" принята — ядро пишет за границу массива") << Qt::endl;
     }
+
+    // Код Грея перебирает 2^k масок в 64-битном слове: больше 63 строк для него
+    // недопустимо. Проверялось только в диалоге настроек, а прямой вызов давал
+    // сдвиг на 64 и больше.
+    for (ComputeDevice dev : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+        RunConfig gray;
+        gray.matrix    = Reference::identity(70);
+        gray.algorithm = Algorithm::GrayCode;
+        gray.device    = dev;
+
+        Worker w;
+        bool err = false;
+        QObject::connect(&w, &Worker::errorOccurred, [&err](const QString&) { err = true; });
+        w.setSettings(makeSettings(gray).toJson());
+        w.initializeRunState(LoadMode::Reset);
+        w.computeSpectrum();
+
+        const QString dn = dev == ComputeDevice::CPU ? QStringLiteral("CPU")
+                                                     : QStringLiteral("GPU");
+        if (err) {
+            ++g_passed;
+            out << QStringLiteral("  ok       ") << dn
+                << QStringLiteral(" Грей на 70 строках отклонён") << Qt::endl;
+        } else {
+            ++g_failed;
+            out << QStringLiteral("  ПРОВАЛ   ") << dn
+                << QStringLiteral(" Грей на 70 строках принят — сдвиг за разрядность")
+                << Qt::endl;
+        }
+    }
 }
 
 // Один заданный расчёт и ничего больше — чтобы профилировщику было что
