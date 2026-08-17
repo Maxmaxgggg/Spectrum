@@ -167,7 +167,10 @@ __host__ void launchSpectrumKernelShort(
     quint64 r)
 {
     validateLaunchParams(blockCount, n);
-    computeSpectrumKernelShort << <numOfBlocks, threadsPerBlock, (n + 1) * sizeof(quint64), stream >> > (
+    // Гистограмма плюс копия матрицы: она уезжает в разделяемую память, потому
+    // что нити варпа читают разные строки, а константная память такое дробит.
+    const size_t sharedBytes = (size_t)(n + 1 + k * blockCount) * sizeof(quint64);
+    computeSpectrumKernelShort << <numOfBlocks, threadsPerBlock, sharedBytes, stream >> > (
         d_spectrum,
         d_binomTable,
         n,
@@ -189,10 +192,22 @@ __global__ void computeSpectrumKernelShort(
     quint64 chunkSize,
     quint64 r)
 {
-    extern __shared__ quint64 s_spectrum[];
+    // Разделяемая память делится на две части: гистограмма и копия матрицы.
+    //
+    // Матрица лежит в константной памяти, а та оптимизирована под чтение всеми
+    // нитями варпа одного адреса. У нас же у каждой нити своя маска, то есть
+    // своя строка матрицы, и запрос дробится на столько обращений, сколько
+    // различных адресов в варпе — до 32-кратной сериализации. Разделяемая
+    // память разложена по банкам и расхождение адресов переносит нормально.
+    extern __shared__ quint64 s_mem[];
+    quint64* const s_spectrum = s_mem;
+    quint64* const s_matrix   = s_mem + (n + 1);
+
     const int tid = threadIdx.x;
 
     for (int i = tid; i <= n; i += blockDim.x) s_spectrum[i] = 0ULL;
+    for (int i = tid; i < k * blockCount; i += blockDim.x)
+        s_matrix[i] = readConstMatrixWord(i / blockCount, i % blockCount, blockCount);
     __syncthreads();
 
     const quint64 globalThreadIdx = (quint64)blockIdx.x * blockDim.x + tid;
@@ -236,7 +251,7 @@ __global__ void computeSpectrumKernelShort(
             const int p = bitPosFromSingleBit(temp & -temp);
             temp &= (temp - 1);
             for (int w = 0; w < blockCount; ++w)
-                codeword[w] ^= readConstMatrixWord(k - 1 - p, w, blockCount);
+                codeword[w] ^= s_matrix[(k - 1 - p) * blockCount + w];
         }
 
         // Подряд идущие кодовые слова часто имеют одинаковый вес, поэтому
@@ -264,7 +279,7 @@ __global__ void computeSpectrumKernelShort(
                 const int p = bitPosFromSingleBit(changed & -changed);
                 changed &= (changed - 1);
                 for (int w = 0; w < blockCount; ++w)
-                    codeword[w] ^= readConstMatrixWord(k - 1 - p, w, blockCount);
+                    codeword[w] ^= s_matrix[(k - 1 - p) * blockCount + w];
             }
 
             int weight = 0;
@@ -467,7 +482,9 @@ __host__ void launchSpectrumKernelGrayShort(
     quint64 chunkSize      // сколько Gray-элементов в чанке
 ) {
     validateLaunchParams(blockCount, n);
-    computeSpectrumKernelGrayShort << <numOfBlocks, threadsPerBlock, (n + 1) * sizeof(quint64), stream >> > (
+    // Гистограмма плюс копия матрицы — см. ядро простого XOR.
+    const size_t sharedBytes = (size_t)(n + 1 + k * blockCount) * sizeof(quint64);
+    computeSpectrumKernelGrayShort << <numOfBlocks, threadsPerBlock, sharedBytes, stream >> > (
         d_spectrum,
         n,
         k,
@@ -485,11 +502,18 @@ __global__ void computeSpectrumKernelGrayShort(
     quint64 chunkOffset,   // начало (в Gray-порядке)
     quint64 chunkSize
 ) {
-    extern __shared__ quint64 s_spectrum[];
+    // Разделяемая память: гистограмма и копия матрицы. Нити варпа читают разные
+    // строки, а константная память дробит такой запрос на отдельные обращения.
+    extern __shared__ quint64 s_mem[];
+    quint64* const s_spectrum = s_mem;
+    quint64* const s_matrix   = s_mem + (n + 1);
+
     const int tid = threadIdx.x;
 
     // 1) инициализация shared
     for (int i = tid; i <= n; i += blockDim.x) s_spectrum[i] = 0ULL;
+    for (int i = tid; i < k * blockCount; i += blockDim.x)
+        s_matrix[i] = readConstMatrixWord(i / blockCount, i % blockCount, blockCount);
     __syncthreads();
 
     const quint64 globalThreadIdx = (quint64)blockIdx.x * blockDim.x + tid;
@@ -524,7 +548,7 @@ __global__ void computeSpectrumKernelGrayShort(
             const int pos = bitPosFromSingleBit(temp & (~temp + 1ULL));
             temp &= (temp - 1ULL);
             for (int w = 0; w < blockCount; ++w)
-                codeword[w] ^= readConstMatrixWord(pos, w, blockCount);
+                codeword[w] ^= s_matrix[pos * blockCount + w];
         }
 
         // 7) аккумулируем вес. Как и в ядре простого XOR, копим серию
@@ -544,7 +568,7 @@ __global__ void computeSpectrumKernelGrayShort(
                 const int pos = bitPosFromSingleBit(changed & (~changed + 1ULL));
                 changed &= (changed - 1ULL);
                 for (int w = 0; w < blockCount; ++w)
-                    codeword[w] ^= readConstMatrixWord(pos, w, blockCount);
+                    codeword[w] ^= s_matrix[pos * blockCount + w];
             }
 
             int weight = 0;

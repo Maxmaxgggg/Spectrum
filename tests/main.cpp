@@ -573,8 +573,39 @@ static int runSingleForProfiling(const QString& which)
     } else if (which == QStringLiteral("rand")) {
         // Контроль: те же размеры и то же число комбинаций, но веса размазаны.
         cfg.matrix = Reference::randomMatrix(50, 50, 3);
+    } else if (which == QStringLiteral("wide")) {
+        // Широкий код: строка занимает 32 слова вместо одного, то есть на
+        // каждый изменившийся бит приходится 32 чтения матрицы. Здесь и должно
+        // быть видно, из какой памяти её выгоднее читать.
+        cfg.matrix  = Reference::randomMatrix(40, 2000, 8);
+        cfg.maxRows = 6;
+    } else if (which == QStringLiteral("maxshared")) {
+        // Предельный случай по разделяемой памяти: максимум столбцов и строк
+        // для короткого кода. Если матрицу класть в разделяемую, выходит
+        // (2049 + 63*32) * 8 = 32.5 КБ на блок, то есть один блок на
+        // мультипроцессор — здесь и проверяется, не съедает ли занятость
+        // весь выигрыш от быстрого доступа.
+        cfg.matrix  = Reference::randomMatrix(63, 2048, 9);
+        cfg.maxRows = 6;
+    } else if (which == QStringLiteral("bigwide")) {
+        // Короткий путь, но объёмом на десятки секунд: 655 млн комбинаций,
+        // строка в 32 словах. Здесь разница видна в секундах, а не в шуме.
+        cfg.matrix  = Reference::randomMatrix(50, 2000, 10);
+        cfg.maxRows = 9;
+    } else if (which == QStringLiteral("biglong")) {
+        // Длинный путь (k >= 64) той же ширины. Матрица в 63*2048 бит не
+        // влезает в константную память, поэтому лежит в глобальной.
+        cfg.matrix  = Reference::randomMatrix(70, 2000, 11);
+        cfg.maxRows = 6;
+    } else if (which == QStringLiteral("graywide")) {
+        // Код Грея на широкой матрице: тот же расходящийся доступ к строкам,
+        // что и в ядре простого XOR, только маски идут подряд.
+        cfg.matrix    = Reference::randomMatrix(27, 2000, 12);
+        cfg.algorithm = Algorithm::GrayCode;
+        cfg.maxRows   = 27;
     } else {
-        out << QStringLiteral("ожидалось --profile ident|rand") << Qt::endl;
+        out << QStringLiteral("ожидалось --profile ident|rand|wide|maxshared|bigwide|biglong|graywide")
+            << Qt::endl;
         return 2;
     }
 
