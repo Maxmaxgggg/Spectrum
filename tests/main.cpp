@@ -463,6 +463,29 @@ static void testCheckpoints()
     checkResume(QStringLiteral("CPU XOR длинный, обрыв"), lng, lng, 3000000, 3000000);
     lng = longConfig(ComputeDevice::GPU);
     checkResume(QStringLiteral("GPU XOR длинный, обрыв"), lng, lng, 3000000, 3000000);
+
+    // Длинный путь на видеокарте проверяется отдельно и подробнее.
+    //
+    // Там подготовка стартовых масок идёт в двойной буфер, а синхронизации
+    // после каждого чанка больше нет — хост убегает вперёд и успевает
+    // поставить в очередь несколько ядер. Чекпоинт обязан отражать реально
+    // посчитанное, а не поставленное в очередь: saveGpuCheckpoint для этого
+    // сначала дожидается потока. Если бы не дожидался, сохранённый спектр
+    // отставал бы от chunkOffset, и возобновление потеряло бы часть слов.
+    const RunConfig lgpu = longConfig(ComputeDevice::GPU);
+    for (quint64 stop : { 1500000ULL, 4000000ULL, 7000000ULL, 11000000ULL }) {
+        checkResume(QStringLiteral("GPU длинный, обрыв на %1").arg(stop),
+                    lgpu, lgpu, stop, stop);
+    }
+    // Много сохранений за один проход: буфер стартовых масок перекладывается
+    // многократно, и каждый чекпоинт попадает в середину этой череды.
+    checkResume(QStringLiteral("GPU длинный, много чекпоинтов"),
+                lgpu, lgpu, 700000, 9000000);
+    // Мелкое разбиение — чанков сильно больше, значит больше и перекладываний.
+    RunConfig lfine = lgpu;
+    lfine.blocksGpu  = 4;
+    lfine.threadsGpu = 32;
+    checkResume(QStringLiteral("GPU длинный, мелкие чанки"), lfine, lfine, 900000, 5000000);
 }
 
 // Ключевая проверка: чекпоинт обязан переноситься между разными
@@ -742,6 +765,22 @@ static int dumpGolden(const QString& path)
     }
     add("GPU XOR I(50) r<=10", Reference::identity(50), Algorithm::SimpleXor, 10,
         ComputeDevice::GPU, 64, 256, Reference::identityPartialSpectrum(50, 10));
+
+    // Длинный путь (k > 63) с аналитически известным распределением: I(70)
+    // порождает все слова, поэтому спектр равен C(70,w) для каждого веса.
+    // 144 млн комбинаций — на таком объёме гонка в подготовке стартовых масок
+    // проявилась бы перекосом весов, а не только недостачей в сумме.
+    add("GPU XOR I(70) r<=6", Reference::identity(70), Algorithm::SimpleXor, 6,
+        ComputeDevice::GPU, 64, 256, Reference::identityPartialSpectrum(70, 6));
+    add("CPU XOR I(70) r<=6", Reference::identity(70), Algorithm::SimpleXor, 6,
+        ComputeDevice::CPU, 64, 256, Reference::identityPartialSpectrum(70, 6));
+    // То же при мелком разбиении: чанков становится много, значит много и
+    // перекладываний буфера стартовых масок.
+    add("GPU XOR I(70) r<=6 (8x32)", Reference::identity(70), Algorithm::SimpleXor, 6,
+        ComputeDevice::GPU, 8, 32, Reference::identityPartialSpectrum(70, 6));
+    // Длинный путь на случайной матрице, 670 млн комбинаций.
+    add("GPU XOR rnd(90,300) r<=6", Reference::randomMatrix(90, 300, 14),
+        Algorithm::SimpleXor, 6, ComputeDevice::GPU);
     // Тот же расчёт при мелком разбиении — распределение обязано не измениться.
     add("GPU XOR I(50) r<=10 (8x64)", Reference::identity(50), Algorithm::SimpleXor, 10,
         ComputeDevice::GPU, 8, 64, Reference::identityPartialSpectrum(50, 10));

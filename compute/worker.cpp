@@ -374,12 +374,27 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
     // Максимальное число масок, обрабатываемых одним потоком
     const uint64_t masksPerThread = 1ULL << 12; 
 
-    // Стартовые массивы масок на процессоре и на видеокарте.
-    // h_slots — pinned: из неё идёт асинхронное копирование на устройство.
+    // Стартовые массивы масок.
+    //
+    // На хосте их два: пока с одного идёт копирование на устройство, хост
+    // заполняет второй. Иначе он затирал бы данные под работающим DMA, и
+    // приходилось бы после каждой итерации дожидаться устройства целиком.
+    //
+    // На устройстве достаточно одного: копия следующей итерации ставится в
+    // очередь того же потока после ядра текущей и раньше не начнётся.
+    const size_t slotsPerBuffer = maxThreads * slotElems;
+
     HostBuffer<int16_t>   h_slots;
     DeviceBuffer<int16_t> d_slots;
-    h_slots.allocate(maxThreads * slotElems, HostBuffer<int16_t>::Kind::Pinned);
-    d_slots.allocate(maxThreads * slotElems);
+    h_slots.allocate(2 * slotsPerBuffer, HostBuffer<int16_t>::Kind::Pinned);
+    d_slots.allocate(slotsPerBuffer);
+
+    // Событие на каждый буфер: отмечает конец копирования именно из него.
+    CudaEvent slotsCopied[2];
+    slotsCopied[0].create();
+    slotsCopied[1].create();
+    bool slotsBusy[2] = { false, false };
+    int  slotsBuf     = 0;
 
     #ifdef _DEBUG
     // Счётчик обработанных масок для сверки. Раньше он не освобождался вовсе.
@@ -427,21 +442,36 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
             quint64 numStartMasks = (chunkSize + masksPerThread - 1ULL) / masksPerThread;
             if (numStartMasks == 0) continue;
 
-            // Генерируем стартовые позиции на CPU
+            // Ждём, пока освободится тот буфер, который сейчас будем
+            // переписывать. На второй итерации после его использования
+            // копирование давно закончилось, так что ожидание холостое.
+            if (slotsBusy[slotsBuf])
+                CUDA_CALL(cudaEventSynchronize(slotsCopied[slotsBuf].get()));
+
+            // Имя не slots: так называется макрос Qt из qobjectdefs.h (тот
+            // самый из "public slots:"), он раскрывается в пустоту и ломает
+            // объявление переменной.
+            int16_t* const hostSlots = h_slots.get() + slotsBuf * slotsPerBuffer;
+
+            // Генерируем стартовые позиции на CPU. Это и есть та работа, ради
+            // совмещения которой с расчётом заведён второй буфер.
             for (quint64 tid = 0; tid < numStartMasks; ++tid) {
                 quint64 globalRank = chunkOffset + tid * masksPerThread;
                 assert(globalRank < curOps);
                 // Генерируем стартовую комбинацию для ранга globalRank
-                generateStartPositions(globalRank, numOfRows, r, h_slots.get() + tid * Constants::MAX_POSITIONS, binomTable);
+                generateStartPositions(globalRank, numOfRows, r, hostSlots + tid * Constants::MAX_POSITIONS, binomTable);
             }
 
             // Копируем только те стартовые маски, которые нужны в этом чанке
             CUDA_CALL(cudaMemcpyAsync(
                 d_slots.get(),
-                h_slots.get(),
+                hostSlots,
                 numStartMasks * slotBytes,
                 cudaMemcpyHostToDevice,
                 localStream.get()));
+            CUDA_CALL(cudaEventRecord(slotsCopied[slotsBuf].get(), localStream.get()));
+            slotsBusy[slotsBuf] = true;
+            slotsBuf ^= 1;
 
             // Запускаем ядро: numStartMasks потоков (упаковано в grid)
             int grid = (numStartMasks + threadsPerBlock - 1) / threadsPerBlock;
@@ -484,18 +514,15 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
                 r,
                 nullptr);
             #endif
-            // НЕ УДАЛЯТЬ. Без этой синхронизации спектр считается неверно.
+            // Здесь стоял cudaDeviceSynchronize(), без которого спектр считался
+            // неверно. Защищал он ровно одну гонку: хост переписывал h_slots,
+            // пока с него ещё шло асинхронное копирование, и часть стартовых
+            // масок терялась. Теперь буферов два, и синхронизация не нужна.
             //
-            // h_slots.get() — pinned-память, из которой идёт асинхронное копирование
-            // на устройство. На следующей итерации цикл начинает переписывать
-            // h_slots.get() стартовыми позициями нового чанка, а копия предыдущего
-            // может быть ещё в полёте — хост затирает данные под работающим
-            // DMA, и часть масок теряется.
-            //
-            // Убрать синхронизацию можно только вместе с двойной буферизацией
-            // h_slots.get(), и это отдельная задача со своим прогоном против эталона,
-            // а не побочный эффект рефакторинга.
-            cudaDeviceSynchronize();
+            // Остальное упорядочено самим потоком: копия d_slots следующей
+            // итерации встаёт в очередь после ядра текущей, а спектр
+            // накапливается атомарно в d_spectrum, куда пишут только ядра
+            // этого же потока.
 
             #ifdef _DEBUG
             CUDA_CALL(cudaMemcpy(h_maskCounter.get(), d_maskCounter.get(), sizeof(uint64_t), cudaMemcpyDeviceToHost));
