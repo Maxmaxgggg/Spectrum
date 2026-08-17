@@ -14,12 +14,12 @@ void generateStartPositions(
     int numOfRows,
     int numOfOnes,
     int16_t* slot,
-    uint64_t** C   // binomTable
+    const BinomTable& C
 ) {
     int x = 0;
     for (int i = 0; i < numOfOnes; ++i) {
         for (int v = x; v <= numOfRows - numOfOnes + i; ++v) {
-            uint64_t cnt = C[numOfRows - v - 1][numOfOnes - i - 1];
+            uint64_t cnt = C(numOfRows - v - 1, numOfOnes - i - 1);
             if (rank < cnt) {
                 slot[i] = (int16_t)v;
                 x = v + 1;
@@ -32,48 +32,8 @@ void generateStartPositions(
     for (int i = numOfOnes; i < Constants::MAX_POSITIONS; ++i)
         slot[i] = 0;
 }
-// Функция строит треугольную таблицу биноминальных коэффициентов
-quint64** Worker::buildBinomTable(unsigned maxN, unsigned maxComb) {
-    // Выделяем память под столбцы длины maxN+1
-    quint64** C = new quint64 * [maxN + 1];
-    constexpr quint64 U = std::numeric_limits<quint64>::max();
-
-    // Выделяем память под строки длины maxComb+1
-    for (unsigned n = 0; n <= maxN; ++n) {
-        C[n] = new quint64[maxComb + 1];
-        // Заполняем строки
-        for (unsigned r = 0; r <= maxComb; ++r) {
-            if (r == 0) {
-                C[n][r] = 1;
-            }
-            else if (r > n) {
-                C[n][r] = 0; // если r>n — 0 (не существует)
-            }
-            else {
-                // C(n,r) = C(n-1,r-1) + C(n-1,r)
-                quint64 a = (n >= 1) ? C[n - 1][r - 1] : 0;
-                quint64 b = (n >= 1) ? C[n - 1][r] : 0;
-                quint64 sum = a + b;
-                if (sum < a) throw "Error: Combin overflow";
-                C[n][r] = sum;
-            }
-        }
-    }
-    return C;
-}
-// Функция, освобождающая память из под таблицы с комбинами
-void Worker::freeBinomTable(quint64** C, unsigned maxN)
-{
-    if (!C) return;
-
-    for (unsigned n = 0; n <= maxN; ++n) {
-        delete[] C[n];
-    }
-    delete[] C;
-}
-
 // Получение битовой маски длины k с r единицами с индексом rank
-static quint64 unrankCombination( unsigned K, unsigned R, quint64 rank, quint64** binomTable )
+static quint64 unrankCombination( unsigned K, unsigned R, quint64 rank, const BinomTable& binomTable )
 {
     if (R == 0) return 0ULL;
 
@@ -92,7 +52,7 @@ static quint64 unrankCombination( unsigned K, unsigned R, quint64 rank, quint64*
             if (remainingToChoose == 0)
                 count = 1;
             else if (remainingPositions >= remainingToChoose)
-                count = binomTable[remainingPositions][remainingToChoose];
+                count = binomTable(remainingPositions, remainingToChoose);
 
             if (rank >= count)
             {
@@ -152,7 +112,7 @@ bool Worker::saveGpuCheckpoint(cudaStream_t s, int numOfCols,
 
     cudaError_t err = cudaStreamSynchronize(s);
     if (err == cudaSuccess)
-        err = cudaMemcpy(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64),
+        err = cudaMemcpy(h_spectrum.get(), d_spectrum.get(), (numOfCols + 1) * sizeof(quint64),
                          cudaMemcpyDeviceToHost);
     if (err != cudaSuccess) {
         emit errorOccurred(QStringLiteral("Ошибка CUDA при сохранении состояния: %1")
@@ -207,7 +167,7 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
     {
         quint64 startOffset = 0;
 
-        quint64 curOps = h_binomTable[numOfRows][r];
+        quint64 curOps = binomTable(numOfRows, r);
 
         if (r == runState.rOffset)
             startOffset = runState.chunkOffset;
@@ -220,11 +180,11 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
 
             // Запуск ядра
             launchSpectrumKernelShort(
-                d_spectrum,
-                d_binomTable,
+                d_spectrum.get(),
+                d_binomTable.get(),
                 blockCount,             // Число блоков
                 threadsPerBlock,       // Число нитей на блок
-                stream,
+                stream.get(),
                 numOfCols,                     // Длина строки матрицы в битах
                 numOfRows,                     // Число строк матрицы
                 wordsPerRow,            // Число слов на одну строку матрицы
@@ -245,11 +205,11 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
             // откладывалась бы на целый интервал.
             if (!copyPending && due.spectrum) {
                 progress.markSpectrum();
-                cudaMemcpyAsync(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream);
-                cudaEventRecord(ev, stream);
+                cudaMemcpyAsync(h_spectrum.get(), d_spectrum.get(), (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream.get());
+                cudaEventRecord(ev.get(), stream.get());
                 copyPending = true;
             }
-            if (copyPending && cudaEventQuery(ev) == cudaSuccess) {
+            if (copyPending && cudaEventQuery(ev.get()) == cudaSuccess) {
                 copyPending = false;
                 updateSpectrum(numOfCols);
             }
@@ -257,7 +217,7 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
                 reportProgressBar();
 
             if (due.checkpoint) {
-                if (!saveGpuCheckpoint(stream, numOfCols, r, offset + thisChunkSize))
+                if (!saveGpuCheckpoint(stream.get(), numOfCols, r, offset + thisChunkSize))
                     return;
                 copyPending = false;   // синхронная копия сделала async-копию ненужной
             }
@@ -268,13 +228,13 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
     }
     // Финальная копия спектра
     CUDA_CALL(cudaMemcpyAsync(
-        h_spectrum,
-        d_spectrum,
+        h_spectrum.get(),
+        d_spectrum.get(),
         (numOfCols + 1) * sizeof(quint64),
         cudaMemcpyDeviceToHost,
-        stream));
-    CUDA_CALL(cudaEventRecord(ev, stream));
-    CUDA_CALL(cudaStreamSynchronize(stream));
+        stream.get()));
+    CUDA_CALL(cudaEventRecord(ev.get(), stream.get()));
+    CUDA_CALL(cudaStreamSynchronize(stream.get()));
 
     updateSpectrum(numOfCols);
 }
@@ -294,8 +254,8 @@ void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, 
         launchSpectrumKernelGrayShort(
             blockCount,
             threadsPerBlock,
-            stream,
-            d_spectrum,
+            stream.get(),
+            d_spectrum.get(),
             numOfCols,
             numOfRows,
             (int)wordsPerRow,
@@ -312,11 +272,11 @@ void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, 
 
         if (!copyPending && due.spectrum) {
             progress.markSpectrum();
-            cudaMemcpyAsync(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream);
-            cudaEventRecord(ev, stream);
+            cudaMemcpyAsync(h_spectrum.get(), d_spectrum.get(), (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream.get());
+            cudaEventRecord(ev.get(), stream.get());
             copyPending = true;
         }
-        if (copyPending && cudaEventQuery(ev) == cudaSuccess) {
+        if (copyPending && cudaEventQuery(ev.get()) == cudaSuccess) {
             copyPending = false;
             updateSpectrum(numOfCols);
         }
@@ -326,7 +286,7 @@ void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, 
         if (due.checkpoint) {
             // Код Грея идёт сплошной нумерацией масок, слоёв по числу единиц
             // нет — rOffset здесь всегда 0.
-            if (!saveGpuCheckpoint(stream, numOfCols, 0, chunkOffset + thisChunkSize))
+            if (!saveGpuCheckpoint(stream.get(), numOfCols, 0, chunkOffset + thisChunkSize))
                 return;
             copyPending = false;
         }
@@ -334,13 +294,13 @@ void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, 
 
     // Финальная копия спектра
     CUDA_CALL(cudaMemcpyAsync(
-        h_spectrum,
-        d_spectrum,
+        h_spectrum.get(),
+        d_spectrum.get(),
         (numOfCols + 1) * sizeof(quint64),
         cudaMemcpyDeviceToHost,
-        stream));
-    CUDA_CALL(cudaEventRecord(ev, stream));
-    CUDA_CALL(cudaStreamSynchronize(stream));
+        stream.get()));
+    CUDA_CALL(cudaEventRecord(ev.get(), stream.get()));
+    CUDA_CALL(cudaStreamSynchronize(stream.get()));
 
     updateSpectrum(numOfCols);
 }
@@ -351,8 +311,7 @@ void Worker::computeSpectrumGpuNoGrayLong(
     quint64 wordsPerRow,
     int     blockCount,
     int     threadsPerBlock,
-    quint64 maxComb,
-    quint64* d_matrix
+    quint64 maxComb
 )
 {
     quint64 totalOps = sumCombinations(numOfRows, maxComb);
@@ -371,24 +330,26 @@ void Worker::computeSpectrumGpuNoGrayLong(
     // Максимальное число масок, обрабатываемых одним потоком
     const uint64_t masksPerThread = 1ULL << 12; 
 
-    // Стартовые массивы масок на процессоре и на видеокарте
-    int16_t* h_slots = nullptr;
-    int16_t* d_slots = nullptr;
-    CUDA_CALL(cudaMallocHost((void**)&h_slots, bytesPerChunk));
-    CUDA_CALL(cudaMalloc((void**)&d_slots, bytesPerChunk));
+    // Стартовые массивы масок на процессоре и на видеокарте.
+    // h_slots — pinned: из неё идёт асинхронное копирование на устройство.
+    HostBuffer<int16_t>   h_slots;
+    DeviceBuffer<int16_t> d_slots;
+    h_slots.allocate(maxThreads * slotElems, HostBuffer<int16_t>::Kind::Pinned);
+    d_slots.allocate(maxThreads * slotElems);
 
     #ifdef _DEBUG
-    uint64_t* h_maskCounter = nullptr;
-    uint64_t* d_maskCounter = nullptr;
-    CUDA_CALL(cudaMallocHost( (void**)&h_maskCounter, sizeof(uint64_t) ) );
-    CUDA_CALL(cudaMalloc(     (void**)&d_maskCounter, sizeof(uint64_t) ) );
+    // Счётчик обработанных масок для сверки. Раньше он не освобождался вовсе.
+    HostBuffer<uint64_t>   h_maskCounter;
+    DeviceBuffer<uint64_t> d_maskCounter;
+    h_maskCounter.allocate(1, HostBuffer<uint64_t>::Kind::Pinned);
+    d_maskCounter.allocate(1);
     #endif
     // Собственный поток, а не поле класса: имя намеренно отличается, чтобы
     // не перекрывать Worker::stream и не синхронизировать по ошибке чужой.
-    cudaStream_t localStream = nullptr;
-    cudaEvent_t  evCopy      = nullptr;
-    CUDA_CALL(cudaStreamCreate(&localStream));
-    CUDA_CALL(cudaEventCreate(&evCopy));
+    CudaStream localStream;
+    CudaEvent  evCopy;
+    localStream.create();
+    evCopy.create();
 
     bool copyPending = false;
 
@@ -403,7 +364,7 @@ void Worker::computeSpectrumGpuNoGrayLong(
         quint64 startOffset = 0;
 
         // Количество масок с r единицами
-        quint64 curOps = h_binomTable[numOfRows][r];
+        quint64 curOps = binomTable(numOfRows, r);
         if (curOps == 0) continue;
 
         if (r == runState.rOffset)
@@ -427,16 +388,16 @@ void Worker::computeSpectrumGpuNoGrayLong(
                 quint64 globalRank = chunkOffset + tid * masksPerThread;
                 assert(globalRank < curOps);
                 // Генерируем стартовую комбинацию для ранга globalRank
-                generateStartPositions(globalRank, numOfRows, r, h_slots + tid * Constants::MAX_POSITIONS, h_binomTable);
+                generateStartPositions(globalRank, numOfRows, r, h_slots.get() + tid * Constants::MAX_POSITIONS, binomTable);
             }
 
             // Копируем только те стартовые маски, которые нужны в этом чанке
             CUDA_CALL(cudaMemcpyAsync(
-                d_slots,
-                h_slots,
+                d_slots.get(),
+                h_slots.get(),
                 numStartMasks * slotBytes,
                 cudaMemcpyHostToDevice,
-                localStream));
+                localStream.get()));
 
             // Запускаем ядро: numStartMasks потоков (упаковано в grid)
             int grid = (numStartMasks + threadsPerBlock - 1) / threadsPerBlock;
@@ -445,35 +406,35 @@ void Worker::computeSpectrumGpuNoGrayLong(
             // Параметры: chunkSize (сколько масок в этом чанке всего),
             // masksPerThread (сколько масок на поток), numStartMasks (количество активных потоков)
             #ifdef _DEBUG
-            cudaMemset(d_maskCounter, 0, sizeof(uint64_t));
+            d_maskCounter.fillZero();
             
             launchSpectrumKernelLong(
                 grid,
                 threadsPerBlock,
-                localStream,
-                d_spectrum,
-                d_matrix,
+                localStream.get(),
+                d_spectrum.get(),
+                d_matrix.get(),
                 static_cast<int>(numOfCols),
                 static_cast<int>(numOfRows),
                 static_cast<int>(wordsPerRow),
                 chunkSize,
-                d_slots,
+                d_slots.get(),
                 masksPerThread,
                 numStartMasks,
                 r,
-                d_maskCounter);
+                d_maskCounter.get());
             #else
             launchSpectrumKernelLong(
                 grid,
                 threadsPerBlock,
-                localStream,
-                d_spectrum,
-                d_matrix,
+                localStream.get(),
+                d_spectrum.get(),
+                d_matrix.get(),
                 static_cast<int>(numOfCols),
                 static_cast<int>(numOfRows),
                 static_cast<int>(wordsPerRow),
                 chunkSize,
-                d_slots,
+                d_slots.get(),
                 masksPerThread,
                 numStartMasks,
                 r,
@@ -481,22 +442,22 @@ void Worker::computeSpectrumGpuNoGrayLong(
             #endif
             // НЕ УДАЛЯТЬ. Без этой синхронизации спектр считается неверно.
             //
-            // h_slots — pinned-память, из которой идёт асинхронное копирование
+            // h_slots.get() — pinned-память, из которой идёт асинхронное копирование
             // на устройство. На следующей итерации цикл начинает переписывать
-            // h_slots стартовыми позициями нового чанка, а копия предыдущего
+            // h_slots.get() стартовыми позициями нового чанка, а копия предыдущего
             // может быть ещё в полёте — хост затирает данные под работающим
             // DMA, и часть масок теряется.
             //
             // Убрать синхронизацию можно только вместе с двойной буферизацией
-            // h_slots, и это отдельная задача со своим прогоном против эталона,
+            // h_slots.get(), и это отдельная задача со своим прогоном против эталона,
             // а не побочный эффект рефакторинга.
             cudaDeviceSynchronize();
 
             #ifdef _DEBUG
-            cudaMemcpy(h_maskCounter, d_maskCounter, sizeof(uint64_t), cudaMemcpyDeviceToHost);
-            uint64_t m = *h_maskCounter;
+            CUDA_CALL(cudaMemcpy(h_maskCounter.get(), d_maskCounter.get(), sizeof(uint64_t), cudaMemcpyDeviceToHost));
+            const uint64_t m = h_maskCounter[0];
             if (m != chunkSize) {
-                throw "Error, masks mismath!";
+                throw std::runtime_error("расхождение числа обработанных масок");
             }
             #endif
             // Учёт прогресса
@@ -509,15 +470,15 @@ void Worker::computeSpectrumGpuNoGrayLong(
             if (!copyPending && due.spectrum) {
                 progress.markSpectrum();
                 CUDA_CALL(cudaMemcpyAsync(
-                    h_spectrum,
-                    d_spectrum,
+                    h_spectrum.get(),
+                    d_spectrum.get(),
                     (numOfCols + 1) * sizeof(quint64),
                     cudaMemcpyDeviceToHost,
-                    localStream));
-                CUDA_CALL(cudaEventRecord(evCopy, localStream));
+                    localStream.get()));
+                CUDA_CALL(cudaEventRecord(evCopy.get(), localStream.get()));
                 copyPending = true;
             }
-            if (copyPending && cudaEventQuery(evCopy) == cudaSuccess) {
+            if (copyPending && cudaEventQuery(evCopy.get()) == cudaSuccess) {
                 copyPending = false;
                 updateSpectrum(numOfCols);
             }
@@ -528,7 +489,7 @@ void Worker::computeSpectrumGpuNoGrayLong(
                 reportEstimate();
 
             if (due.checkpoint) {
-                if (!saveGpuCheckpoint(localStream, numOfCols, r, chunkOffset + chunkSize))
+                if (!saveGpuCheckpoint(localStream.get(), numOfCols, r, chunkOffset + chunkSize))
                     return;
                 copyPending = false;
             }
@@ -540,21 +501,17 @@ void Worker::computeSpectrumGpuNoGrayLong(
 
     // Финальная копия спектра
     CUDA_CALL(cudaMemcpyAsync(
-        h_spectrum,
-        d_spectrum,
+        h_spectrum.get(),
+        d_spectrum.get(),
         (numOfCols + 1) * sizeof(quint64),
         cudaMemcpyDeviceToHost,
-        localStream));
-    CUDA_CALL(cudaEventRecord(evCopy, localStream));
-    CUDA_CALL(cudaStreamSynchronize(localStream));
+        localStream.get()));
+    CUDA_CALL(cudaEventRecord(evCopy.get(), localStream.get()));
+    CUDA_CALL(cudaStreamSynchronize(localStream.get()));
 
     updateSpectrum(numOfCols);
-    // Очистка
-    cudaFree(d_slots);
-    cudaFreeHost(h_slots);
-    //cudaFree(d_maskCounter);
-    cudaStreamDestroy(localStream);
-    cudaEventDestroy(evCopy);
+    // Освобождать вручную нечего: h_slots, d_slots, счётчик масок, поток и
+    // событие владеющие — их снимут деструкторы, в том числе при исключении.
 }
 
 
@@ -617,7 +574,7 @@ void Worker::computeSpectrumCpuNoGrayLong(
     // Основной внешний цикл по числу единиц в маске
     for (quint64 r = runState.rOffset; r <= maxComb; ++r)
     {
-        quint64 curOps = h_binomTable[numOfRows][r];
+        quint64 curOps = binomTable(numOfRows, r);
 
         quint64 startOffset = (r == runState.rOffset) ? runState.chunkOffset : 0;
         if (curOps == 0) continue;
@@ -668,7 +625,7 @@ void Worker::computeSpectrumCpuNoGrayLong(
                     uint64_t globalRank = chunkOffset + startRank; // ранг относительно binom curOps
 
                     // 1) Сгенерировать стартовые позиции
-                    generateStartPositions(globalRank, (int)numOfRows, (int)r, a_local, h_binomTable);
+                    generateStartPositions(globalRank, (int)numOfRows, (int)r, a_local, binomTable);
 
                     // 2) Построить начальное codeword XOR-ом строк
                     // обнуляем codeword
@@ -676,7 +633,7 @@ void Worker::computeSpectrumCpuNoGrayLong(
 
                     for (int i = 0; i < (int)r; ++i) {
                         int row = a_local[i];
-                        quint64* rowData = h_matrix + (quint64)row * wordsPerRow;
+                        quint64* rowData = h_matrix.get() + (quint64)row * wordsPerRow;
                         for (size_t w = 0; w < (size_t)wordsPerRow; ++w)
                             codeword[w] ^= rowData[w];
                     }
@@ -715,7 +672,7 @@ void Worker::computeSpectrumCpuNoGrayLong(
                             for (size_t w = 0; w < (size_t)wordsPerRow; ++w) codeword[w] = 0ULL;
                             for (int i = 0; i < (int)r; ++i) {
                                 int row = a_local[i];
-                                quint64* rowData = h_matrix + (quint64)row * wordsPerRow;
+                                quint64* rowData = h_matrix.get() + (quint64)row * wordsPerRow;
                                 for (size_t w = 0; w < (size_t)wordsPerRow; ++w)
                                     codeword[w] ^= rowData[w];
                             }
@@ -724,7 +681,7 @@ void Worker::computeSpectrumCpuNoGrayLong(
                             // применяем XOR для каждой изменённой строки
                             for (int t = 0; t < numChanged; ++t) {
                                 int row = changed[t];
-                                quint64* rowData = h_matrix + (quint64)row * wordsPerRow;
+                                quint64* rowData = h_matrix.get() + (quint64)row * wordsPerRow;
                                 for (size_t w = 0; w < (size_t)wordsPerRow; ++w)
                                     codeword[w] ^= rowData[w];
                             }
@@ -752,7 +709,7 @@ void Worker::computeSpectrumCpuNoGrayLong(
                 }
             }
             // После расчёта чанка — учитываем прогресс и обновляем интерфейс.
-            // Спектр в h_spectrum уже актуален, копировать ниоткуда не надо.
+            // Спектр в h_spectrum.get() уже актуален, копировать ниоткуда не надо.
             progress.addOps(chunkSize);
             runState.doneOps = progress.doneOps();
 
@@ -851,7 +808,7 @@ void Worker::computeSpectrumCpuGrayShort(
                     tmp &= (tmp - 1);
                     // Получаем строку матрицы
                     quint64* rowData =
-                        h_matrix + pos * wordsPerRow;
+                        h_matrix.get() + pos * wordsPerRow;
                     // XOR-им с поулченной строкой
                     for (quint64 b = 0; b < wordsPerRow; ++b)
                         localCodeword[b] ^= rowData[b];
@@ -892,7 +849,7 @@ void Worker::computeSpectrumCpuGrayShort(
 
                     // Получаем строку матрицы 
                     quint64* rowData =
-                        h_matrix + pos * wordsPerRow;
+                        h_matrix.get() + pos * wordsPerRow;
                     // XOR-им
                     for (quint64 b = 0; b < wordsPerRow; ++b)
                         localCodeword[b] ^= rowData[b];
@@ -966,7 +923,7 @@ void Worker::computeSpectrumCpuNoGrayShort(
         if (cancelled.load())
             break;
 
-        quint64 combCount = h_binomTable[numOfRows][r];
+        quint64 combCount = binomTable(numOfRows, r);
         if (combCount == 0)
             continue;
 
@@ -999,12 +956,12 @@ void Worker::computeSpectrumCpuNoGrayShort(
                     if (cancelled.load())
                         continue;
 
-                    quint64 mask = unrankCombination(numOfRows, r, (quint64)idx, h_binomTable);
+                    quint64 mask = unrankCombination(numOfRows, r, (quint64)idx, binomTable);
                     std::fill(localCodeword.begin(), localCodeword.end(), 0);
 
                     for (quint64 i = 0; i < numOfRows; ++i) {
                         if (mask & (1ULL << i)) {
-                            quint64* rowData = h_matrix + i * wordsPerRow;
+                            quint64* rowData = h_matrix.get() + i * wordsPerRow;
                             for (quint64 b = 0; b < wordsPerRow; ++b)
                                 localCodeword[b] ^= rowData[b];
                         }
@@ -1051,7 +1008,7 @@ void Worker::computeSpectrumCpuNoGrayShort(
 }
 void Worker::updateSpectrum(int numOfCols)
 {
-    if (!h_spectrum)
+    if (!h_spectrum.get())
         return;
     bool spectrumEmpty = true;
     QStringList spectrumCopyPTE;
@@ -1073,12 +1030,12 @@ void Worker::updateSpectrum(int numOfCols)
 }
 void Worker::updateSpectrumDual(int numOfCols, int numOfRows)
 {
-    if (!h_spectrum)
+    if (!h_spectrum.get())
         return;
 
     bool spectrumEmpty = true;
     // Считаем текстовый спектр из дуального
-    QStringList spectrumCopyPTE = computeSpectrumFromDual( h_spectrum, numOfCols, numOfRows );
+    QStringList spectrumCopyPTE = computeSpectrumFromDual( h_spectrum.get(), numOfCols, numOfRows );
     SpectrumFloat spectrumCopyPlot;
     spectrumCopyPlot.reserve(numOfCols+1);
 
@@ -1117,7 +1074,29 @@ void Worker::makeCheckpoint(int numOfCols)
     s.endGroup();
     emit showSaveLBL();
 }
+// Точка входа расчёта. Ловит всё, что может бросить вычислитель: раньше
+// ошибка CUDA звала abort() и приложение молча исчезало, а переполнение в
+// таблице биномов бросало голый const char*, который никто не ловил, — то
+// есть std::terminate.
 void Worker::computeSpectrum()
+{
+    try {
+        computeSpectrumImpl();
+    }
+    catch (const CudaError& e) {
+        releaseResources();
+        emit errorOccurred(e.message());
+        emit finished(Constants::ERROR_OCCURED);
+    }
+    catch (const std::exception& e) {
+        releaseResources();
+        emit errorOccurred(QStringLiteral("Ошибка расчёта: %1")
+                               .arg(QString::fromLocal8Bit(e.what())));
+        emit finished(Constants::ERROR_OCCURED);
+    }
+}
+
+void Worker::computeSpectrumImpl()
 {
 
     /*  РАБОТА С МАТРИЦЕЙ   */
@@ -1149,9 +1128,10 @@ void Worker::computeSpectrum()
     quint64 wordsPerRow = (numOfCols + 63) / 64;
     // Размер матрицы в 64-битных словах
     quint64 matrixSizeInWords = numOfRows * wordsPerRow;
+    const bool useGpu = settings.compDev == ComputationSettings::ComputeDevice::GPU;
+
     bool matrixInGlobalMem = false;
-    if ((matrixSizeInWords * Constants::WORD_SIZE > Constants::CONST_MEM_SIZE)
-        && settings.compDev == ComputationSettings::ComputeDevice::GPU) {
+    if ((matrixSizeInWords * Constants::WORD_SIZE > Constants::CONST_MEM_SIZE) && useGpu) {
 
         /* ДОПИСАТЬ КОПИРОВАНИЕ МАТРИЦЫ В ПАМЯТЬ ДЛЯ КОРОТКИХ КОДОВ */
         if (numOfRows < 64) {
@@ -1159,19 +1139,14 @@ void Worker::computeSpectrum()
             emit finished(Constants::ERROR_OCCURED);
             return;
         }
-        CUDA_CALL(cudaMalloc((void**)&d_matrix, matrixSizeInWords * Constants::WORD_SIZE));
+        d_matrix.allocate(matrixSizeInWords);
         matrixInGlobalMem = true;
     }
-    // Выделяем матрицу на хосте
-    h_matrix = (quint64*)calloc(matrixSizeInWords, Constants::WORD_SIZE);
-    if (!h_matrix) {
-        emit errorOccurred("Ошибка выделения памяти");
-        emit finished(Constants::ERROR_OCCURED);
-        return;
-    }
+    // Выделяем матрицу на хосте (calloc внутри — она уже обнулена)
+    h_matrix.allocate(matrixSizeInWords, HostBuffer<quint64>::Kind::Paged);
     // Копируем из QStringList-а
     for (quint64 i = 0; i < numOfRows; ++i) {
-        quint64* rowData = h_matrix + i * wordsPerRow;
+        quint64* rowData = h_matrix.get() + i * wordsPerRow;
         const QString& row = matrix[(int)i];
         for (quint64 j = 0; j < numOfCols; ++j) {
             if (row.at((int)j) == QLatin1Char('1')) {
@@ -1183,89 +1158,56 @@ void Worker::computeSpectrum()
     }
     // Если используется простой перебор, то необходима таблица биноминальных коэффициентов
     if (settings.algorithmType == ComputationSettings::SimpleXor) {
-        // Для коротких - строим всю таблицу. Не оптимально, но работает.
-        if (numOfRows < 64) {
-            h_binomTable = buildBinomTable(Constants::MAX_SHORT_CODE_LENGTH, Constants::MAX_SHORT_CODE_LENGTH);
-        }
-        // Для длинных кодов строим только часть таблицы
-        else {
-            h_binomTable = buildBinomTable(numOfRows, settings.maxRows);
-        }
-
-
-
+        binomTable = numOfRows < 64
+            // Для коротких - строим всю таблицу. Не оптимально, но работает.
+            ? BinomTable(Constants::MAX_SHORT_CODE_LENGTH, Constants::MAX_SHORT_CODE_LENGTH)
+            // Для длинных кодов строим только часть таблицы
+            : BinomTable(numOfRows, settings.maxRows);
     }
 
-    // Если расчет производится на GPU
-    if (settings.compDev == ComputationSettings::GPU) {
+    // Спектр на хосте. Для GPU нужна pinned-память — иначе не работает
+    // асинхронное копирование; для CPU обычная, cudaMallocHost без видеокарты
+    // недоступен.
+    h_spectrum.allocate(spectrumSize, useGpu ? HostBuffer<quint64>::Kind::Pinned
+                                             : HostBuffer<quint64>::Kind::Paged);
+    if (exportSpectrum) {
+        // Продолжаем с чекпоинта — переносим накопленный спектр
+        for (quint64 i = 0; i < spectrumSize; ++i)
+            h_spectrum[i] = runState.spectrum.at(int(i));
+    } else {
+        h_spectrum.fillZero();
+    }
+
+    if (useGpu) {
         if (!matrixInGlobalMem) {
             // Копируем порождающую матрицу в константную память
-            CUDA_CALL(copyMatrixToConstant(h_matrix, matrixSizeInWords));
+            CUDA_CALL(copyMatrixToConstant(h_matrix.get(), matrixSizeInWords));
         }
         else {
             // Если матрица слишком большая - копируем её в глобальную память
-            CUDA_CALL(cudaMemcpy(d_matrix, h_matrix, matrixSizeInWords * Constants::WORD_SIZE, cudaMemcpyHostToDevice));
+            CUDA_CALL(cudaMemcpy(d_matrix.get(), h_matrix.get(),
+                                 matrixSizeInWords * Constants::WORD_SIZE,
+                                 cudaMemcpyHostToDevice));
         }
 
-        // Выделяем оперативную память
-        CUDA_CALL(cudaMallocHost((void**)&h_spectrum, (spectrumSize) * sizeof(quint64)));
-        
-        if (exportSpectrum) {
-            // Если загружаемся с чекпоинта, то копируем спектр
-            for (int i = 0; i < spectrumSize; i++)
-            {
-                h_spectrum[i] = runState.spectrum.at(i);
-            }
-        }
-        else {
-            // Иначе - заполняем нулями
-            memset(h_spectrum, 0, (spectrumSize) * sizeof(quint64));
-        }
-        
-        
-        // Выделяем видеопамять
-        CUDA_CALL(cudaMalloc((void**)&d_spectrum, (spectrumSize) * sizeof(quint64)));
+        d_spectrum.allocate(spectrumSize);
+        if (exportSpectrum)
+            CUDA_CALL(cudaMemcpy(d_spectrum.get(), h_spectrum.get(),
+                                 spectrumSize * sizeof(quint64), cudaMemcpyHostToDevice));
+        else
+            d_spectrum.fillZero();
 
-        if (exportSpectrum) {
-            // Если загружаемся с чекпоинта, то копируем спектр с хоста на устройство
-            CUDA_CALL(cudaMemcpy(d_spectrum, h_spectrum, (spectrumSize) * sizeof(quint64), cudaMemcpyHostToDevice));
-        }
-        else {
-            // Иначе - заполняем нулями
-            CUDA_CALL(cudaMemset(d_spectrum, 0, ((spectrumSize) * sizeof(quint64))));
-        }
-        
-        CUDA_CALL(cudaEventCreate(&ev));
-        CUDA_CALL(cudaStreamCreate(&stream));
+        ev.create();
+        stream.create();
 
-        // Если расчитываем спектр короткого кода простым XOR - ом
-        if (settings.algorithmType == ComputationSettings::SimpleXor && (numOfRows < 64)) {
-            // Переводим двумерный массив биноминальных коэффициентов в одномерный
-            int width = Constants::MAX_SHORT_CODE_LENGTH + 1;
-            quint64* flat = (quint64*)malloc(Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES * sizeof(quint64));
-
-            for (int n = 0; n <= Constants::MAX_SHORT_CODE_LENGTH; ++n) {
-                for (int r = 0; r <= n; ++r) {
-                    flat[n * width + r] = h_binomTable[n][r];
-                }
-            }
-            CUDA_CALL(cudaMalloc((void**)&d_binomTable, Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES * sizeof(quint64)));
-            CUDA_CALL(cudaMemcpy(d_binomTable, flat, Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES * sizeof(quint64), cudaMemcpyHostToDevice));
-            free(flat);
-        }
-    }
-    else {
-        h_spectrum = (quint64*)malloc((spectrumSize) * sizeof(quint64));
-        if (exportSpectrum) {
-            // Если загружаемся с чекпоинта, то копируем спектр
-            for (int i = 0; i < spectrumSize; i++)
-            {
-                h_spectrum[i] = runState.spectrum.at(i);
-            }
-        }
-        else {
-            // Иначе - заполняем нулями
-            memset(h_spectrum, 0, (spectrumSize) * sizeof(quint64));
+        // Ядро коротких кодов читает таблицу как binomTable[n * 64 + k].
+        // BinomTable хранит её плоско ровно с таким шагом, поэтому промежуточное
+        // «уплощение» во временный буфер больше не нужно — копируем как есть.
+        if (settings.algorithmType == ComputationSettings::SimpleXor && numOfRows < 64) {
+            Q_ASSERT(binomTable.stride() == Constants::MAX_SHORT_CODE_LENGTH + 1);
+            d_binomTable.allocate(Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES);
+            CUDA_CALL(cudaMemcpy(d_binomTable.get(), binomTable.data(),
+                                 binomTable.bytes(), cudaMemcpyHostToDevice));
         }
     }
 
@@ -1319,8 +1261,7 @@ void Worker::computeSpectrum()
                         wordsPerRow,
                         settings.compDevSet.blocksGpu,
                         settings.compDevSet.threadsGpu,
-                        maxRows,
-                        d_matrix
+                        maxRows
                     );
                 }
             } else {
@@ -1344,66 +1285,20 @@ void Worker::computeSpectrum()
     }
     // После того, как произвели расчеты - сбрасываем RunState
     initializeRunState(LoadMode::Reset);
-    if ( cancelled.load() ) {
 
+    if ( cancelled.load() ) {
         emit finished(Constants::ERROR_OCCURED);
         emit updateInfoPBR(0);
-
         updateSpectrum( numOfCols );
-        if ( h_spectrum != nullptr ) {
-            if ( settings.compDev == ComputationSettings::ComputeDevice::GPU ) {
-                cudaFreeHost( h_spectrum );
-            } else {
-              free( h_spectrum );
-            }
-            h_spectrum = nullptr;
-        }
-        if ( settings.algorithmType == ComputationSettings::SimpleXor ) {
-            freeBinomTable( h_binomTable, numOfRows );
-            h_binomTable = nullptr;
-        }
-        if ( h_matrix != nullptr ) {
-            free( h_matrix );
-            h_matrix = nullptr;
-        }
-        if (d_matrix != nullptr) {
-            cudaFree(d_matrix);
-            d_matrix = nullptr;
-        }
-        // Раньше на пути отмены эти два буфера не освобождались: каждое
-        // нажатие "Отмена" оставляло на видеокарте спектр и таблицу биномов.
-        if (d_spectrum != nullptr) {
-            cudaFree(d_spectrum);
-            d_spectrum = nullptr;
-        }
-        if (d_binomTable != nullptr) {
-            cudaFree(d_binomTable);
-            d_binomTable = nullptr;
-        }
-        if (ev != nullptr) {
-            CUDA_CALL(cudaEventDestroy(ev));
-            ev = nullptr;
-        }
-
-        if (stream != nullptr) {
-            CUDA_CALL(cudaStreamDestroy(stream));
-            stream = nullptr;
-        }
+        releaseResources();
         return;
     }
+
     // Финальное обновление интерфейса
-    if ( settings.compDev == ComputationSettings::ComputeDevice::GPU ) {
-        cudaDeviceSynchronize();
-        cudaMemcpy( h_spectrum, d_spectrum, (spectrumSize) * sizeof(quint64), cudaMemcpyDeviceToHost );
-        if (d_spectrum != nullptr) {
-            cudaFree(d_spectrum);
-            d_spectrum = nullptr;
-        }
-        if (d_binomTable != nullptr) {
-            cudaFree(d_binomTable);
-            d_binomTable = nullptr;
-        }
-            
+    if ( useGpu ) {
+        CUDA_CALL(cudaDeviceSynchronize());
+        CUDA_CALL(cudaMemcpy(h_spectrum.get(), d_spectrum.get(),
+                             spectrumSize * sizeof(quint64), cudaMemcpyDeviceToHost));
     }
     // Если применялся дуальный код - рассчитываем спектр из дуального
     if ( settings.algorithmType == ComputationSettings::Algorithm::DualCode ) {
@@ -1414,37 +1309,27 @@ void Worker::computeSpectrum()
     emit updateInfoPBR(100);
     emit finished(int(duration_cast<seconds>(steady_clock::now() - runStartedAt).count()));
 
-    if ( h_spectrum != nullptr ) {
-        if ( settings.compDev == ComputationSettings::ComputeDevice::GPU ) {
-            CUDA_CALL( cudaFreeHost( h_spectrum ) );
-        } else {
-            free( h_spectrum );
-        }
-        h_spectrum = nullptr;
-    }
-    // При расчете простым XOR-ом строилась таблица биноминальных коэффициентов - очищаем её
-    if ( settings.algorithmType == ComputationSettings::SimpleXor ) {
-        freeBinomTable( h_binomTable, numOfRows );
-    }
-    if (h_matrix != nullptr) {
-        free(h_matrix);
-        h_matrix = nullptr;
-    }
-    
-    if (d_matrix != nullptr) {
-        cudaFree(d_matrix);
-        d_matrix = nullptr;
-    }
+    releaseResources();
+}
 
-    if (ev != nullptr) {
-        CUDA_CALL(cudaEventDestroy(ev));
-        ev = nullptr;
-    }
-    if (stream != nullptr) {
-        CUDA_CALL(cudaStreamDestroy(stream));
-        stream = nullptr;
-    }
-        
+// Освобождает всё, что выделено под расчёт.
+//
+// Раньше это были два почти одинаковых блока — для успешного завершения и для
+// отмены, — и они успели разойтись: на пути отмены оставались d_spectrum и
+// d_binomTable. Теперь порядок один, а сами буферы владеющие, так что даже
+// пропущенный здесь вызов не приводит к утечке: их освободит деструктор.
+void Worker::releaseResources()
+{
+    h_spectrum.reset();
+    h_matrix.reset();
+    binomTable = BinomTable();
+
+    d_spectrum.reset();
+    d_matrix.reset();
+    d_binomTable.reset();
+
+    ev.reset();
+    stream.reset();
 }
 
 

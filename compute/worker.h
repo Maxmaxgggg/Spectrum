@@ -14,6 +14,9 @@
 #include "computeSpectrumKernel.cuh"
 #include "settings.h"
 #include "progresstracker.h"
+#include "binomtable.h"
+// Переопределяет CUDA_CALL из .cuh: там макрос звал abort(), здесь бросает.
+#include "cudabuffers.h"
 
 using namespace std::chrono;
 enum LoadMode {
@@ -65,8 +68,6 @@ signals:
 private:
     /* Функции для работы с биноминальными коэффициентами */
     static    quint64 sumCombinations(quint64 k, quint64 maxComb);
-    void      freeBinomTable(quint64** C, unsigned maxN);
-    quint64** buildBinomTable(unsigned maxN, unsigned maxComb);
 
 
     /* Функции для расчета спектра кода */
@@ -82,11 +83,9 @@ private:
         quint64 numOfRows,
         quint64 numOfCols,
         quint64 wordsPerRow,
-        //quint64 chunkSize,
         int blockCount,
         int threadsPerBlock,
-        quint64 maxComb,
-        quint64* d_matrix = nullptr
+        quint64 maxComb
     );
     void computeSpectrumGpuNoGrayShort(
         quint64 numOfRows,
@@ -156,21 +155,27 @@ private:
 
 
 
-    // Число масок между двумя чекпоинтами
+    // Число масок в одном чанке
     quint64 chunkSize = 1 << 20;
 
+    // Все ресурсы владеющие: освобождаются вместе с объектом, каким бы путём
+    // ни завершился расчёт — успехом, отменой или исключением.
+    CudaStream           stream;
+    CudaEvent            ev;
 
-    cudaStream_t  stream   = nullptr;
-    cudaEvent_t   ev       = nullptr;
+    HostBuffer<quint64>  h_spectrum;
+    HostBuffer<quint64>  h_matrix;
+    BinomTable           binomTable;
 
-    quint64*  h_spectrum   = nullptr;
-    quint64*  h_matrix     = nullptr;
-    quint64** h_binomTable = nullptr;
+    DeviceBuffer<quint64> d_spectrum;
+    DeviceBuffer<quint64> d_matrix;
+    DeviceBuffer<quint64> d_binomTable;
 
-    quint64*  d_spectrum   = nullptr;
-    quint64*  d_matrix     = nullptr;
-    quint64*  d_binomTable = nullptr;
-    
+    // Тело расчёта. Отделено от computeSpectrum(), чтобы та могла обернуть
+    // его в try/catch и превратить исключение в сигнал об ошибке.
+    void computeSpectrumImpl();
+    // Освобождает всё, что выделено под расчёт.
+    void releaseResources();
 };
 
 #endif // WORKER_H
