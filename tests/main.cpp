@@ -514,6 +514,113 @@ static void testCheckpointPortability()
     checkResume(QStringLiteral("длинный: GPU -> CPU"), lngGpu, lngCpu, 3000000, 3000000);
 }
 
+// Матрица шире MAX_COLS не влезает в фиксированные массивы ядер. Раньше предел
+// проверялся только в интерфейсе, и вызов Worker напрямую — как здесь —
+// приводил к записи за границу codeword[] прямо на видеокарте, молча.
+// Теперь запуск ядра обязан отказаться с сообщением.
+static void testOversizedMatrixRejected()
+{
+    out << Qt::endl << QStringLiteral("Защита от матрицы сверх предела") << Qt::endl;
+
+    if (!g_gpuAvailable) {
+        out << QStringLiteral("  ПРОПУСК  (GPU недоступен)") << Qt::endl;
+        return;
+    }
+
+    const int tooWide = Constants::MAX_COLS + 1;   // 2049 -> wordsPerRow = 33 > 32
+    RunConfig cfg;
+    cfg.matrix    = QStringList{ QString(tooWide, QLatin1Char('1')),
+                                 QString(tooWide, QLatin1Char('0')) };
+    cfg.algorithm = Algorithm::GrayCode;
+    cfg.device    = ComputeDevice::GPU;
+
+    Worker worker;
+    bool errored = false;
+    QObject::connect(&worker, &Worker::errorOccurred,
+                     [&errored](const QString&) { errored = true; });
+
+    worker.setSettings(makeSettings(cfg).toJson());
+    worker.initializeRunState(LoadMode::Reset);
+    worker.computeSpectrum();
+
+    if (errored) {
+        ++g_passed;
+        out << QStringLiteral("  ok       матрица шириной ") << tooWide
+            << QStringLiteral(" отклонена с ошибкой") << Qt::endl;
+    } else {
+        ++g_failed;
+        out << QStringLiteral("  ПРОВАЛ   матрица шириной ") << tooWide
+            << QStringLiteral(" принята — ядро пишет за границу массива") << Qt::endl;
+    }
+}
+
+// ------------------------------------------------------------------- замер
+
+// Замер скорости ядер. Тестовые матрицы намеренно маленькие — на них разницы
+// не видно, поэтому для оценки правок в .cu нужен отдельный прогон покрупнее.
+// Запуск: SpectrumTests.exe --bench
+static void benchmark()
+{
+    struct Case {
+        QString    name;
+        RunConfig  cfg;
+        quint64    ops;
+    };
+
+    QVector<Case> cases;
+
+    // Код Грея: 2^26 масок на каждое устройство.
+    for (ComputeDevice dev : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+        RunConfig c;
+        c.matrix    = Reference::identity(28);
+        c.algorithm = Algorithm::GrayCode;
+        c.device    = dev;
+        cases.append({ QStringLiteral("%1 Грей I(28)")
+                           .arg(dev == ComputeDevice::CPU ? QStringLiteral("CPU")
+                                                          : QStringLiteral("GPU")),
+                       c, 1ULL << 28 });
+    }
+
+    // Простой XOR по слоям: самый нагруженный режим короткого пути.
+    for (ComputeDevice dev : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+        RunConfig c;
+        c.matrix    = Reference::identity(40);
+        c.algorithm = Algorithm::SimpleXor;
+        c.maxRows   = 7;
+        c.device    = dev;
+        quint64 total = 0;
+        for (quint64 r = 0; r <= 7; ++r) total += Reference::binom(40, r);
+        cases.append({ QStringLiteral("%1 XOR I(40) maxRows=7")
+                           .arg(dev == ComputeDevice::CPU ? QStringLiteral("CPU")
+                                                          : QStringLiteral("GPU")),
+                       c, total });
+    }
+
+    out << QStringLiteral("Замер скорости") << Qt::endl;
+    for (const Case& c : cases) {
+        if (c.cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+            out << QStringLiteral("  ПРОПУСК  ") << c.name << Qt::endl;
+            continue;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        const Spectrum s = runWorker(c.cfg);
+        const double sec = std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() - t0).count();
+
+        quint64 got = 0;
+        for (auto it = s.constBegin(); it != s.constEnd(); ++it) got += it.value();
+
+        out << QStringLiteral("  %1: %2 с, %3 млн масок/с%4")
+                   .arg(c.name, -26)
+                   .arg(sec, 0, 'f', 2)
+                   .arg(sec > 0 ? c.ops / sec / 1e6 : 0.0, 0, 'f', 1)
+                   .arg(got == c.ops ? QString()
+                                     : QStringLiteral("   ВНИМАНИЕ: обработано %1 из %2")
+                                           .arg(got).arg(c.ops))
+            << Qt::endl;
+    }
+}
+
 // -------------------------------------------------------------------- main
 
 int main(int argc, char* argv[])
@@ -538,6 +645,12 @@ int main(int argc, char* argv[])
                            : QStringLiteral("не найден, GPU-тесты пропускаются"))
         << Qt::endl;
 
+    if (app.arguments().contains(QStringLiteral("--bench"))) {
+        benchmark();
+        out.flush();
+        return 0;
+    }
+
     testShortCode(QStringLiteral("Хэмминг (7,4)"),
                   Reference::hamming7_4(), Reference::analyticHamming7_4());
     testShortCode(QStringLiteral("Расширенный Хэмминг (8,4)"),
@@ -554,6 +667,7 @@ int main(int argc, char* argv[])
 
     testCheckpoints();
     testCheckpointPortability();
+    testOversizedMatrixRejected();
 
     out << Qt::endl
         << QStringLiteral("итого: пройдено ") << g_passed << QStringLiteral(", провалено ") << g_failed << Qt::endl;

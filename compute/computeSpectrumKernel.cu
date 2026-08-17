@@ -1,17 +1,25 @@
+#include <stdexcept>
+
 #include "computeSpectrumKernel.cuh"
 
-// Порождающая матрица в константной памяти
-__constant__ quint64 d_matrix[Constants::MAX_CONST_WORDS];
+// Порождающая матрица в константной памяти.
+// Имя намеренно не d_matrix: так называется параметр ядра длинных кодов, и
+// раньше одно перекрывало другое.
+__constant__ quint64 c_matrix[Constants::MAX_CONST_WORDS];
 
-// Функция для чтения слова из матрицы
-__device__ __forceinline__  quint64 readMatrixWord(const quint64* matrix_global, int row, int wordIdx, int wordsPerRow)
+// Строка матрицы из константной памяти. Короткие коды в неё помещаются всегда
+// (хост это проверяет), поэтому выбирать тут не из чего.
+__device__ __forceinline__ quint64 readConstMatrixWord(int row, int wordIdx, int wordsPerRow)
 {
-    if ( matrix_global != nullptr ) {
-        return matrix_global[(size_t)row * wordsPerRow + wordIdx];
-    }
-    else {
-        return d_matrix[(size_t)row * wordsPerRow + wordIdx];
-    }
+    return c_matrix[(size_t)row * wordsPerRow + wordIdx];
+}
+
+// Длинный код может не влезть в константную память — тогда матрица лежит в
+// глобальной и приходит указателем. nullptr означает «она в константной».
+__device__ __forceinline__ quint64 readMatrixWord(const quint64* matrixGlobal, int row, int wordIdx, int wordsPerRow)
+{
+    return matrixGlobal ? matrixGlobal[(size_t)row * wordsPerRow + wordIdx]
+                        : readConstMatrixWord(row, wordIdx, wordsPerRow);
 }
 __device__ inline quint64 getBinome(const quint64* binomTable, int n, int k) {
     return binomTable[n * (Constants::MAX_SHORT_CODE_LENGTH + 1) + k];
@@ -98,11 +106,25 @@ __host__ cudaError_t copyMatrixToConstant( const quint64* h_matrix, size_t matri
     size_t bytes = matrixSizeInWords * Constants::WORD_SIZE;
     // Проверяем, что не вышли за пределы константной памяти
     if (bytes > Constants::CONST_MEM_SIZE ) {
-        throw("Error: matrix size (%zu bytes) exceeds constant memory limit");
-        return cudaError_t::cudaErrorMemoryValueTooLarge;
+        // Раньше здесь бросался голый const char*, который никто не ловил.
+        throw std::invalid_argument(
+            "матрица не помещается в константную память видеокарты");
     }
     // Копируем матрицу в константную память
-    return cudaMemcpyToSymbol(d_matrix, h_matrix, bytes, 0, cudaMemcpyHostToDevice);
+    return cudaMemcpyToSymbol(c_matrix, h_matrix, bytes, 0, cudaMemcpyHostToDevice);
+}
+
+// Проверка параметров запуска. Массивы в ядрах фиксированного размера, и выход
+// за них — молчаливая порча памяти на устройстве, поэтому ловим до запуска.
+// Раньше эти пределы проверялись только в интерфейсе, а Worker и ядра
+// принимали что угодно.
+static void validateLaunchParams(int wordsPerRow, int numOfCols)
+{
+    if (wordsPerRow > Constants::MAX_BLOCKWORDS)
+        throw std::invalid_argument(
+            "слишком длинная строка матрицы: не хватает MAX_BLOCKWORDS");
+    if (numOfCols > Constants::MAX_COLS)
+        throw std::invalid_argument("число столбцов больше MAX_COLS");
 }
 
 
@@ -126,6 +148,7 @@ __host__ void launchSpectrumKernelShort(
     quint64 chunkSize,
     quint64 r)
 {
+    validateLaunchParams(blockCount, n);
     computeSpectrumKernelShort << <numOfBlocks, threadsPerBlock, (n + 1) * sizeof(quint64), stream >> > (
         d_spectrum,
         d_binomTable,
@@ -149,86 +172,73 @@ __global__ void computeSpectrumKernelShort(
     quint64 r)
 {
     extern __shared__ quint64 s_spectrum[];
-    int tid = threadIdx.x;
-    int threadsPerBlock = blockDim.x;
+    const int tid = threadIdx.x;
 
-    for (int i = tid; i <= n; i += threadsPerBlock) s_spectrum[i] = 0ULL;
+    for (int i = tid; i <= n; i += blockDim.x) s_spectrum[i] = 0ULL;
     __syncthreads();
 
-    quint64 globalThreadIdx = (quint64)blockIdx.x * blockDim.x + threadIdx.x;
-    quint64 totalThreads = (quint64)gridDim.x * blockDim.x;
-    if (globalThreadIdx >= totalThreads) return;
+    const quint64 globalThreadIdx = (quint64)blockIdx.x * blockDim.x + tid;
+    const quint64 totalThreads    = (quint64)gridDim.x * blockDim.x;
 
-    quint64 combosPerThread = (chunkSize + totalThreads - 1) / totalThreads;
-    quint64 start = globalThreadIdx * combosPerThread;
-    if (start >= chunkSize) return;
-    quint64 end = start + combosPerThread;
-    if (end > chunkSize) end = chunkSize;
+    const quint64 combosPerThread = (chunkSize + totalThreads - 1) / totalThreads;
+    const quint64 start           = globalThreadIdx * combosPerThread;
 
-    quint64 codeword[Constants::MAX_BLOCKWORDS];
+    // Нить без работы не выходит из ядра: ей ещё стоять на барьере и
+    // участвовать в редукции. Раньше здесь был return, и корректность держалась
+    // на том, что у нити 0 наименьший индекс в блоке, — если бы вышла она,
+    // блок молча потерял бы весь накопленный спектр.
+    if (start < chunkSize) {
+        quint64 end = start + combosPerThread;
+        if (end > chunkSize) end = chunkSize;
 
-    for (int b = 0; b < blockCount; ++b) codeword[b] = 0ULL;
+        quint64 codeword[Constants::MAX_BLOCKWORDS];
+        for (int b = 0; b < blockCount; ++b) codeword[b] = 0ULL;
 
-    quint64 idx = start;
-    quint64 combIdx = chunkOffset + idx;
-    quint64 mask = generateBitMaskGPU(d_binomTable, (unsigned)k, (unsigned)r, combIdx);
+        quint64 mask = generateBitMaskGPU(d_binomTable, (unsigned)k, (unsigned)r,
+                                          chunkOffset + start);
 
-    quint64 temp = mask;
-    while (temp) {
-        quint64 single = temp & -temp;
-        int pos = bitPosFromSingleBit(single);
-        temp &= (temp - 1);
-        for (int w = 0; w < blockCount; ++w) codeword[w] ^= readMatrixWord(d_matrix, pos, w, blockCount);
-    }
-
-    int weight = 0;
-
-    for (int w = 0; w < blockCount; ++w) weight += __popcll(codeword[w]);
-    atomicAdd(&s_spectrum[weight], 1ULL);
-
-    for (idx = start + 1; idx < end; ++idx) {
-        quint64 nextCombIdx = chunkOffset + idx;
-        quint64 next_mask = generateBitMaskGPU(d_binomTable, (unsigned)k, (unsigned)r, nextCombIdx);
-
-        quint64 diff = mask ^ next_mask;
-
-        quint64 removed = mask & diff;
-        while (removed) {
-            quint64 single = removed & -removed;
-            int remPos = bitPosFromSingleBit(single);
-            removed &= (removed - 1);
-            for (int w = 0; w < blockCount; ++w) {
-                quint64 rowRem = readMatrixWord(d_matrix, remPos, w, blockCount);
-                codeword[w] ^= rowRem;
-            }
+        quint64 temp = mask;
+        while (temp) {
+            const int pos = bitPosFromSingleBit(temp & -temp);
+            temp &= (temp - 1);
+            for (int w = 0; w < blockCount; ++w)
+                codeword[w] ^= readConstMatrixWord(pos, w, blockCount);
         }
 
-        quint64 added = next_mask & diff;
-        while (added) {
-            quint64 single = added & -added;
-            int addPos = bitPosFromSingleBit(single);
-            added &= (added - 1);
-            for (int w = 0; w < blockCount; ++w) {
-                quint64 rowAdd = readMatrixWord(d_matrix, addPos, w, blockCount);
-                codeword[w] ^= rowAdd;
+        int weight = 0;
+        for (int w = 0; w < blockCount; ++w) weight += __popcll(codeword[w]);
+        atomicAdd(&s_spectrum[weight], 1ULL);
+
+        for (quint64 idx = start + 1; idx < end; ++idx) {
+            const quint64 next_mask = generateBitMaskGPU(d_binomTable, (unsigned)k,
+                                                         (unsigned)r, chunkOffset + idx);
+            const quint64 diff = mask ^ next_mask;
+
+            // Строки, вошедшие и вышедшие из набора, XOR-ятся одинаково:
+            // XOR — сам себе обратная операция, разделять их незачем.
+            quint64 changed = diff;
+            while (changed) {
+                const int pos = bitPosFromSingleBit(changed & -changed);
+                changed &= (changed - 1);
+                for (int w = 0; w < blockCount; ++w)
+                    codeword[w] ^= readConstMatrixWord(pos, w, blockCount);
             }
+
+            int weight2 = 0;
+            for (int w = 0; w < blockCount; ++w) weight2 += __popcll(codeword[w]);
+            atomicAdd(&s_spectrum[weight2], 1ULL);
+
+            mask = next_mask;
         }
-
-        int weight2 = 0;
-
-        for (int w = 0; w < blockCount; ++w) weight2 += __popcll(codeword[w]);
-        atomicAdd(&s_spectrum[weight2], 1ULL);
-
-        mask = next_mask;
     }
 
     __syncthreads();
 
-    if (tid == 0) {
-        for (int i = 0; i <= n; ++i) {
-            quint64 v = s_spectrum[i];
-            if (v) atomicAdd(&d_spectrum[i], v);
-        }
+    // Редукция всеми нитями блока. Раньше её целиком делала нить 0: при
+    // n = 2048 это 2049 атомарных операций подряд, пока остальные простаивают.
+    for (int i = tid; i <= n; i += blockDim.x) {
+        const quint64 v = s_spectrum[i];
+        if (v) atomicAdd(&d_spectrum[i], v);
     }
 }
 // Обертка для ядра для расчета частичных спектров длинных кодов
@@ -237,7 +247,7 @@ __host__ void launchSpectrumKernelLong(
     int threadsPerBlock,
     cudaStream_t stream,
     uint64_t* d_spectrum,
-    const uint64_t* d_matrix,
+    const uint64_t* matrixGlobal,
     int numCols,
     int numRows,
     int wordsPerRow,
@@ -248,10 +258,15 @@ __host__ void launchSpectrumKernelLong(
     uint64_t numOfOnes,
     uint64_t* d_maskCounter
 ) {
+    validateLaunchParams(wordsPerRow, numCols);
+    if (numOfOnes > Constants::MAX_POSITIONS)
+        throw std::invalid_argument(
+            "число складываемых строк больше MAX_POSITIONS");
+
     size_t sharedBytes = (size_t)(numCols + 1) * sizeof(uint64_t);
     computeSpectrumKernelLong <<< numBlocks, threadsPerBlock, sharedBytes, stream >>> (
         d_spectrum,
-        d_matrix,
+        matrixGlobal,
         numCols,
         numRows,
         wordsPerRow,
@@ -265,7 +280,7 @@ __host__ void launchSpectrumKernelLong(
 }
 __global__ void computeSpectrumKernelLong(
     uint64_t* d_spectrum,
-    const uint64_t* d_matrix,
+    const uint64_t* matrixGlobal,
     int             numCols,
     int             numRows,
     int             wordsPerRow,
@@ -295,7 +310,7 @@ __global__ void computeSpectrumKernelLong(
     bool threadIsActive =
         (gtid < numStartMasks) &&
         (startRank < chunkSize) &&
-        (numOfOnes <= Constants::MAX_POSITIONS);
+        true;
 
     /* -------- per-thread work -------- */
     if (threadIsActive) {
@@ -317,7 +332,7 @@ __global__ void computeSpectrumKernelLong(
         for (int i = 0; i < numOfOnes; ++i) {
             int row = a[i];
             for (int w = 0; w < wordsPerRow; ++w)
-                codeword[w] ^= readMatrixWord(d_matrix, row, w, wordsPerRow);
+                codeword[w] ^= readMatrixWord(matrixGlobal, row, w, wordsPerRow);
         }
 
         int weight = 0;
@@ -354,14 +369,14 @@ __global__ void computeSpectrumKernelLong(
                 for (int i = 0; i < numOfOnes; ++i) {
                     int row = a[i];
                     for (int w = 0; w < wordsPerRow; ++w)
-                        codeword[w] ^= readMatrixWord(d_matrix, row, w, wordsPerRow);
+                        codeword[w] ^= readMatrixWord(matrixGlobal, row, w, wordsPerRow);
                 }
             }
             else {
                 for (int t = 0; t < numChanged; ++t) {
                     int row = changed[t];
                     for (int w = 0; w < wordsPerRow; ++w)
-                        codeword[w] ^= readMatrixWord(d_matrix, row, w, wordsPerRow);
+                        codeword[w] ^= readMatrixWord(matrixGlobal, row, w, wordsPerRow);
                 }
             }
 
@@ -400,6 +415,7 @@ __host__ void launchSpectrumKernelGrayShort(
     quint64 chunkOffset,   // индекс Gray-элемента начала чанка
     quint64 chunkSize      // сколько Gray-элементов в чанке
 ) {
+    validateLaunchParams(blockCount, n);
     computeSpectrumKernelGrayShort << <numOfBlocks, threadsPerBlock, (n + 1) * sizeof(quint64), stream >> > (
         d_spectrum,
         n,
@@ -419,96 +435,79 @@ __global__ void computeSpectrumKernelGrayShort(
     quint64 chunkSize
 ) {
     extern __shared__ quint64 s_spectrum[];
-    int tid = threadIdx.x;
-    int threadsPerBlock = blockDim.x;
+    const int tid = threadIdx.x;
 
     // 1) инициализация shared
-    for (int i = tid; i <= n; i += threadsPerBlock) s_spectrum[i] = 0ULL;
+    for (int i = tid; i <= n; i += blockDim.x) s_spectrum[i] = 0ULL;
     __syncthreads();
 
-    quint64 globalThreadIdx = (quint64)blockIdx.x * blockDim.x + threadIdx.x;
-    quint64 totalThreads = (quint64)gridDim.x * blockDim.x;
-    if (globalThreadIdx >= totalThreads) return;
+    const quint64 globalThreadIdx = (quint64)blockIdx.x * blockDim.x + tid;
+    const quint64 totalThreads    = (quint64)gridDim.x * blockDim.x;
 
     // 2) строгое равномерное разбиение [0..chunkSize)
-    quint64 base = chunkSize / totalThreads;
-    quint64 rem = chunkSize % totalThreads;
-    quint64 startLocal = globalThreadIdx * base + (globalThreadIdx < rem ? globalThreadIdx : rem);
-    quint64 cnt = base + (globalThreadIdx < rem ? 1 : 0);
-    if (cnt == 0) return;
-    quint64 endLocal = startLocal + cnt; // exclusive
+    const quint64 base       = chunkSize / totalThreads;
+    const quint64 rem        = chunkSize % totalThreads;
+    const quint64 startLocal = globalThreadIdx * base
+                             + (globalThreadIdx < rem ? globalThreadIdx : rem);
+    const quint64 cnt        = base + (globalThreadIdx < rem ? 1 : 0);
 
-    // 3) подготовка local codeword
-    quint64 codeword[Constants::MAX_BLOCKWORDS];
-    #pragma unroll
-    for (int b = 0; b < blockCount; ++b) codeword[b] = 0ULL;
+    // Нить без работы не выходит: барьер и редукция ниже общие для блока.
+    if (cnt > 0) {
+        const quint64 endLocal = startLocal + cnt; // exclusive
 
-    // 4) маска для k бит
-    const quint64 maskAll = (k >= 64) ? ~0ULL : ((1ULL << k) - 1ULL);
+        // 3) подготовка local codeword
+        quint64 codeword[Constants::MAX_BLOCKWORDS];
+        for (int b = 0; b < blockCount; ++b) codeword[b] = 0ULL;
 
-    // gray function
-    auto gray_of = [] __device__(quint64 i) -> quint64 { return (i ^ (i >> 1)); };
+        // 4) маска для k бит
+        const quint64 maskAll = (k >= 64) ? ~0ULL : ((1ULL << k) - 1ULL);
 
-    // 5) начальный глобальный индекс и начальная маска
-    quint64 idxGlobal = chunkOffset + startLocal;
-    quint64 mask = (gray_of(idxGlobal) & maskAll);
+        auto gray_of = [] __device__(quint64 i) -> quint64 { return (i ^ (i >> 1)); };
 
-    // 6) полный XOR для начальной маски
-    quint64 temp = mask;
-    while (temp) {
-        quint64 lowbit = temp & (~temp + 1ULL); // safe lowbit
-        int pos = bitPosFromSingleBit(lowbit);
-        temp &= (temp - 1ULL);
-        for (int w = 0; w < blockCount; ++w) codeword[w] ^= readMatrixWord(d_matrix, pos, w, blockCount);
-    }
+        // 5) начальная маска
+        quint64 mask = (gray_of(chunkOffset + startLocal) & maskAll);
 
-    // 7) аккумулируем вес
-    int weight = 0;
-    #pragma unroll
-    for (int w = 0; w < blockCount; ++w) weight += __popcll(codeword[w]);
-    atomicAdd(&s_spectrum[weight], 1ULL);
-    // 8) основной цикл по локальному диапазону (без перекрытий)
-    for (quint64 local = startLocal + 1; local < endLocal; ++local) {
-        quint64 i = chunkOffset + local;
-        quint64 next_mask = (gray_of(i) & maskAll);
-        quint64 diff = mask ^ next_mask;
-
-        // обработать все удалённые биты
-        quint64 removed = mask & diff;
-        while (removed) {
-            quint64 lowbit = removed & (~removed + 1ULL);
-            int remPos = bitPosFromSingleBit(lowbit);
-            removed &= (removed - 1ULL);
+        // 6) полный XOR для начальной маски
+        quint64 temp = mask;
+        while (temp) {
+            const int pos = bitPosFromSingleBit(temp & (~temp + 1ULL));
+            temp &= (temp - 1ULL);
             for (int w = 0; w < blockCount; ++w)
-                codeword[w] ^= readMatrixWord(d_matrix, remPos, w, blockCount);
+                codeword[w] ^= readConstMatrixWord(pos, w, blockCount);
         }
 
-        // обработать все добавленные биты
-        quint64 added = next_mask & diff;
-        while (added) {
-            quint64 lowbit = added & (~added + 1ULL);
-            int addPos = bitPosFromSingleBit(lowbit);
-            added &= (added - 1ULL);
-            for (int w = 0; w < blockCount; ++w)
-                codeword[w] ^= readMatrixWord(d_matrix, addPos, w, blockCount);
-        }
+        // 7) аккумулируем вес
+        int weight = 0;
+        for (int w = 0; w < blockCount; ++w) weight += __popcll(codeword[w]);
+        atomicAdd(&s_spectrum[weight], 1ULL);
 
-        // аккумулируем вес
-        int weight2 = 0;
-        #pragma unroll
-        for (int w = 0; w < blockCount; ++w) weight2 += __popcll(codeword[w]);
-        atomicAdd(&s_spectrum[weight2], 1ULL);
-        mask = next_mask;
+        // 8) основной цикл по локальному диапазону (без перекрытий).
+        // У соседних кодов Грея различается ровно один бит, поэтому цикл по
+        // изменившимся битам делает здесь один проход.
+        for (quint64 local = startLocal + 1; local < endLocal; ++local) {
+            const quint64 next_mask = (gray_of(chunkOffset + local) & maskAll);
+
+            quint64 changed = mask ^ next_mask;
+            while (changed) {
+                const int pos = bitPosFromSingleBit(changed & (~changed + 1ULL));
+                changed &= (changed - 1ULL);
+                for (int w = 0; w < blockCount; ++w)
+                    codeword[w] ^= readConstMatrixWord(pos, w, blockCount);
+            }
+
+            int weight2 = 0;
+            for (int w = 0; w < blockCount; ++w) weight2 += __popcll(codeword[w]);
+            atomicAdd(&s_spectrum[weight2], 1ULL);
+            mask = next_mask;
+        }
     }
 
     __syncthreads();
 
-    // 9) редукция shared -> global
-    if (tid == 0) {
-        for (int i = 0; i <= n; ++i) {
-            quint64 v = s_spectrum[i];
-            if (v) atomicAdd(&d_spectrum[i], v);
-        }
+    // 9) редукция shared -> global, всеми нитями блока
+    for (int i = tid; i <= n; i += blockDim.x) {
+        const quint64 v = s_spectrum[i];
+        if (v) atomicAdd(&d_spectrum[i], v);
     }
 }
 
