@@ -36,22 +36,8 @@ __host__ void launchSpectrumKernelShort(
     quint64 r
 );
 
-__global__ void computeSpectrumKernelLong(
-    uint64_t*        d_spectrum,
-    const uint64_t*  matrixGlobal,
-    int              numCols,
-    int              numRows,
-    int              wordsPerRow,
-    uint64_t         chunkSize,
-    int16_t*         d_startPositions,
-    uint64_t         masksPerThread,
-    uint64_t         numStartMasks,
-    uint64_t         numOfOnes,
-    uint64_t*        d_maskCounter,
-    // Копировать ли матрицу в разделяемую память. Решает хост: у длинных кодов
-    // она бывает до полумегабайта и тогда туда не помещается.
-    bool             stageMatrix
-);
+// Ядра шаблонные по числу слов в строке и объявлены в .cu — снаружи
+// нужны только обёртки запуска, они и выбирают вариант.
 
 __host__ void launchSpectrumKernelLong(
     int              numBlocks,
