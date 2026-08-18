@@ -1,3 +1,4 @@
+#include <string>
 #include <stdexcept>
 
 #include "computeSpectrumKernel.cuh"
@@ -137,6 +138,26 @@ __host__ cudaError_t copyMatrixToConstant( const quint64* h_matrix, size_t matri
     return cudaMemcpyToSymbol(c_matrix, h_matrix, bytes, 0, cudaMemcpyHostToDevice);
 }
 
+// Проверка того, что запуск ядра вообще состоялся.
+//
+// Ошибку запуска нигде не проверяли, и провалившийся запуск проходил молча:
+// ядро не выполнялось, спектр оставался недосчитанным, а программа
+// рапортовала об успехе. Вылезло это при переборе параметров — на 1024 нитях
+// в блоке спектр расходился с эталоном без единого сообщения.
+static void checkLaunch(const char* what, int blocks, int threads, size_t sharedBytes)
+{
+    const cudaError_t err = cudaGetLastError();
+    if (err == cudaSuccess)
+        return;
+
+    throw std::invalid_argument(
+        std::string("не удалось запустить ") + what + ": " + cudaGetErrorString(err)
+        + " (блоков "  + std::to_string(blocks)
+        + ", нитей "   + std::to_string(threads)
+        + ", разделяемой памяти " + std::to_string(sharedBytes) + " байт)");
+}
+
+
 // Проверка параметров запуска. Массивы в ядрах фиксированного размера, и выход
 // за них — молчаливая порча памяти на устройстве, поэтому ловим до запуска.
 // Раньше эти пределы проверялись только в интерфейсе, а Worker и ядра
@@ -222,6 +243,8 @@ __host__ void launchSpectrumKernelShort(
         default: LAUNCH_SHORT( 0); break;
     }
     #undef LAUNCH_SHORT
+
+    checkLaunch("ядро коротких кодов", numOfBlocks, threadsPerBlock, sharedBytes);
 }
 
 
@@ -421,6 +444,8 @@ __host__ void launchSpectrumKernelLong(
         d_maskCounter,
         stageMatrix
         );
+
+    checkLaunch("ядро длинных кодов", numBlocks, threadsPerBlock, sharedBytes);
 }
 __global__ void computeSpectrumKernelLong(
     uint64_t* d_spectrum,
@@ -589,6 +614,8 @@ __host__ void launchSpectrumKernelGrayShort(
         chunkOffset,
         chunkSize
         );
+
+    checkLaunch("ядро кода Грея", numOfBlocks, threadsPerBlock, sharedBytes);
 }
 
 __global__ void computeSpectrumKernelGrayShort(

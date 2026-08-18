@@ -877,6 +877,99 @@ static int dumpGolden(const QString& path)
     return g_failed == 0 ? 0 : 1;
 }
 
+// Перебор параметров запуска.
+//
+// Занятость упирается не в регистры и не в разделяемую память, а в размер
+// сетки: на RTX 3070 сорок шесть мультипроцессоров, а по умолчанию блоков
+// всего 64, то есть меньше полутора на каждый. Здесь это проверяется замером,
+// а не рассуждением.
+//
+// Запуск: SpectrumTests.exe --sweep <случай>
+static int sweepLaunchParams(const QString& which)
+{
+    RunConfig base;
+    base.device = ComputeDevice::GPU;
+
+    if (which == QStringLiteral("wide")) {
+        base.matrix    = Reference::randomMatrix(50, 2000, 10);
+        base.algorithm = Algorithm::SimpleXor;
+        base.maxRows   = 8;
+    } else if (which == QStringLiteral("narrow")) {
+        base.matrix    = Reference::randomMatrix(50, 50, 3);
+        base.algorithm = Algorithm::SimpleXor;
+        base.maxRows   = 9;
+    } else if (which == QStringLiteral("gray")) {
+        base.matrix    = Reference::randomMatrix(28, 1000, 12);
+        base.algorithm = Algorithm::GrayCode;
+        base.maxRows   = 28;
+    } else if (which == QStringLiteral("long")) {
+        base.matrix    = Reference::randomMatrix(70, 1000, 11);
+        base.algorithm = Algorithm::SimpleXor;
+        base.maxRows   = 6;
+    } else {
+        out << QStringLiteral("ожидалось --sweep wide|narrow|gray|long") << Qt::endl;
+        return 2;
+    }
+
+    if (!g_gpuAvailable) {
+        out << QStringLiteral("GPU недоступен") << Qt::endl;
+        return 1;
+    }
+
+    const QVector<int> blocks  { 23, 46, 92, 138, 184, 276, 368 };
+    const QVector<int> threads { 64, 128, 256, 512, 1024 };
+
+    out << QStringLiteral("Перебор параметров, случай ") << which
+        << QStringLiteral(" (46 мультипроцессоров)") << Qt::endl << Qt::endl;
+    out << QStringLiteral("блоки \ нити");
+    for (int t : threads) out << QStringLiteral("%1").arg(t, 9);
+    out << Qt::endl;
+
+    double best = 1e9;
+    int bestB = 0, bestT = 0;
+    Spectrum reference;
+
+    for (int b : blocks) {
+        out << QStringLiteral("%1").arg(b, 12);
+        for (int t : threads) {
+            RunConfig cfg = base;
+            cfg.blocksGpu  = b;
+            cfg.threadsGpu = t;
+
+            const auto t0 = std::chrono::steady_clock::now();
+            const Spectrum s = runWorker(cfg);
+            const double sec = std::chrono::duration<double>(
+                                   std::chrono::steady_clock::now() - t0).count();
+
+            // Результат обязан не зависеть от разбиения — сверяем с первым.
+            if (reference.isEmpty()) reference = s;
+            const bool ok = (s == reference);
+
+            if (ok && sec < best) { best = sec; bestB = b; bestT = t; }
+            out << QStringLiteral("%1").arg(ok ? QStringLiteral("%1").arg(sec, 0, 'f', 2)
+                                               : QStringLiteral("ПЛОХО"), 9);
+            out.flush();
+        }
+        out << Qt::endl;
+    }
+
+    out << Qt::endl
+        << QStringLiteral("лучшее: %1 блоков x %2 нитей, %3 с")
+               .arg(bestB).arg(bestT).arg(best, 0, 'f', 2) << Qt::endl;
+    // Для сравнения — то, что стоит по умолчанию сейчас.
+    RunConfig cur = base; cur.blocksGpu = 64; cur.threadsGpu = 256;
+    const auto t0 = std::chrono::steady_clock::now();
+    const Spectrum s = runWorker(cur);
+    const double sec = std::chrono::duration<double>(
+                           std::chrono::steady_clock::now() - t0).count();
+    out << QStringLiteral("сейчас по умолчанию 64 x 256: %1 с, выигрыш %2x")
+               .arg(sec, 0, 'f', 2).arg(best > 0 ? sec / best : 0.0, 0, 'f', 2)
+        << (s == reference ? QString()
+                           : QStringLiteral("   ВНИМАНИЕ: спектр разошёлся"))
+        << Qt::endl;
+    return 0;
+}
+
 // ------------------------------------------------------------------- замер
 
 // Замер скорости ядер. Тестовые матрицы намеренно маленькие — на них разницы
@@ -974,6 +1067,13 @@ int main(int argc, char* argv[])
         benchmark();
         out.flush();
         return 0;
+    }
+
+    const int sweepAt = args.indexOf(QStringLiteral("--sweep"));
+    if (sweepAt >= 0 && sweepAt + 1 < args.size()) {
+        const int rc = sweepLaunchParams(args.at(sweepAt + 1));
+        out.flush();
+        return rc;
     }
 
     const int profAt = args.indexOf(QStringLiteral("--profile"));

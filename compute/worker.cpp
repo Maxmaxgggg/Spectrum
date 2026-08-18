@@ -1205,7 +1205,7 @@ void Worker::computeSpectrum()
     catch (const std::exception& e) {
         releaseResources();
         emit errorOccurred(QStringLiteral("Ошибка расчёта: %1")
-                               .arg(QString::fromLocal8Bit(e.what())));
+                               .arg(QString::fromUtf8(e.what())));
         emit finished(Constants::ERROR_OCCURED);
     }
 }
