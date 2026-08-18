@@ -179,6 +179,37 @@ static void validateLaunchParams(int wordsPerRow, int numOfCols)
 
 
 
+// XOR строки матрицы из разделяемой памяти в кодовое слово.
+//
+// При чётном числе слов читаем по два за раз (16 байт), а не по одному:
+// профилировщик показывал, что более половины простоя варпов приходится на
+// очередь MIO, куда идут обращения к разделяемой памяти. Вдвое меньше
+// обращений — вдвое меньше давление на эту очередь.
+//
+// Выравнивание обеспечено: гистограмма в разделяемой памяти дополнена до
+// чётного числа слов, поэтому строка матрицы начинается с адреса, кратного 16,
+// а само кодовое слово объявлено с __align__(16).
+template <int WORDS>
+__device__ __forceinline__ void xorRowFromShared(quint64* codeword,
+                                                 const quint64* row,
+                                                 int words)
+{
+    if (WORDS > 0 && (WORDS % 2) == 0) {
+        ulonglong2*       dst = reinterpret_cast<ulonglong2*>(codeword);
+        const ulonglong2* src = reinterpret_cast<const ulonglong2*>(row);
+        #pragma unroll
+        for (int w = 0; w < WORDS / 2; ++w) {
+            dst[w].x ^= src[w].x;
+            dst[w].y ^= src[w].y;
+        }
+    } else {
+        // Нечётное число слов и запасной путь с рантаймовым размером.
+        #pragma unroll
+        for (int w = 0; w < words; ++w)
+            codeword[w] ^= row[w];
+    }
+}
+
 // Число слов, известное на этапе компиляции: округляем вверх до ближайшего
 // заготовленного варианта. Лишние слова дозаполняются нулями, что безопасно —
 // биты за numOfCols в матрице всегда нули, а XOR и popcount с нулём ничего не
@@ -226,8 +257,10 @@ __host__ void launchSpectrumKernelShort(
 
     // Гистограмма плюс копия матрицы: она уезжает в разделяемую память, потому
     // что нити варпа читают разные строки, а константная память такое дробит.
+    // Гистограмма дополнена до чётного числа слов: так строка матрицы ложится
+    // на адрес, кратный 16, и читается по два слова за раз.
     const size_t sharedBytes =
-        (size_t)(n + 1 + k * (words > 0 ? words : blockCount)) * sizeof(quint64);
+        (size_t)(((n + 2) & ~1) + k * (words > 0 ? words : blockCount)) * sizeof(quint64);
 
     // Одной строкой намеренно: перенос со слэшем внутри define читается хуже,
     // чем длинная строка.
@@ -285,7 +318,9 @@ __global__ void computeSpectrumKernelShortT(
     // память разложена по банкам и расхождение адресов переносит нормально.
     extern __shared__ quint64 s_mem[];
     quint64* const s_spectrum = s_mem;
-    quint64* const s_matrix   = s_mem + (n + 1);
+    // Гистограмма дополнена до чётного числа слов, чтобы строка матрицы
+    // начиналась с адреса, кратного 16, и её можно было читать по два слова.
+    quint64* const s_matrix   = s_mem + ((n + 2) & ~1);
 
     const int tid = threadIdx.x;
 
@@ -315,7 +350,7 @@ __global__ void computeSpectrumKernelShortT(
         if (end > chunkSize) end = chunkSize;
         const quint64 count = end - start;
 
-        quint64 codeword[WORDS > 0 ? WORDS : Constants::MAX_BLOCKWORDS];
+        __align__(16) quint64 codeword[WORDS > 0 ? WORDS : Constants::MAX_BLOCKWORDS];
         #pragma unroll
         for (int b = 0; b < words; ++b) codeword[b] = 0ULL;
 
@@ -341,9 +376,7 @@ __global__ void computeSpectrumKernelShortT(
         while (temp) {
             const int p = bitPosFromSingleBit(temp & -temp);
             temp &= (temp - 1);
-            #pragma unroll
-            for (int w = 0; w < words; ++w)
-                codeword[w] ^= s_matrix[(k - 1 - p) * words + w];
+            xorRowFromShared<WORDS>(codeword, &s_matrix[(k - 1 - p) * words], words);
         }
 
         // Подряд идущие кодовые слова часто имеют одинаковый вес, поэтому
@@ -371,9 +404,7 @@ __global__ void computeSpectrumKernelShortT(
             while (changed) {
                 const int p = bitPosFromSingleBit(changed & -changed);
                 changed &= (changed - 1);
-                #pragma unroll
-            for (int w = 0; w < words; ++w)
-                    codeword[w] ^= s_matrix[(k - 1 - p) * words + w];
+                xorRowFromShared<WORDS>(codeword, &s_matrix[(k - 1 - p) * words], words);
             }
 
             int weight = 0;
@@ -442,7 +473,7 @@ __host__ void launchSpectrumKernelLong(
     // строки, а константная память такой запрос дробит. Но у длинных кодов
     // матрица бывает до полумегабайта, и тогда она туда не помещается — в этом
     // случае читаем как раньше.
-    const size_t histogramBytes = (size_t)(numCols + 1) * sizeof(uint64_t);
+    const size_t histogramBytes = (size_t)((numCols + 2) & ~1) * sizeof(uint64_t);
     const size_t matrixBytes =
         (size_t)numRows * (words > 0 ? words : wordsPerRow) * sizeof(uint64_t);
 
@@ -495,7 +526,8 @@ __global__ void computeSpectrumKernelLongT(
     uint64_t* const s_spectrum = s_mem;
     // Копия матрицы идёт следом за гистограммой. Если она не влезла, хост
     // передаёт stageMatrix = false, и этой части просто нет.
-    uint64_t* const s_matrix   = s_mem + (numCols + 1);
+    // Гистограмма дополнена до чётного числа слов — см. короткие ядра.
+    uint64_t* const s_matrix   = s_mem + ((numCols + 2) & ~1);
 
     int tid = threadIdx.x;
     uint64_t gtid =
@@ -540,7 +572,7 @@ __global__ void computeSpectrumKernelLongT(
             a[i] = slot[i];
 
         // codeword
-        uint64_t codeword[WORDS > 0 ? WORDS : Constants::MAX_BLOCKWORDS];
+        __align__(16) uint64_t codeword[WORDS > 0 ? WORDS : Constants::MAX_BLOCKWORDS];
         #pragma unroll
         for (int w = 0; w < words; ++w)
             codeword[w] = 0ULL;
@@ -548,10 +580,11 @@ __global__ void computeSpectrumKernelLongT(
         /* ---- first mask ---- */
         for (int i = 0; i < numOfOnes; ++i) {
             int row = a[i];
-            #pragma unroll
-        for (int w = 0; w < words; ++w)
-                codeword[w] ^= matrixSrc ? matrixSrc[(size_t)row * words + w]
-                                  : readMatrixWord(matrixGlobal, row, w, wordsPerRow);
+            if (matrixSrc)
+                xorRowFromShared<WORDS>(codeword, &matrixSrc[(size_t)row * words], words);
+            else
+                for (int w = 0; w < wordsPerRow; ++w)   // именно wordsPerRow
+                    codeword[w] ^= readMatrixWord(matrixGlobal, row, w, wordsPerRow);
         }
 
         int weight = 0;
@@ -589,19 +622,21 @@ __global__ void computeSpectrumKernelLongT(
 
                 for (int i = 0; i < numOfOnes; ++i) {
                     int row = a[i];
-                    #pragma unroll
-        for (int w = 0; w < words; ++w)
-                        codeword[w] ^= matrixSrc ? matrixSrc[(size_t)row * words + w]
-                                  : readMatrixWord(matrixGlobal, row, w, wordsPerRow);
+                    if (matrixSrc)
+                        xorRowFromShared<WORDS>(codeword, &matrixSrc[(size_t)row * words], words);
+                    else
+                        for (int w = 0; w < wordsPerRow; ++w)   // именно wordsPerRow
+                            codeword[w] ^= readMatrixWord(matrixGlobal, row, w, wordsPerRow);
                 }
             }
             else {
                 for (int t = 0; t < numChanged; ++t) {
                     int row = changed[t];
-                    #pragma unroll
-        for (int w = 0; w < words; ++w)
-                        codeword[w] ^= matrixSrc ? matrixSrc[(size_t)row * words + w]
-                                  : readMatrixWord(matrixGlobal, row, w, wordsPerRow);
+                    if (matrixSrc)
+                        xorRowFromShared<WORDS>(codeword, &matrixSrc[(size_t)row * words], words);
+                    else
+                        for (int w = 0; w < wordsPerRow; ++w)   // именно wordsPerRow
+                            codeword[w] ^= readMatrixWord(matrixGlobal, row, w, wordsPerRow);
                 }
             }
 
@@ -644,8 +679,10 @@ __host__ void launchSpectrumKernelGrayShort(
     validateLaunchParams(blockCount, n);
     const int words = pickWordCount(blockCount);
     // Гистограмма плюс копия матрицы — см. ядро простого XOR.
+    // Гистограмма дополнена до чётного числа слов: так строка матрицы ложится
+    // на адрес, кратный 16, и читается по два слова за раз.
     const size_t sharedBytes =
-        (size_t)(n + 1 + k * (words > 0 ? words : blockCount)) * sizeof(quint64);
+        (size_t)(((n + 2) & ~1) + k * (words > 0 ? words : blockCount)) * sizeof(quint64);
 
     #define LAUNCH_GRAY(W) computeSpectrumKernelGrayShortT<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(d_spectrum, n, k, blockCount, chunkOffset, chunkSize)
 
@@ -681,7 +718,9 @@ __global__ void computeSpectrumKernelGrayShortT(
     // строки, а константная память дробит такой запрос на отдельные обращения.
     extern __shared__ quint64 s_mem[];
     quint64* const s_spectrum = s_mem;
-    quint64* const s_matrix   = s_mem + (n + 1);
+    // Гистограмма дополнена до чётного числа слов, чтобы строка матрицы
+    // начиналась с адреса, кратного 16, и её можно было читать по два слова.
+    quint64* const s_matrix   = s_mem + ((n + 2) & ~1);
 
     const int tid = threadIdx.x;
 
@@ -709,7 +748,7 @@ __global__ void computeSpectrumKernelGrayShortT(
         const quint64 endLocal = startLocal + cnt; // exclusive
 
         // 3) подготовка local codeword
-        quint64 codeword[WORDS > 0 ? WORDS : Constants::MAX_BLOCKWORDS];
+        __align__(16) quint64 codeword[WORDS > 0 ? WORDS : Constants::MAX_BLOCKWORDS];
         #pragma unroll
         for (int b = 0; b < words; ++b) codeword[b] = 0ULL;
 
@@ -726,9 +765,7 @@ __global__ void computeSpectrumKernelGrayShortT(
         while (temp) {
             const int pos = bitPosFromSingleBit(temp & (~temp + 1ULL));
             temp &= (temp - 1ULL);
-            #pragma unroll
-            for (int w = 0; w < words; ++w)
-                codeword[w] ^= s_matrix[pos * words + w];
+            xorRowFromShared<WORDS>(codeword, &s_matrix[pos * words], words);
         }
 
         // 7) аккумулируем вес. Как и в ядре простого XOR, копим серию
@@ -748,9 +785,7 @@ __global__ void computeSpectrumKernelGrayShortT(
             while (changed) {
                 const int pos = bitPosFromSingleBit(changed & (~changed + 1ULL));
                 changed &= (changed - 1ULL);
-                #pragma unroll
-            for (int w = 0; w < words; ++w)
-                    codeword[w] ^= s_matrix[pos * words + w];
+                xorRowFromShared<WORDS>(codeword, &s_matrix[pos * words], words);
             }
 
             int weight = 0;

@@ -799,6 +799,18 @@ static int dumpGolden(const QString& path)
     // перекладываний буфера стартовых масок.
     add("GPU XOR I(70) r<=6 (8x32)", Reference::identity(70), Algorithm::SimpleXor, 6,
         ComputeDevice::GPU, 8, 32, Reference::identityPartialSpectrum(70, 6));
+    // Длинный путь + матрица в ГЛОБАЛЬНОЙ памяти + округление числа слов —
+    // сочетание, которого не было ни в одном случае, и оно скрыло настоящий
+    // баг: в запасной ветке цикл шёл до округлённого числа слов, а шаг строки
+    // в глобальной памяти настоящий, и лишние слова читались из начала
+    // следующей строки.
+    //
+    // I(900): матрица 900 x 15 слов = 108 КБ, в разделяемую (40 КБ) не влезает;
+    // 15 слов округляются до 16. Спектр при этом известен точно — C(900,w).
+    add("GPU XOR I(900) r<=3, глобальная память", Reference::identity(900),
+        Algorithm::SimpleXor, 3, ComputeDevice::GPU, 64, 256,
+        Reference::identityPartialSpectrum(900, 3));
+
     // Длинный путь на случайной матрице, 670 млн комбинаций.
     add("GPU XOR rnd(90,300) r<=6", Reference::randomMatrix(90, 300, 14),
         Algorithm::SimpleXor, 6, ComputeDevice::GPU);
