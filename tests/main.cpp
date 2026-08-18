@@ -243,6 +243,27 @@ static void testShortCode(const QString& label, const QStringList& matrix,
     check("GPU  Грей (короткий)", cfg, brute);
 }
 
+// Сверка всех четырёх коротких путей с наивным перебором. Отдельно от
+// testShortCode, где ещё требуется аналитический спектр: у произвольной матрицы
+// его нет, но перебор остаётся абсолютным эталоном.
+static void testShortCodeAgainstBruteForce(const QString& label, const QStringList& matrix)
+{
+    out << Qt::endl << label << QStringLiteral(" (k=") << matrix.size()
+        << QStringLiteral(", n=") << matrix.first().length() << QStringLiteral(")") << Qt::endl;
+
+    const Spectrum brute = Reference::bruteForce(matrix);
+
+    RunConfig cfg; cfg.matrix = matrix;
+    cfg.algorithm = Algorithm::SimpleXor; cfg.device = ComputeDevice::CPU;
+    check("CPU  XOR ", cfg, brute);
+    cfg.device = ComputeDevice::GPU;
+    check("GPU  XOR ", cfg, brute);
+    cfg.algorithm = Algorithm::GrayCode;  cfg.device = ComputeDevice::CPU;
+    check("CPU  Грей", cfg, brute);
+    cfg.device = ComputeDevice::GPU;
+    check("GPU  Грей", cfg, brute);
+}
+
 // Длинный код: полный перебор невозможен, эталон — C(n,w) на единичной матрице.
 static void testLongCode(int n, int maxRows)
 {
@@ -977,6 +998,18 @@ int main(int argc, char* argv[])
                   Reference::golay24_12(), Reference::analyticGolay24_12());
 
     testPartialShort(Reference::golay24_12(), 4);
+
+    // Ядро коротких кодов выбирается по числу слов в строке из заготовленного
+    // набора и округляется вверх, а лишние слова дозаполняются нулями. Во всех
+    // случаях выше число слов попадало в набор точно (1, 2, 5, 32), и путь с
+    // округлением не проверялся ни разу.
+    //
+    // 700 бит это 11 слов, округляется до 12; 550 бит это 9 слов, до 10.
+    // Матрицы намеренно узкие по строкам, чтобы работал наивный перебор.
+    testShortCodeAgainstBruteForce(QStringLiteral("rnd(20,700), 11 слов -> 12"),
+                                   Reference::randomMatrix(20, 700, 15));
+    testShortCodeAgainstBruteForce(QStringLiteral("rnd(20,550), 9 слов -> 10"),
+                                   Reference::randomMatrix(20, 550, 16));
 
     testLongCode(70, 3);
     testLongCode(64, 2);

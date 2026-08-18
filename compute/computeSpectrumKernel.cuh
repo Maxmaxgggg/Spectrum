@@ -20,16 +20,8 @@ typedef uint64_t quint64;
 __host__ cudaError_t copyMatrixToConstant(const quint64* h_matrix, size_t wordsNeeded);
 
 
-__global__ void computeSpectrumKernelShort(
-    quint64 * d_spectrum,
-    const quint64* d_binomTable,
-    int n,
-    int k,
-    int blockCount,
-    quint64 chunkOffset,
-    quint64 chunkSize,
-    quint64 r
-);
+// Ядро коротких кодов шаблонное и объявлено в .cu — снаружи нужна
+// только обёртка запуска, она и выбирает вариант по числу слов.
 __host__ void launchSpectrumKernelShort(
     quint64 * d_spectrum,
     const quint64 * d_binomTable,

@@ -158,6 +158,13 @@ static void validateLaunchParams(int wordsPerRow, int numOfCols)
 
 
 
+// Определение ниже; здесь оно нужно обёртке запуска.
+template <int WORDS>
+__global__ void computeSpectrumKernelShortT(
+    quint64* d_spectrum, const quint64* d_binomTable,
+    int n, int k, int blockCount,
+    quint64 chunkOffset, quint64 chunkSize, quint64 r);
+
 __host__ void launchSpectrumKernelShort(
     quint64* d_spectrum,
     const quint64* d_binomTable,
@@ -172,22 +179,65 @@ __host__ void launchSpectrumKernelShort(
     quint64 r)
 {
     validateLaunchParams(blockCount, n);
+
+    // Выбираем вариант ядра, у которого число слов известно на этапе
+    // компиляции. Округляем вверх до ближайшего заготовленного: лишние слова
+    // заполняются нулями, а XOR и popcount с нулём результата не меняют.
+    static const int kWordSizes[] =
+        { 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32 };
+    int words = 0;
+    for (int candidate : kWordSizes)
+        if (candidate >= blockCount) { words = candidate; break; }
+
     // Гистограмма плюс копия матрицы: она уезжает в разделяемую память, потому
     // что нити варпа читают разные строки, а константная память такое дробит.
-    const size_t sharedBytes = (size_t)(n + 1 + k * blockCount) * sizeof(quint64);
-    computeSpectrumKernelShort << <numOfBlocks, threadsPerBlock, sharedBytes, stream >> > (
-        d_spectrum,
-        d_binomTable,
-        n,
-        k,
-        blockCount,
-        chunkOffset,
-        chunkSize,
-        r);
+    const size_t sharedBytes =
+        (size_t)(n + 1 + k * (words > 0 ? words : blockCount)) * sizeof(quint64);
+
+    #define LAUNCH_SHORT(W)                                                      \
+        computeSpectrumKernelShortT<W> <<<numOfBlocks, threadsPerBlock,          \
+                                          sharedBytes, stream>>>(                \
+            d_spectrum, d_binomTable, n, k, blockCount, chunkOffset, chunkSize, r)
+
+    switch (words) {
+        case  1: LAUNCH_SHORT( 1); break;
+        case  2: LAUNCH_SHORT( 2); break;
+        case  3: LAUNCH_SHORT( 3); break;
+        case  4: LAUNCH_SHORT( 4); break;
+        case  5: LAUNCH_SHORT( 5); break;
+        case  6: LAUNCH_SHORT( 6); break;
+        case  7: LAUNCH_SHORT( 7); break;
+        case  8: LAUNCH_SHORT( 8); break;
+        case 10: LAUNCH_SHORT(10); break;
+        case 12: LAUNCH_SHORT(12); break;
+        case 14: LAUNCH_SHORT(14); break;
+        case 16: LAUNCH_SHORT(16); break;
+        case 20: LAUNCH_SHORT(20); break;
+        case 24: LAUNCH_SHORT(24); break;
+        case 28: LAUNCH_SHORT(28); break;
+        case 32: LAUNCH_SHORT(32); break;
+        // Запасной путь: размер берётся из аргумента, кодовое слово живёт в
+        // локальной памяти. Сюда попасть не должно — заготовки покрывают весь
+        // диапазон до MAX_BLOCKWORDS.
+        default: LAUNCH_SHORT( 0); break;
+    }
+    #undef LAUNCH_SHORT
 }
 
 
-__global__ void computeSpectrumKernelShort(
+// WORDS — число 64-битных слов в строке матрицы, известное на этапе компиляции.
+// Ноль означает «берём из аргумента».
+//
+// Разница принципиальная. При динамическом размере codeword индексируется
+// переменной, а массив с динамическим индексом в регистрах держать нельзя, и
+// компилятор кладёт его в локальную память, то есть в DRAM. Профилировщик
+// показывал ровно это: загрузка DRAM 73 %, вычислителей 16 %, при 40 занятых
+// регистрах из 255. Каждый XOR и каждый popcount кодового слова ходил в память.
+//
+// При известном WORDS цикл разворачивается, массив живёт в регистрах, и
+// обращений к памяти не остаётся вовсе.
+template <int WORDS>
+__global__ void computeSpectrumKernelShortT(
     quint64* d_spectrum,
     const quint64* d_binomTable,
     int n,
@@ -197,6 +247,8 @@ __global__ void computeSpectrumKernelShort(
     quint64 chunkSize,
     quint64 r)
 {
+    const int words = WORDS > 0 ? WORDS : blockCount;
+
     // Разделяемая память делится на две части: гистограмма и копия матрицы.
     //
     // Матрица лежит в константной памяти, а та оптимизирована под чтение всеми
@@ -211,8 +263,14 @@ __global__ void computeSpectrumKernelShort(
     const int tid = threadIdx.x;
 
     for (int i = tid; i <= n; i += blockDim.x) s_spectrum[i] = 0ULL;
-    for (int i = tid; i < k * blockCount; i += blockDim.x)
-        s_matrix[i] = readConstMatrixWord(i / blockCount, i % blockCount, blockCount);
+    // Шаг копии — words, а не blockCount: если WORDS округлён вверх, лишние
+    // слова заполняются нулями. Это безопасно, потому что биты за numOfCols в
+    // матрице всегда нули, и XOR с нулём ничего не меняет.
+    for (int i = tid; i < k * words; i += blockDim.x) {
+        const int row = i / words;
+        const int w   = i % words;
+        s_matrix[i] = (w < blockCount) ? readConstMatrixWord(row, w, blockCount) : 0ULL;
+    }
     __syncthreads();
 
     const quint64 globalThreadIdx = (quint64)blockIdx.x * blockDim.x + tid;
@@ -230,8 +288,9 @@ __global__ void computeSpectrumKernelShort(
         if (end > chunkSize) end = chunkSize;
         const quint64 count = end - start;
 
-        quint64 codeword[Constants::MAX_BLOCKWORDS];
-        for (int b = 0; b < blockCount; ++b) codeword[b] = 0ULL;
+        quint64 codeword[WORDS > 0 ? WORDS : Constants::MAX_BLOCKWORDS];
+        #pragma unroll
+        for (int b = 0; b < words; ++b) codeword[b] = 0ULL;
 
         // Комбинации нумеруются лексикографически по возрастанию позиций —
         // этот порядок задаёт смысл chunkOffset и менять его нельзя, иначе
@@ -255,8 +314,9 @@ __global__ void computeSpectrumKernelShort(
         while (temp) {
             const int p = bitPosFromSingleBit(temp & -temp);
             temp &= (temp - 1);
-            for (int w = 0; w < blockCount; ++w)
-                codeword[w] ^= s_matrix[(k - 1 - p) * blockCount + w];
+            #pragma unroll
+            for (int w = 0; w < words; ++w)
+                codeword[w] ^= s_matrix[(k - 1 - p) * words + w];
         }
 
         // Подряд идущие кодовые слова часто имеют одинаковый вес, поэтому
@@ -269,7 +329,8 @@ __global__ void computeSpectrumKernelShort(
         // памяти, и железо их сериализовало. Замерено: снятие конкуренции
         // ускоряло такой расчёт втрое, до уровня случайной матрицы.
         int     runWeight = 0;
-        for (int w = 0; w < blockCount; ++w) runWeight += __popcll(codeword[w]);
+        #pragma unroll
+            for (int w = 0; w < words; ++w) runWeight += __popcll(codeword[w]);
         quint64 runLength = 1;
 
         // При r = 0 и r = k комбинация всего одна, и цикл не выполняется —
@@ -283,12 +344,14 @@ __global__ void computeSpectrumKernelShort(
             while (changed) {
                 const int p = bitPosFromSingleBit(changed & -changed);
                 changed &= (changed - 1);
-                for (int w = 0; w < blockCount; ++w)
-                    codeword[w] ^= s_matrix[(k - 1 - p) * blockCount + w];
+                #pragma unroll
+            for (int w = 0; w < words; ++w)
+                    codeword[w] ^= s_matrix[(k - 1 - p) * words + w];
             }
 
             int weight = 0;
-            for (int w = 0; w < blockCount; ++w) weight += __popcll(codeword[w]);
+            #pragma unroll
+            for (int w = 0; w < words; ++w) weight += __popcll(codeword[w]);
 
             if (weight == runWeight) {
                 ++runLength;
