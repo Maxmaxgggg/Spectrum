@@ -131,106 +131,108 @@ void MainWindow::connectSettingsDialog()
 
 void MainWindow::on_executePBN_clicked()
 {
+    // Одна и та же кнопка запускает, ставит на паузу и продолжает расчёт.
     switch (runState) {
-        case RunState::Idle: {
-            
-            // Блокируем интерфейс
-            emit setInterfaceEnabled(   false );
-            ui->matrixPTE->setReadOnly( true  );
-            ui->cancelPBN->setEnabled(  true  );
-            matrixMenu->setActionsEnabled(false);
-            ui->infoLBL->setText("");
-            ui->infoLBL->show();
-            ui->infoPBR->setValue(0);
+        case RunState::Idle:    startComputation();  break;
+        case RunState::Running: pauseComputation();  break;
+        case RunState::Paused:  resumeComputation(); break;
+    }
+}
 
-            if (!workerPtr) {
-                QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString::fromUtf8("Worker не подключён"));
-                handleFinished(-1);
-                return;
-            }
-            Matrix rows = ui->matrixPTE->toStringList();
-            if ( rows.isEmpty()) {
-                QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString::fromUtf8("Матрица пустая"));
-                handleFinished(-1);
-                return;
-            }
-            quint64 numOfRows = rows.size();
-            if ( numOfRows > Constants::MAX_ROWS ) {
-                QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString("Число строк матрицы больше чем %1").arg(Constants::MAX_ROWS));
-                handleFinished(-1);
-                return;
-            }
-            quint64 numOfCols = (quint64)rows.first().length();
-            for (const QString& r : rows) {
-                if ((quint64)r.length() != numOfCols) {
-                    QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString("Все строки должны быть одинаковой длины"));
-                    handleFinished(-1);
-                    return;
-                }
-            }
-            if ( numOfCols > Constants::MAX_COLS ) {
-                QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString("Число столбцов матрицы больше чем %1").arg(Constants::MAX_COLS));
-                handleFinished(-1);
-                return;
-            }
-            // Запускаем поток, чтобы отправить в него настройки
-            workerThreadPtr->start();
-            // Запрашиваем настройки для расчета
-            emit requestSettings();
+// Проверяет матрицу перед запуском. Пустая строка — всё в порядке.
+QString MainWindow::matrixError() const
+{
+    const Matrix rows = ui->matrixPTE->toStringList();
 
-            // Если есть чекпоинт для данных настроек - выводим диалог
-            if (hasCheckpoint()) {
-                QMessageBox::StandardButton reply;
-                reply = QMessageBox::question(
-                    this,
-                    "Найден спектр",
-                    "Для текущих настроек обнаружен сохранённый спектр\nПродолжить вычисление с сохранённого состояния?",
-                    QMessageBox::Yes | QMessageBox::No
-                );
-                // Загружаем RunState в зависимости от выбора пользователя
-                QMetaObject::invokeMethod(
-                    workerPtr,
-                    "initializeRunState",
-                    Qt::QueuedConnection,
-                    Q_ARG(LoadMode, reply == QMessageBox::Yes
-                        ? LoadMode::FromCheckpoint
-                        : LoadMode::Reset)
-                );
-            }
-            // Начинаем расчет
-            QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection );
+    if (rows.isEmpty())
+        return tr("Матрица пустая");
 
-            
-            runState = RunState::Running;
-            ui->executePBN->setText(UIStrings::PAUSE_TEXT    );
-            ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP );
-        } break;
+    if (quint64(rows.size()) > Constants::MAX_ROWS)
+        return tr("Число строк матрицы больше чем %1").arg(Constants::MAX_ROWS);
 
-        case RunState::Running: {
-            if (workerPtr)
-                workerPtr->pause();
+    const int cols = rows.first().length();
+    for (const QString& row : rows) {
+        if (row.length() != cols)
+            return tr("Все строки должны быть одинаковой длины");
+    }
 
-            runState = RunState::Paused;
-            this->setWindowTitle(UIStrings::PAUSE_TEXT);
-            ui->executePBN->setText(UIStrings::CONTINUE_TEXT);
-            ui->executePBN->setToolTip(UIStrings::CONTINUE_TOOLTIP);
-        } break;
+    if (quint64(cols) > Constants::MAX_COLS)
+        return tr("Число столбцов матрицы больше чем %1").arg(Constants::MAX_COLS);
 
-        case RunState::Paused: {
-            if (workerPtr)
-                workerPtr->resume();
+    return QString();
+}
 
-            runState = RunState::Running;
-            ui->executePBN->setText(UIStrings::PAUSE_TEXT);
-            ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP);
-            if (remainingMinutes != -1)
-                this->setWindowTitle(Format::remainingTime(remainingMinutes));
-            else
-                this->setWindowTitle(UIStrings::MAIN_TITLE);
-        } break;
+void MainWindow::startComputation()
+{
+    if (!workerPtr) {
+        QMessageBox::warning(this, UIStrings::ERROR_TITLE, tr("Worker не подключён"));
+        return;
+    }
 
+    // Проверка идёт до блокировки интерфейса: иначе при ошибке в матрице он
+    // успевал погаснуть и тут же зажечься, а в строке состояния оставалось
+    // «Готово» о расчёте, которого не было.
+    const QString error = matrixError();
+    if (!error.isEmpty()) {
+        QMessageBox::warning(this, UIStrings::ERROR_TITLE, error);
+        return;
+    }
 
-    } 
+    emit setInterfaceEnabled(false);
+    ui->matrixPTE->setReadOnly(true);
+    ui->cancelPBN->setEnabled(true);
+    matrixMenu->setActionsEnabled(false);
+    ui->infoLBL->setText("");
+    ui->infoLBL->show();
+    ui->infoPBR->setValue(0);
+
+    // Поток нужен уже сейчас: настройки уходят воркеру через очередь событий.
+    workerThreadPtr->start();
+    emit requestSettings();
+
+    if (hasCheckpoint()) {
+        const auto reply = QMessageBox::question(this,
+            tr("Найден спектр"),
+            tr("Для текущих настроек обнаружен сохранённый спектр\n"
+               "Продолжить вычисление с сохранённого состояния?"),
+            QMessageBox::Yes | QMessageBox::No);
+
+        QMetaObject::invokeMethod(workerPtr, "initializeRunState", Qt::QueuedConnection,
+            Q_ARG(LoadMode, reply == QMessageBox::Yes ? LoadMode::FromCheckpoint
+                                                      : LoadMode::Reset));
+    }
+
+    QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection);
+
+    runState = RunState::Running;
+    ui->executePBN->setText(UIStrings::PAUSE_TEXT);
+    ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP);
+}
+
+void MainWindow::pauseComputation()
+{
+    if (workerPtr)
+        workerPtr->pause();
+
+    runState = RunState::Paused;
+    setWindowTitle(UIStrings::PAUSE_TEXT);
+    ui->executePBN->setText(UIStrings::CONTINUE_TEXT);
+    ui->executePBN->setToolTip(UIStrings::CONTINUE_TOOLTIP);
+}
+
+void MainWindow::resumeComputation()
+{
+    if (workerPtr)
+        workerPtr->resume();
+
+    runState = RunState::Running;
+    ui->executePBN->setText(UIStrings::PAUSE_TEXT);
+    ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP);
+
+    // Оценка времени с прошлого запуска ещё актуальна — возвращаем её
+    // в заголовок вместо «Пауза».
+    setWindowTitle(remainingMinutes != -1 ? Format::remainingTime(remainingMinutes)
+                                          : UIStrings::MAIN_TITLE);
 }
 
 void MainWindow::on_exitPBN_clicked()

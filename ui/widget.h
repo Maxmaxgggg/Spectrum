@@ -82,6 +82,11 @@ private:
     int remainingMinutes = -1;
 
 
+    QString matrixError() const;
+    void startComputation();
+    void pauseComputation();
+    void resumeComputation();
+
     void setWorker();
     void setMatrixMenu();
     void setToolTips();
