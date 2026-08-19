@@ -7,12 +7,13 @@
 #include "workwithmatrix.h"
 #include "defines.h"
 
+#include "matrixlibrary.h"
+#include "spectrumplot.h"
+#include "taskbarprogress.h"
+
 #include <qmainwindow.h>
 
-#ifdef Q_OS_WIN
-    #include <windows.h>
-    #include <shobjidl.h>
-#endif
+#include <memory>
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -29,17 +30,6 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
     ComputationSettings settings;
-    // Подключаем воркера (после создания worker и workerThread)
-    
-protected:
-    void resizeEvent(QResizeEvent *event) override {
-        QMainWindow::resizeEvent(event);
-        SpectrumFloat vec(yCache.size());
-        for (int i = 0; i < yCache.size(); ++i) {
-            vec[i] = (float) yCache.at(i);
-        }
-        updatePlot(vec);               // ваша быстрая функция обновления
-    }
 
 public: signals:
     void setInterfaceEnabled(bool enabled);
@@ -92,20 +82,12 @@ private:
     enum class RunState { Idle, Running, Paused };
     RunState runState = RunState::Idle;
 
-    // Сохраняем старые значения при обновлении
-    QCPBars* spectrumBars = nullptr;
-    QCPItemText* msg = nullptr;
-    QVector<double> xCache;
-    QVector<double> yCache;
-    QSharedPointer<QCPAxisTicker> tickerCache;
-    int tickerStepCache = -1;
-    int sizeCache = 0;
+    // График спектра. Создаётся в конструкторе, когда виджет из .ui готов.
+    std::unique_ptr<SpectrumPlot> spectrumPlot;
 
     int remainingMinutes = -1;
 
 
-    void updatePlot(const SpectrumFloat& spectrum);
-    QVector<QString> buildAxisLabels(int size, int step) const;
     void setWorker();
     void setMatrixMenu();
     void setMatrixActionsEnabled(bool);
@@ -114,31 +96,18 @@ private:
     void setToolTips();
     void connectSettingsDialog();
     void applySettings();
-    void applySpectrumColor(); 
     void saveSettings(); 
     void loadSettings(); 
-    QString formatRemainingTime(int minutesTotal);
-    QString formatSpeed(double speed);
-    QString formatCount(quint64 n);
 
-
-    QJsonArray matrices;
-    void loadMatricesArray();
-    void saveMatricesArray();
-    void saveMatrixByName(const QString& name);
-    bool removeMatrixByName(const QString& name);
-    int  findMatrixIndexByName(const QString& name);
-    QString getMatrixByName(const QString& name);
-    QStringList listMatrixNames();
+    // Сохранённые пользователем матрицы. Имя по умолчанию остаётся здесь:
+    // оно выводится из того, что сейчас набрано в редакторе.
+    MatrixLibrary matrixLibrary;
     QString defaultMatrixName();
 
 
-    // Атрибуты, нужные для отображения прогресс бара под иконкой приложения
-    #ifdef Q_OS_WIN
-        ITaskbarList3* taskbar = nullptr;
-        HWND hwnd = nullptr;
-        bool taskbarAvailable = false;
-    #endif
+    // Прогресс на кнопке приложения в панели задач. Создаётся в конструкторе
+    // после сборки окна: индикатору нужен готовый нативный дескриптор.
+    std::unique_ptr<TaskbarProgress> taskbar;
 };
 
 #endif // WIDGET_H

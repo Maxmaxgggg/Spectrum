@@ -18,12 +18,20 @@
     <ClCompile Include="qcustomplot.cpp" />
     <ClCompile Include="ui\filterplaintextedit.cpp" />
     <ClCompile Include="ui\settingsdialog.cpp" />
+    <ClCompile Include="ui\format.cpp" />
+    <ClCompile Include="ui\matrixlibrary.cpp" />
+    <ClCompile Include="ui\spectrumplot.cpp" />
+    <ClCompile Include="ui\taskbarprogress.cpp" />
     <ClCompile Include="ui\widget.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="compute\computeSpectrumKernel.cuh" />
     <ClInclude Include="compute\dualcode.h" />
     <ClInclude Include="defines.h" />
+    <ClInclude Include="ui\format.h" />
+    <ClInclude Include="ui\matrixlibrary.h" />
+    <ClInclude Include="ui\spectrumplot.h" />
+    <ClInclude Include="ui\taskbarprogress.h" />
     <ClInclude Include="settings.h" />
     <ClInclude Include="types.h" />
     <QtMoc Include="compute\worker.h" />
