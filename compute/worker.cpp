@@ -98,19 +98,34 @@ static inline quint64 reverseLowBits(quint64 v, quint64 k)
     return reverseBits64(v) >> (64 - k);
 }
 
-// Вычисляет сумму сочетаний C(k,i) где i пробегает от 0 до maxComb
-quint64 Worker::sumCombinations(quint64 k, quint64 maxComb)
+// Полное число кодовых слов при переборе до maxComb строк включительно.
+//
+// Раньше считалось инкрементально: comb = comb * (k - r + 1) / r. Формула
+// точная в математике, но промежуточное произведение вылезает за uint64 куда
+// раньше самого результата. Для матрицы в 336 строк это происходит уже при
+// r = 10 — а именно 10 и есть максимум, который для неё разрешает интерфейс.
+// Итог получался неверным, и вместе с ним врали процент и оценка времени.
+//
+// Теперь складываются готовые значения из BinomTable: она строится по
+// треугольнику Паскаля, без промежуточных произведений, и сама проверяет
+// переполнение.
+quint64 Worker::totalCombinations(quint64 k, quint64 maxComb) const
 {
     if (maxComb > k) maxComb = k;
-    if (maxComb == k) return ( ( 1ull << k ) - 1 );
+
     quint64 sum = 0;
-    quint64 comb = 1; // C(k,0) = 1
-    for (quint64 r = 1; r <= maxComb; ++r) {
-        comb = comb * (k - r + 1) / r;
-        sum += comb;
+    for (quint64 r = 0; r <= maxComb; ++r) {
+        const quint64 term = binomTable(k, r);
+        // Сама сумма тоже может не поместиться: при k = 66 и maxComb = 33
+        // это уже больше 2^65. Такой расчёт всё равно занял бы столетия,
+        // поэтому просто упираемся в потолок, а не выдаём мусор.
+        if (sum > std::numeric_limits<quint64>::max() - term)
+            return std::numeric_limits<quint64>::max();
+        sum += term;
     }
     return sum;
 }
+
 // Отчёт об оценке оставшегося времени и средней скорости.
 void Worker::reportEstimate()
 {
@@ -118,7 +133,9 @@ void Worker::reportEstimate()
     runState.elapsedSec = progress.elapsedSec();
     emit updateRemainingMinutes(int(progress.elapsedSec()),
                                 progress.minutesLeft(),
-                                progress.speed());
+                                progress.speed(),
+                                progress.doneOps(),
+                                progress.totalOps());
 }
 
 void Worker::reportProgressBar()
@@ -196,7 +213,7 @@ void Worker::computeSpectrumGpuNoGrayShort(const CodeGeometry& g)
     const quint64 maxComb         = g.maxRows;
 
     bool copyPending = false;
-    progress.begin(sumCombinations(numOfRows, maxComb), runState.doneOps, runState.elapsedSec);
+    progress.begin(totalCombinations(numOfRows, maxComb), runState.doneOps, runState.elapsedSec);
 
     // rOffset — число единиц в маске; счётчик обязан быть беззнаковым, иначе
     // при сравнении с maxComb получается знаковое/беззнаковое сравнение.
@@ -358,7 +375,7 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
     const int     threadsPerBlock = g.threadsGpu;
     const quint64 maxComb         = g.maxRows;
 
-    quint64 totalOps = sumCombinations(numOfRows, maxComb);
+    quint64 totalOps = totalCombinations(numOfRows, maxComb);
 
     // Общее число нитей, запущенных на видеокарте
     uint64_t maxThreads = static_cast<uint64_t>(blockCount) * static_cast<uint64_t>(threadsPerBlock);
@@ -633,7 +650,7 @@ void Worker::computeSpectrumCpuNoGrayLong(const CodeGeometry& g)
 
     using namespace std::chrono;
     int numThreads = omp_get_max_threads();
-    quint64 totalOps = sumCombinations(numOfRows, maxComb);
+    quint64 totalOps = totalCombinations(numOfRows, maxComb);
 
     // Число "битовых масок", обрабатываемых одним потоком
     const uint64_t masksPerThread = 1ULL << 20; // можно настроить
@@ -984,7 +1001,7 @@ void Worker::computeSpectrumCpuNoGrayShort(const CodeGeometry& g)
 
     using namespace std::chrono;
 
-    quint64 totalOps = sumCombinations(numOfRows, maxComb);
+    quint64 totalOps = totalCombinations(numOfRows, maxComb);
 
     // Если продолжаем после чекпоинта
     quint64 startR = runState.rOffset;

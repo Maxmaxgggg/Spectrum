@@ -208,7 +208,7 @@
     </property>
     <widget class="QMenu" name="deleteMatrixMNU">
      <property name="title">
-      <string>Удалить матрицу из реестра</string>
+      <string>Удалить матрицу</string>
      </property>
     </widget>
     <addaction name="addMatrixACN"/>
@@ -228,7 +228,7 @@
   <widget class="QStatusBar" name="statusbar"/>
   <action name="addMatrixACN">
    <property name="text">
-    <string>Сохранить матрицу в реестр</string>
+    <string>Сохранить матрицу…</string>
    </property>
   </action>
   <action name="settingsACN">

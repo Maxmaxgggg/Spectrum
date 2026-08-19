@@ -121,6 +121,11 @@
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories);$(CudaToolkitLibDir);$(VcpkgStaticRoot)lib</AdditionalLibraryDirectories>
     </Link>
     <CudaCompile>
+      <!-- compute_50 — нижняя граница CUDA 12: Maxwell и новее, Kepler она уже
+           не поддерживает. sm_86 добавлен, чтобы на RTX 30xx ядра не
+           транслировались из PTX при первом запуске. PTX от compute_50
+           остаётся для карт новее перечисленных. -->
+      <CodeGeneration>compute_50,sm_50;compute_86,sm_86;compute_50,compute_50</CodeGeneration>
       <AdditionalOptions>--extended-lambda %(AdditionalOptions)</AdditionalOptions>
       <Include>$(ProjectDir)compute;$(ProjectDir);$(VcpkgStaticRoot)include;%(Include)</Include>
     </CudaCompile>
@@ -135,6 +140,7 @@
       <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING</PreprocessorDefinitions>
     </ClCompile>
     <CudaCompile>
+      <CodeGeneration>compute_50,sm_50;compute_86,sm_86;compute_50,compute_50</CodeGeneration>
       <CudaRuntime>Static</CudaRuntime>
       <AdditionalOptions>--extended-lambda %(AdditionalOptions)</AdditionalOptions>
       <Include>$(ProjectDir)compute;$(ProjectDir);$(VcpkgStaticRoot)include;%(Include)</Include>

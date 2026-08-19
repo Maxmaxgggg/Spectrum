@@ -225,9 +225,40 @@ bool SettingsDialog::isGpuAvailable() {
     else
         return deviceCount > 0;
 }
+// Подгоняет пределы под конкретную видеокарту и объясняет их пользователем.
+//
+// Раньше потолок числа блоков был зашит как 200. Замеры показывают, что оптимум
+// лежит за ним — при 46 мультипроцессорах это 276-368 блоков, — то есть лучшее
+// значение через интерфейс просто нельзя было выбрать.
+void SettingsDialog::applyDeviceLimits()
+{
+    cudaDeviceProp prop{};
+    if (cudaGetDeviceProperties(&prop, 0) != cudaSuccess)
+        return;
+
+    const int sm = prop.multiProcessorCount;
+
+    // С запасом: смысл имеет несколько блоков на мультипроцессор, но верхнюю
+    // границу лучше не занижать — оптимум зависит от матрицы.
+    ui->blocksGpuSPB->setMaximum(qMax(200, sm * 32));
+    ui->threadsGpuSPB->setMaximum(prop.maxThreadsPerBlock);
+
+    ui->blocksGpuLBL->setToolTip(
+        tr("У видеокарты %1 мультипроцессоров.\n"
+           "Меньше одного блока на мультипроцессор — половина карты простаивает.\n"
+           "По замерам разумно брать от %2 блоков.")
+            .arg(sm).arg(sm * 3));
+    ui->threadsGpuLBL->setToolTip(
+        tr("Предел устройства — %1 нитей в блоке.\n"
+           "Для широких кодов доступно меньше: ядру не хватает регистров,\n"
+           "и запуск будет отклонён с понятным сообщением.")
+            .arg(prop.maxThreadsPerBlock));
+}
+
 void SettingsDialog::checkGpuAvailable() {
     if (isGpuAvailable()) {
         ui->gpuRB->setEnabled(true);
+        applyDeviceLimits();
     }
     else {
         ui->gpuRB->setEnabled(false);

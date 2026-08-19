@@ -95,13 +95,15 @@ signals:
     void errorOccurred(       const QString& message            );
     // Сигнал, посылаемый при окончании расчета спектра
     void finished( int );
-    // Сигнал для обновления таймера
-    void updateRemainingMinutes( int elapsedSec, int minutesLeft, double speed );
+    // Сигнал для обновления таймера. doneOps/totalOps идут вместе со временем:
+    // на задачах в миллиарды слов один процент мало что говорит о масштабе.
+    void updateRemainingMinutes( int elapsedSec, int minutesLeft, double speed,
+                                 quint64 doneOps, quint64 totalOps );
     // Сигнал того, что надо показать значок сохранения
     void showSaveLBL();
 private:
     /* Функции для работы с биноминальными коэффициентами */
-    static    quint64 sumCombinations(quint64 k, quint64 maxComb);
+    quint64   totalCombinations(quint64 k, quint64 maxComb) const;
 
 
     /* Подготовка расчёта */

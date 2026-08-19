@@ -64,7 +64,8 @@ private slots:
     void handleUpdateSpectrumPTE(  const SpectrumText    spectrum );
     void handleError(const QString& message);
     void handleFinished(int);
-    void handleUpdateRemainingMinutes(int, int, double);
+    void handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed,
+                                      quint64 doneOps, quint64 totalOps);
     void showSaveLBL();
     void handleMatrixChanged();
 
@@ -118,6 +119,7 @@ private:
     void loadSettings(); 
     QString formatRemainingTime(int minutesTotal);
     QString formatSpeed(double speed);
+    QString formatCount(quint64 n);
 
 
     QJsonArray matrices;

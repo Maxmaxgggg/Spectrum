@@ -44,6 +44,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Инициализация QCustomPlot и QCPBars (предполагается, что в ui есть spectrumCPT)
     ui->spectrumCPT->xAxis->setTickLabelRotation(0);
+    ui->spectrumCPT->xAxis->setLabel(QStringLiteral("вес кодового слова"));
+    ui->spectrumCPT->yAxis->setLabel(QStringLiteral("число слов"));
     ui->spectrumCPT->yAxis->setNumberFormat("eb");
     ui->spectrumCPT->yAxis->setNumberPrecision(2);
     // Создаём QCPBars единожды (если в .ui Plottables уже нет)
@@ -534,7 +536,8 @@ void MainWindow::handleUpdateSpectrumPTE( const SpectrumText spectrum )
     ui->spectrumPTE->setPlainText( str );
     vbar->setValue(pos);
 }
-void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed)
+void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed,
+                                              quint64 doneOps, quint64 totalOps)
 {
     remainingMinutes = minutesLeft;
 
@@ -559,12 +562,17 @@ void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, d
     QString infoText =
         tr("Прошло времени:     %1").arg(elapsedStr) + "\n" +
         tr("Осталось времени:   %1").arg(formatRemainingTime(remainingMinutes)) + "\n" +
-        tr("Средняя скорость:   %1").arg(formatSpeed(speed));
+        tr("Средняя скорость:   %1").arg(formatSpeed(speed)) + "\n" +
+        // Проценты хороши для полоски, но масштаб задачи по ним не понять:
+        // "43 %" ничего не говорит, а "1.6 из 3.8 трлн слов" — говорит.
+        tr("Перебрано слов:     %1 из %2").arg(formatCount(doneOps), formatCount(totalOps));
 
     ui->infoLBL->setText(infoText);
 
-    // В заголовок можно оставить только ETA (это правильно)
-    this->setWindowTitle(formatRemainingTime(remainingMinutes));
+    // Имя программы в заголовке остаётся: раньше он превращался просто в
+    // "2 ч 15 мин", и в панели задач было непонятно, что это за окно.
+    this->setWindowTitle(tr("%1 — осталось %2")
+                             .arg(UIStrings::MAIN_TITLE, formatRemainingTime(remainingMinutes)));
     ui->infoLBL->show();
 }
 void MainWindow::showSaveLBL()
@@ -928,26 +936,44 @@ QString MainWindow::formatRemainingTime(int minutesTotal)
     return parts.join(" ");
 }
 
+// Число слов человекочитаемо: на этих задачах оно доходит до триллионов.
+QString MainWindow::formatCount(quint64 n)
+{
+    struct Step { double div; const char* suffix; };
+    static const Step steps[] = {
+        { 1e12, " трлн" }, { 1e9, " млрд" }, { 1e6, " млн" }, { 1e3, " тыс" },
+    };
+    for (const Step& st : steps) {
+        if (double(n) >= st.div) {
+            const double v = double(n) / st.div;
+            QString str = QString::number(v, 'f', v >= 100 ? 0 : (v >= 10 ? 1 : 2));
+            str.replace('.', ',');
+            return str + QString::fromUtf8(st.suffix);
+        }
+    }
+    return QString::number(n);
+}
+
 QString MainWindow::formatSpeed(double speed)
 {
-    QString suffix = "кс/с";
+    QString suffix = "слов/с";
     double value = speed;
 
     if (speed >= 1e12) {
         value = speed / 1e12;
-        suffix = "трлн кс/с";
+        suffix = "трлн слов/с";
     }
     else if (speed >= 1e9) {
         value = speed / 1e9;
-        suffix = "млрд кс/с";
+        suffix = "млрд слов/с";
     }
     else if (speed >= 1e6) {
         value = speed / 1e6;
-        suffix = "млн кс/с";
+        suffix = "млн слов/с";
     }
     else if (speed >= 1e3) {
         value = speed / 1e3;
-        suffix = "тыс кс/с";
+        suffix = "тыс слов/с";
     }
 
     int precision;

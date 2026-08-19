@@ -86,6 +86,7 @@
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories);$(CudaToolkitLibDir);$(VcpkgStaticRoot)lib</AdditionalLibraryDirectories>
     </Link>
     <CudaCompile>
+      <CodeGeneration>compute_50,sm_50;compute_86,sm_86;compute_50,compute_50</CodeGeneration>
       <AdditionalOptions>--extended-lambda %(AdditionalOptions)</AdditionalOptions>
       <Include>$(SpectrumRoot)compute;$(SpectrumRoot);$(VcpkgStaticRoot)include;%(Include)</Include>
     </CudaCompile>

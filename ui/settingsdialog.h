@@ -32,6 +32,7 @@ private slots:
 
 private:
     void checkGpuAvailable();
+    void applyDeviceLimits();
     bool isGpuAvailable();
     void loadSettings();
     void saveSettings();
