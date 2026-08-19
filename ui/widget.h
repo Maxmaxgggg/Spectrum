@@ -7,7 +7,7 @@
 #include "workwithmatrix.h"
 #include "defines.h"
 
-#include "matrixlibrary.h"
+#include "matrixmenu.h"
 #include "spectrumplot.h"
 #include "taskbarprogress.h"
 
@@ -61,8 +61,6 @@ private slots:
 
     bool eventFilter(QObject *watched, QEvent *event) override;
 
-    void onAddMatrixTriggered();
-
     // Проверяет, есть ли для текущих настроек чекпоинт, если есть - предлагает загрузить его
     bool hasCheckpoint() const;
 private:
@@ -72,11 +70,7 @@ private:
     Worker         *workerPtr        = nullptr;
     QThread        *workerThreadPtr  = nullptr;
     SettingsDialog *settingsDialog   = nullptr;
-    QMenu* matrixMenu = nullptr;
-    QMenu          *deleteMenu       = nullptr;
-    QTimer         *matrixMenuTimer  = nullptr;
-    // Переписать
-    QPointer<QAction>       pendingHover;
+    MatrixMenu     *matrixMenu       = nullptr;
     QGraphicsOpacityEffect* saveLBLOpacityEffect;
     // состояние выполнения: Idle / Running / Paused
     enum class RunState { Idle, Running, Paused };
@@ -90,20 +84,11 @@ private:
 
     void setWorker();
     void setMatrixMenu();
-    void setMatrixActionsEnabled(bool);
-    bool matrixActionsEnabled = true;
-    void rebuildMatrixMenuActions();
     void setToolTips();
     void connectSettingsDialog();
     void applySettings();
     void saveSettings(); 
     void loadSettings(); 
-
-    // Сохранённые пользователем матрицы. Имя по умолчанию остаётся здесь:
-    // оно выводится из того, что сейчас набрано в редакторе.
-    MatrixLibrary matrixLibrary;
-    QString defaultMatrixName();
-
 
     // Прогресс на кнопке приложения в панели задач. Создаётся в конструкторе
     // после сборки окна: индикатору нужен готовый нативный дескриптор.

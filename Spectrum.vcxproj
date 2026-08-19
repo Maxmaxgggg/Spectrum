@@ -20,6 +20,7 @@
     <ClCompile Include="ui\settingsdialog.cpp" />
     <ClCompile Include="ui\format.cpp" />
     <ClCompile Include="ui\matrixlibrary.cpp" />
+    <ClCompile Include="ui\matrixmenu.cpp" />
     <ClCompile Include="ui\spectrumplot.cpp" />
     <ClCompile Include="ui\taskbarprogress.cpp" />
     <ClCompile Include="ui\widget.cpp" />
@@ -30,6 +31,7 @@
     <ClInclude Include="defines.h" />
     <ClInclude Include="ui\format.h" />
     <ClInclude Include="ui\matrixlibrary.h" />
+    <QtMoc Include="ui\matrixmenu.h" />
     <ClInclude Include="ui\spectrumplot.h" />
     <ClInclude Include="ui\taskbarprogress.h" />
     <ClInclude Include="settings.h" />

@@ -1,6 +1,7 @@
 #include "widget.h"
 #include "format.h"
 #include "matrixlibrary.h"
+#include "matrixmenu.h"
 #include "spectrumplot.h"
 #include "ui_widget.h"
 
@@ -65,90 +66,18 @@ MainWindow::~MainWindow()
     this->setWindowTitle(UIStrings::MAIN_TITLE);
     delete ui;
 }
-void MainWindow::rebuildMatrixMenuActions()
+
+void MainWindow::setMatrixMenu()
 {
-    if (!matrixMenu) return;
+    ui->matrixLBL->setContextMenuPolicy(Qt::CustomContextMenu);
 
-    // 1) Подгружаем актуальные данные
-    matrixLibrary.load();
-    QStringList names = matrixLibrary.names(); // текущие имена
-
-    // 2) Удаляем любые динамические действия (все, кроме addMatrix и действия подменю deleteMenu)
-    QAction* deleteMenuAction = ui->deleteMatrixMNU ? ui->deleteMatrixMNU->menuAction() : nullptr;
-    const QList<QAction*> actsSnapshot = matrixMenu->actions();
-    for (QAction* a : actsSnapshot) {
-        if ( a == ui->addMatrixACN || a == deleteMenuAction )
-            continue;
-        matrixMenu->removeAction(a);
-    }
-
-    // 3) Очищаем подменю удаления
-    if (ui->deleteMatrixMNU)
-        ui->deleteMatrixMNU->clear();
-
-    // 4) Если есть имена — добавляем динамические пункты и включаем deleteMenu (учитываем флаг)
-    if (!names.isEmpty()) {
-        matrixMenu->addSeparator();
-
-        // пункты в основном меню — загрузка матрицы
-        for (const QString& nm : names) {
-            QAction* act = new QAction(nm, matrixMenu);
-            act->setData(nm);
-            act->setIcon(QIcon(":/ui/icons/newspaper.png"));
-            act->setEnabled(matrixActionsEnabled); // учитываем флаг
-
-            connect(act, &QAction::triggered, this, [this, nm]() {
-                const QString code = matrixLibrary.matrix(nm);
-                ui->matrixPTE->setPlainText(code);
-                });
-
-            matrixMenu->addAction(act);
-        }
-
-        // пункты в подменю удаления (родитель = deleteMenu)
-        for (const QString& nm : names) {
-            QAction* delAct = new QAction(nm, ui->deleteMatrixMNU);
-            delAct->setIcon(QIcon(":/ui/icons/newspaper.png"));
-            delAct->setEnabled(matrixActionsEnabled); // учитываем флаг
-
-            connect(delAct, &QAction::triggered, this, [this, nm]() {
-                if (!matrixLibrary.remove(nm)) {
-                    QMessageBox::warning(this, tr("Ошибка"), tr("Не удалось удалить матрицу \"%1\"").arg(nm));
-                    return;
-                }
-
-                matrixLibrary.load();
-
-                QAction* caller = qobject_cast<QAction*>(sender());
-                if (caller) {
-                    ui->deleteMatrixMNU->removeAction(caller);
-                    caller->deleteLater();
-                }
-
-                for (QAction* ma : matrixMenu->actions()) {
-                    if (ma == ui->addMatrixACN) continue;
-                    if (ma == ui->deleteMatrixMNU->menuAction()) continue;
-                    if (ma->data().toString() == nm || ma->text() == nm) {
-                        matrixMenu->removeAction(ma);
-                        ma->deleteLater();
-                        break;
-                    }
-                }
-
-                ui->deleteMatrixMNU->setEnabled(matrixActionsEnabled && !ui->deleteMatrixMNU->actions().isEmpty());
-                });
-
-            ui->deleteMatrixMNU->addAction(delAct);
-        }
-
-        ui->deleteMatrixMNU->setEnabled(matrixActionsEnabled && !ui->deleteMatrixMNU->actions().isEmpty());
-    }
-    else {
-        // нет сохранённых матриц
-        if (ui->deleteMatrixMNU)
-            ui->deleteMatrixMNU->setEnabled(false);
-    }
+    matrixMenu = new MatrixMenu(ui->matrixMNU, ui->deleteMatrixMNU, ui->addMatrixACN, this);
+    matrixMenu->setMatrixSource([this]() { return ui->matrixPTE->toPlainText(); });
+    connect(matrixMenu, &MatrixMenu::matrixChosen, this, [this](const QString& text) {
+        ui->matrixPTE->setPlainText(text);
+    });
 }
+
 void MainWindow::setToolTips() {
     ui->matrixLBL->setToolTip(UIStrings::MATRIX_TOOLTIP);
     ui->spectrumLBL->setToolTip(UIStrings::SPECTRUM_TOOLTIP);
@@ -181,105 +110,6 @@ void MainWindow::setWorker()
     //connect( this,            &MainWindow::refreshSpectrumValueChanged,    workerPtr, &Worker::handleRefreshSpectrumValueChanged,    Qt::DirectConnection );
 }
 
-void MainWindow::setMatrixMenu()
-{
-    ui->matrixLBL->setContextMenuPolicy(Qt::CustomContextMenu);
-
-    // Создаём меню и базовые действия один раз
-    matrixMenu = ui->matrixMNU;
-
-    connect(ui->addMatrixACN, &QAction::triggered, this, &MainWindow::onAddMatrixTriggered);
-    ui->addMatrixACN->setIcon(QIcon(":/ui/icons/newspaper--plus.png"));
-    ui->deleteMatrixMNU->setIcon(QIcon(":/ui/icons/newspaper--minus.png"));
-    // функция-утилита для обновления состояния доступности пунктов
-    auto updateMenuEnabledState = [this]() {
-        matrixLibrary.load(); // обновим массив, чтобы проверить наличие
-        ui->deleteMatrixMNU->setEnabled(matrixActionsEnabled && !matrixLibrary.isEmpty());
-        };
-
-    // По умолчанию включаем/выключаем подменю — учитываем флаг matrixActionsEnabled
-    matrixLibrary.load();
-    ui->deleteMatrixMNU->setEnabled(matrixActionsEnabled && !matrixLibrary.isEmpty());
-
-    matrixMenu->setMouseTracking(true);
-
-    // Таймер для отложенного открытия подменю
-    matrixMenuTimer = new QTimer(this);
-    matrixMenuTimer->setSingleShot(true);
-    matrixMenuTimer->setInterval(120);
-
-    connect(matrixMenu, &QMenu::hovered, this, [this](QAction* act) {
-        pendingHover = act;
-        if (pendingHover && pendingHover->menu() && matrixActionsEnabled)
-            matrixMenuTimer->start();
-        else
-            matrixMenuTimer->stop();
-        });
-
-    connect(matrixMenuTimer, &QTimer::timeout, this, [this]() {
-        if (!matrixMenu || !pendingHover || !pendingHover->menu()) return;
-        QPoint global = QCursor::pos();
-        QPoint local = matrixMenu->mapFromGlobal(global);
-        QAction* under = matrixMenu->actionAt(local);
-        if (under == pendingHover) {
-            matrixMenu->setActiveAction(pendingHover);
-            return;
-        }
-        QRect rect = matrixMenu->actionGeometry(pendingHover);
-        if (!rect.isNull()) {
-            const int margin = 6;
-            QRect expanded = rect.adjusted(-margin, -margin, margin, margin);
-            if (expanded.contains(local))
-                matrixMenu->setActiveAction(pendingHover);
-        }
-        });
-
-    // Обновляем только динамическую часть перед показом
-    connect(matrixMenu, &QMenu::aboutToShow, this, [this]() {
-        rebuildMatrixMenuActions();
-    });
-    // синхронизируем стартовое состояние (на случай, если matrixActionsEnabled уже false)
-    updateMenuEnabledState();
-}
-
-void MainWindow::setMatrixActionsEnabled(bool enabled)
-{
-    matrixActionsEnabled = enabled;
-
-    if (!matrixMenu) return;
-
-    // действие, которое представляет подменю удаления
-    QAction* deleteMenuAction = ui->deleteMatrixMNU ? ui->deleteMatrixMNU->menuAction() : nullptr;
-
-    // 1) Обновим уже существующие динамические пункты (если они есть)
-    for (QAction* a : matrixMenu->actions()) {
-        if (a == ui->addMatrixACN || a == deleteMenuAction)
-            continue;
-        a->setEnabled(enabled);
-    }
-
-    // 2) Обновим действия внутри подменю "Удалить"
-    if (ui->deleteMatrixMNU) {
-        for (QAction* a : ui->deleteMatrixMNU->actions()) {
-            a->setEnabled(enabled);
-        }
-        ui->deleteMatrixMNU->setEnabled(enabled && !ui->deleteMatrixMNU->actions().isEmpty());
-    }
-
-    // 3) Если меню видно — перестроим динамику прямо сейчас, чтобы новые enabled/disabled вступили в силу.
-    if (matrixMenu->isVisible()) {
-        if (!enabled) {
-            // если отключаем — безопаснее закрыть меню, чтобы не было неконсистентных взаимодействий
-            matrixMenu->close();
-        }
-        else {
-            // если включаем — перестроим пункты (rebuild сделает act->setEnabled(matrixActionsEnabled) для новых)
-            rebuildMatrixMenuActions();
-            // возможно, стоит обновить вид: matrixMenu->update(); но обычно rebuild достаточно
-        }
-    }
-}
-
 void MainWindow::connectSettingsDialog()
 {
     if (!settingsDialog) return;
@@ -308,7 +138,7 @@ void MainWindow::on_executePBN_clicked()
             emit setInterfaceEnabled(   false );
             ui->matrixPTE->setReadOnly( true  );
             ui->cancelPBN->setEnabled(  true  );
-            setMatrixActionsEnabled(    false );
+            matrixMenu->setActionsEnabled(false);
             ui->infoLBL->setText("");
             ui->infoLBL->show();
             ui->infoPBR->setValue(0);
@@ -550,7 +380,7 @@ void MainWindow::handleFinished(int elapsedSec)
     emit setInterfaceEnabled(   true  );
     ui->matrixPTE->setReadOnly( false );
     ui->cancelPBN->setEnabled(  false );
-    setMatrixActionsEnabled(    true  );
+    matrixMenu->setActionsEnabled(true);
 
     ui->executePBN->setText( UIStrings::START_TEXT  );
     ui->executePBN->setToolTip( UIStrings::START_TOOLTIP );
@@ -577,45 +407,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     }
     // Для всех остальных событий — стандартная обработка
     return QMainWindow::eventFilter(watched, event);
-}
-
-void MainWindow::onAddMatrixTriggered()
-{
-    // Формируем дефолтное имя по текущему содержимому
-    const QString defName = defaultMatrixName();
-
-    // Создаём QInputDialog вручную, чтобы убрать кнопку "?" в заголовке
-    QInputDialog dlg(this);
-    dlg.setWindowTitle(tr("Сохранить матрицу"));
-    dlg.setLabelText(tr("Имя матрицы:"));
-    dlg.setTextValue(defName);
-    dlg.setWindowFlags(dlg.windowFlags() & ~Qt::WindowContextHelpButtonHint);
-
-    if (dlg.exec() != QDialog::Accepted)
-        return; // пользователь нажал Отмена
-
-    const QString name = dlg.textValue().trimmed();
-    if (name.isEmpty()) {
-        QMessageBox::warning(this, tr("Ошибка"), tr("Имя не может быть пустым"));
-        return;
-    }
-
-    // Настройки мог поменять второй запущенный экземпляр — перечитываем.
-    matrixLibrary.load();
-
-    if (matrixLibrary.contains(name)) {
-        const auto resp = QMessageBox::question(this, tr("Перезапись"),
-            tr("Матрица с именем \"%1\" уже существует. Перезаписать?").arg(name),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (resp != QMessageBox::Yes)
-            return;
-    }
-
-    matrixLibrary.save(name, ui->matrixPTE->toPlainText());
-
-    // Включаем подменю удаления (если оно было выключено)
-    if (deleteMenu)
-        deleteMenu->setEnabled(!matrixLibrary.isEmpty());
 }
 
 bool MainWindow::hasCheckpoint() const
@@ -686,19 +477,4 @@ void MainWindow::loadSettings()
             spectrum.append(v.toFloat());
         spectrumPlot->setSpectrum(spectrum);
     }
-}
-
-QString MainWindow::defaultMatrixName()
-{
-    const Matrix rows = ui->matrixPTE->toStringList();
-    if (rows.isEmpty())
-        return QStringLiteral("(0,0)");
-
-    // Столбцов столько, сколько символов в самой длинной строке: разделителей
-    // в формате матрицы нет, каждый символ — отдельный бит.
-    int cols = 0;
-    for (const QString& row : rows)
-        cols = qMax(cols, row.length());
-
-    return tr("Матрица (%1,%2)").arg(cols).arg(rows.size());
 }
