@@ -44,8 +44,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Инициализация QCustomPlot и QCPBars (предполагается, что в ui есть spectrumCPT)
     ui->spectrumCPT->xAxis->setTickLabelRotation(0);
-    ui->spectrumCPT->xAxis->setLabel(QStringLiteral("вес кодового слова"));
-    ui->spectrumCPT->yAxis->setLabel(QStringLiteral("число слов"));
+    ui->spectrumCPT->xAxis->setLabel(QStringLiteral("Вес кодового слова, w"));
+    ui->spectrumCPT->yAxis->setLabel(QStringLiteral("Число кодовых слов, A(w)"));
     ui->spectrumCPT->yAxis->setNumberFormat("eb");
     ui->spectrumCPT->yAxis->setNumberPrecision(2);
     // Создаём QCPBars единожды (если в .ui Plottables уже нет)
