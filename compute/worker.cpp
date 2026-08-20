@@ -1335,15 +1335,7 @@ void Worker::tuneGrid(CodeGeometry& g)
     if (!settings.autoTuneGrid || !g.useGpu)
         return;
 
-    // Длинный путь не подбирается: там сетка задаёт ещё и размеры буферов
-    // начальных масок, и размер чанка, то есть замер пришлось бы делать
-    // не ядром, а всем конвейером целиком. Выигрыш там при этом был
-    // наименьший из всех путей.
-    if (g.isLongCode)
-        return;
-
     GridTuneTask task;
-    task.gray        = settings.algorithmType != ComputationSettings::SimpleXor;
     task.numOfCols   = int(g.numOfCols);
     task.numOfRows   = int(g.numOfRows);
     task.wordsPerRow = int(g.wordsPerRow);
@@ -1353,13 +1345,27 @@ void Worker::tuneGrid(CodeGeometry& g)
     task.userGrid    = { g.blocksGpu, g.threadsGpu };
     task.verbose     = tuneVerbose;
 
-    if (task.gray) {
+    const bool gray = settings.algorithmType != ComputationSettings::SimpleXor;
+    task.kernel = g.isLongCode ? GridTuneTask::Kernel::XorLong
+                : gray         ? GridTuneTask::Kernel::GrayShort
+                               : GridTuneTask::Kernel::XorShort;
+
+    // Отдельный буфер спектра: замер не имеет права попасть в настоящий.
+    DeviceBuffer<quint64> scratch;
+    scratch.allocate(g.spectrumSize);
+    scratch.fillZero();
+    task.scratchSpectrum = scratch.get();
+
+    // Слой, на котором идёт замер, и его размер. У кода Грея слоёв нет —
+    // маски нумеруются сплошь.
+    quint64 layerRank = 0;
+    if (task.kernel == GridTuneTask::Kernel::GrayShort) {
         task.availableMasks = 1ULL << g.numOfRows;
         task.totalMasks     = task.availableMasks;
     }
     else {
         // Меряем на самом населённом слое: там расчёт и проведёт почти всё
-        // время, а стоимость одной маски зависит от числа складываемых строк.
+        // время, а стоимость маски зависит от числа складываемых строк.
         quint64 bestCount = 0;
         for (quint64 r = 0; r <= g.maxRows && r <= g.numOfRows; ++r) {
             const quint64 count = binomTable(g.numOfRows, r);
@@ -1370,17 +1376,59 @@ void Worker::tuneGrid(CodeGeometry& g)
         }
         task.availableMasks = bestCount;
         task.totalMasks     = totalCombinations(g.numOfRows, g.maxRows);
+        layerRank           = bestCount / 2;
     }
 
-    // Отдельный буфер: замер не имеет права попасть в настоящий спектр.
-    DeviceBuffer<quint64> scratch;
-    scratch.allocate(g.spectrumSize);
-    scratch.fillZero();
-    task.scratchSpectrum = scratch.get();
+    // Длинному пути нужны настоящие стартовые маски: его ядро читает их из
+    // буфера, а не выводит из номера чанка.
+    HostBuffer<int16_t>   h_tuneSlots;
+    DeviceBuffer<int16_t> d_tuneSlots;
+
+    if (task.kernel == GridTuneTask::Kernel::XorLong) {
+        // Столько масок на нить хватает, чтобы стартовая сборка кодового слова
+        // занимала около процента: боевые 4096 растянули бы замер на секунды.
+        task.measureMasksPerThread = 256;
+
+        // Слотов — под самого крупного кандидата; меньшие берут префикс.
+        // Имя не slots: так называется макрос Qt из qobjectdefs.h.
+        quint64 slotCount = quint64(Constants::MAX_TUNE_BLOCKS)
+                      * quint64(Constants::MAX_TUNE_THREADS);
+        if (task.availableMasks < layerRank + slotCount * task.measureMasksPerThread) {
+            const quint64 room = task.availableMasks > layerRank
+                               ? (task.availableMasks - layerRank) / task.measureMasksPerThread
+                               : 0;
+            slotCount = room;
+        }
+        if (slotCount == 0)
+            return;
+
+        h_tuneSlots.allocate(slotCount * Constants::MAX_POSITIONS,
+                             HostBuffer<int16_t>::Kind::Paged);
+        d_tuneSlots.allocate(slotCount * Constants::MAX_POSITIONS);
+
+        int16_t* const host = h_tuneSlots.get();
+        const int rows = int(g.numOfRows);
+        const int ones = int(task.numOfOnes);
+
+        #pragma omp parallel for schedule(static)
+        for (long long i = 0; i < (long long)slotCount; ++i) {
+            generateStartPositions(layerRank + quint64(i) * task.measureMasksPerThread,
+                                   rows, ones,
+                                   host + i * Constants::MAX_POSITIONS, binomTable);
+        }
+
+        CUDA_CALL(cudaMemcpy(d_tuneSlots.get(), host,
+                             slotCount * Constants::MAX_POSITIONS * sizeof(int16_t),
+                             cudaMemcpyHostToDevice));
+
+        task.startPositions   = d_tuneSlots.get();
+        task.filledStartMasks = slotCount;
+        task.matrixGlobal     = g.matrixInGlobalMem ? d_matrix.get() : nullptr;
+    }
 
     const LaunchGrid grid = tuneLaunchGrid(task, stream.get());
     if (!grid.isValid())
-        return;   // ни один вариант не запустился — остаёмся на настройках
+        return;   // подбор отказался — остаёмся на настройках
 
     // Сигнал уходит и тогда, когда победили настройки пользователя: это
     // не пустой результат, а подтверждение замером, и видеть его полезно.

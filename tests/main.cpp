@@ -671,21 +671,12 @@ static void testAutoTunedGrid()
     check(QStringLiteral("подбор: I(20) против биномов"), ident,
           Reference::identityPartialSpectrum(20, 20));
 
+    // Длинный путь. Там сетка задаёт ещё и размер чанка, то есть разбиение
+    // расчёта — тем важнее убедиться, что спектр от неё не зависит.
+    checkTuned(QStringLiteral("длинный код (k=70)"), longConfig(ComputeDevice::GPU));
+
     if (!g_gpuAvailable)
         return;
-
-    // Длинный путь подбору не поддаётся — сигнал не должен приходить вовсе,
-    // а расчёт обязан идти на настройках пользователя.
-    const RunConfig lng = longConfig(ComputeDevice::GPU);
-    const QPair<int, int> lngGrid = tunedGridFor(lng);
-    if (lngGrid.first == 0) {
-        ++g_passed;
-        out << "  ok       " << QStringLiteral("длинный код: подбор не применяется") << Qt::endl;
-    } else {
-        ++g_failed;
-        out << QStringLiteral("  ПРОВАЛ   длинный код: подбор вмешался (%1 x %2)")
-                   .arg(lngGrid.first).arg(lngGrid.second) << Qt::endl;
-    }
 
     // На CPU подбирать нечего.
     RunConfig cpu;
@@ -719,6 +710,24 @@ static void testAutoTunedCheckpoints()
     checkResume(QStringLiteral("подбор -> подбор"),      tuned, tuned, 1000, 1000);
     checkResume(QStringLiteral("без подбора -> подбор"), plain, tuned, 1000, 1000);
     checkResume(QStringLiteral("подбор -> без подбора"), tuned, plain, 1000, 1000);
+
+    // Длинный путь. Подбор меняет там размер чанка (блоки x нити x 4096),
+    // то есть всё разбиение расчёта, поэтому задача взята заведомо больше
+    // одного чанка: иначе обрыва не случится и проверять будет нечего.
+    RunConfig lngPlain;
+    lngPlain.matrix     = Reference::identity(70);
+    lngPlain.algorithm  = Algorithm::SimpleXor;
+    lngPlain.maxRows    = 7;
+    lngPlain.device     = ComputeDevice::GPU;
+    lngPlain.threadsCpu = 4;
+    RunConfig lngTuned = lngPlain;  lngTuned.autoTune = true;
+
+    checkResume(QStringLiteral("длинный: подбор -> подбор"),
+                lngTuned, lngTuned, 200000000, 300000000);
+    checkResume(QStringLiteral("длинный: без подбора -> подбор"),
+                lngPlain, lngTuned, 200000000, 300000000);
+    checkResume(QStringLiteral("длинный: подбор -> без подбора"),
+                lngTuned, lngPlain, 200000000, 300000000);
 
     // Код Грея: маски нумеруются сплошь, точка обрыва — номер маски.
     RunConfig gray;
@@ -1091,7 +1100,9 @@ static bool sweepCase(const QString& which, RunConfig& base)
     } else if (which == QStringLiteral("long")) {
         base.matrix    = Reference::randomMatrix(70, 1000, 11);
         base.algorithm = Algorithm::SimpleXor;
-        base.maxRows   = 6;
+        // Восемь строк вместо шести: на шести весь расчёт занимал 0.15 с,
+        // и разница между сетками тонула в накладных расходах.
+        base.maxRows   = 8;
     } else {
         return false;
     }
@@ -1124,23 +1135,32 @@ static int tuneOnly(const QString& which)
     RunConfig plain = base;
     RunConfig tuned = base;  tuned.autoTune = true;
 
-    const auto t0 = std::chrono::steady_clock::now();
-    const Spectrum sp = runWorker(plain);
-    const double plainSec = std::chrono::duration<double>(
-                                std::chrono::steady_clock::now() - t0).count();
+    // Порядок А-Б-А: за минуты перебора карта прогревается и время одной и той
+    // же конфигурации уезжает на четверть. Умолчание меряется до и после, и
+    // сравнение идёт со средним — иначе дрейф не отличить от эффекта подбора.
+    auto timeRun = [](const RunConfig& cfg, Spectrum& outSpectrum) {
+        const auto t = std::chrono::steady_clock::now();
+        outSpectrum = runWorker(cfg);
+        return std::chrono::duration<double>(
+                   std::chrono::steady_clock::now() - t).count();
+    };
 
-    const auto t1 = std::chrono::steady_clock::now();
-    const Spectrum st = runWorker(tuned);
-    const double tunedSec = std::chrono::duration<double>(
-                                std::chrono::steady_clock::now() - t1).count();
+    Spectrum sp1, st, sp2;
+    const double plain1 = timeRun(plain, sp1);
+    const double tunedSec = timeRun(tuned, st);
+    const double plain2 = timeRun(plain, sp2);
+    const double plainSec = (plain1 + plain2) / 2.0;
 
     out << Qt::endl
-        << QStringLiteral("настройки %1 x %2: %3 с").arg(base.blocksGpu).arg(base.threadsGpu)
-               .arg(plainSec, 0, 'f', 2) << Qt::endl
+        << QStringLiteral("настройки %1 x %2: %3 и %4 с (дрейф %5 %)")
+               .arg(base.blocksGpu).arg(base.threadsGpu)
+               .arg(plain1, 0, 'f', 2).arg(plain2, 0, 'f', 2)
+               .arg(plain1 > 0 ? (plain2 / plain1 - 1.0) * 100.0 : 0.0, 0, 'f', 1) << Qt::endl
         << QStringLiteral("подбор выбрал %1 x %2: %3 с, выигрыш %4x")
                .arg(chosen.first).arg(chosen.second).arg(tunedSec, 0, 'f', 2)
                .arg(tunedSec > 0 ? plainSec / tunedSec : 0.0, 0, 'f', 2)
-        << (sp == st ? QString() : QStringLiteral("   ВНИМАНИЕ: спектр разошёлся"))
+        << ((sp1 == st && sp1 == sp2) ? QString()
+                                      : QStringLiteral("   ВНИМАНИЕ: спектр разошёлся"))
         << Qt::endl;
     return 0;
 }

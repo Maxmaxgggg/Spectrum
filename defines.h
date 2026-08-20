@@ -7,6 +7,10 @@ namespace Constants
     constexpr  int WORD_SIZE = 8;								// Размер слова (под словом понимается тип данных quint64)
     constexpr  int MAX_CONST_WORDS = CONST_MEM_SIZE / WORD_SIZE;		// Максимальный размер массива в константной памяти видеокарты
     constexpr  int MAX_POSITIONS = 33;
+    // Потолок кандидатов автоподбора: под столько нитей длинному пути надо
+    // заранее заготовить стартовые маски.
+    constexpr  int MAX_TUNE_BLOCKS  = 8 * 64;   // 8 блоков на мультипроцессор
+    constexpr  int MAX_TUNE_THREADS = 512;
     constexpr  int MAX_BLOCKWORDS = 32; 								// Максимальное число 64-битных слов, используемых для хранения одной строки
     constexpr  int MAX_MASK_WORDS = 32;								// Максимальная длина битовой маски
     constexpr  int MAX_ROWS = 2048;
