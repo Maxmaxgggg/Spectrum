@@ -101,6 +101,7 @@ void MainWindow::setWorker()
     connect( workerPtr,       &Worker::errorOccurred,                  this,      &MainWindow::handleError,                          Qt::QueuedConnection );
     connect( workerPtr,       &Worker::finished,                       this,      &MainWindow::handleFinished,                       Qt::QueuedConnection );
     connect( workerPtr,       &Worker::showSaveLBL,                    this,      &MainWindow::showSaveLBL,                          Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::gridTuned,                      this,      &MainWindow::handleGridTuned,                      Qt::QueuedConnection );
 
     connect( this, static_cast<void (MainWindow::*)(const QJsonObject&)>( &MainWindow::sendSettingsToWorker ), workerPtr, &Worker::setSettings, Qt::QueuedConnection);
 
@@ -164,6 +165,9 @@ QString MainWindow::matrixError() const
 
 void MainWindow::startComputation()
 {
+    // Прошлый подбор к новому расчёту отношения не имеет.
+    tunedGrid.clear();
+
     if (!workerPtr) {
         QMessageBox::warning(this, UIStrings::ERROR_TITLE, tr("Worker не подключён"));
         return;
@@ -304,6 +308,14 @@ void MainWindow::handleUpdateSpectrumPTE( const SpectrumText spectrum )
     ui->spectrumPTE->setPlainText( str );
     vbar->setValue(pos);
 }
+// Сетку показываем: иначе при включённом автоподборе непонятно, на чём
+// программа в итоге считает и почему время отличается от прошлого запуска.
+void MainWindow::handleGridTuned(int blocks, int threads)
+{
+    tunedGrid = tr("Сетка запуска:      %1 блоков x %2 нитей (подобрана)")
+                    .arg(blocks).arg(threads);
+}
+
 void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed,
                                               quint64 doneOps, quint64 totalOps)
 {
@@ -318,6 +330,9 @@ void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, d
         // Проценты хороши для полоски, но масштаб задачи по ним не понять:
         // "43 %" ничего не говорит, а "1.6 из 3.8 трлн слов" — говорит.
         tr("Перебрано слов:     %1 из %2").arg(Format::count(doneOps), Format::count(totalOps));
+
+    if (!tunedGrid.isEmpty())
+        infoText += "\n" + tunedGrid;
 
     ui->infoLBL->setText(infoText);
 

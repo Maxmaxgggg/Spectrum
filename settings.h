@@ -30,6 +30,10 @@ struct ComputationSettings
     // Максимальное число перебираемых строк
     int             maxRows = 0;
 
+    // Подбирать число блоков и нитей замером перед расчётом вместо того,
+    // чтобы брать их из настроек. Имеет смысл только для видеокарты.
+    bool            autoTuneGrid = false;
+
     // Настройки вычислителя
     struct computeDeviceSettings {
         // Число потоков ЦП
@@ -55,6 +59,7 @@ struct ComputationSettings
         , enumType(other.enumType)
         , maxRows(other.maxRows)
         , compDev(other.compDev)
+        , autoTuneGrid(other.autoTuneGrid)
         , compDevSet(other.compDevSet)
         , timeIntSet(other.timeIntSet) { }
 
@@ -67,6 +72,7 @@ struct ComputationSettings
         enumType = other.enumType;
         maxRows = other.maxRows;
         compDev = other.compDev;
+        autoTuneGrid = other.autoTuneGrid;
         compDevSet = other.compDevSet;
         timeIntSet = other.timeIntSet;
         return *this;
@@ -79,6 +85,7 @@ struct ComputationSettings
             enumType == other.enumType &&
             maxRows == other.maxRows &&
             compDev == other.compDev &&
+            autoTuneGrid == other.autoTuneGrid &&
             compDevSet.threadsCpu == other.compDevSet.threadsCpu &&
             compDevSet.blocksGpu == other.compDevSet.blocksGpu &&
             compDevSet.threadsGpu == other.compDevSet.threadsGpu;
@@ -97,6 +104,7 @@ struct ComputationSettings
         obj["enumType"] = static_cast<int>(enumType);
         obj["maxRows"] = maxRows;
         obj["compDev"] = static_cast<int>(compDev);
+        obj["autoTuneGrid"] = autoTuneGrid;
 
         QJsonObject dev;
         dev["threadsCpu"] = compDevSet.threadsCpu;
@@ -130,6 +138,7 @@ struct ComputationSettings
         s.enumType = static_cast<EnumerationType>(obj["enumType"].toInt());
         s.maxRows = obj["maxRows"].toInt();
         s.compDev = static_cast<ComputeDevice>(obj["compDev"].toInt());
+        s.autoTuneGrid = obj["autoTuneGrid"].toBool();
 
         QJsonObject dev = obj["compDevSet"].toObject();
         s.compDevSet.threadsCpu = dev["threadsCpu"].toInt();
@@ -151,6 +160,8 @@ struct ComputationSettings
         seed = qHash(maxRows, seed);
         seed = qHash(static_cast<int>(compDev), seed);
 
+        // autoTuneGrid в ключ не входит намеренно: спектр от сетки не зависит,
+        // и переключение галочки не должно осиротить сохранённый чекпоинт.
         seed = qHash(compDevSet.threadsCpu, seed);
         seed = qHash(compDevSet.blocksGpu, seed);
         seed = qHash(compDevSet.threadsGpu, seed);

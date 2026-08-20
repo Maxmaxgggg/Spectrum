@@ -55,8 +55,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     settings.compDevSet.threadsCpu = std::min(maxThreads, ui->threadsCpuSPB->value());
     settings.compDevSet.blocksGpu = ui->blocksGpuSPB->value();
     settings.compDevSet.threadsGpu = ui->threadsGpuSPB->value();
-
-
+    settings.autoTuneGrid = ui->autoTuneGridCHB->isChecked();
 
     connect(algorithmBGP, &QButtonGroup::idClicked,
         this, [=](int id)
@@ -72,13 +71,11 @@ SettingsDialog::SettingsDialog(QWidget *parent)
         });
     connect(computeDeviceBGP, &QButtonGroup::idClicked,
         this, [=](int id) {
-            //ui->threadsCpuLBL->setVisible( id == ComputeDevice::CPU );
-            //ui->threadsCpuSPB->setVisible( id == ComputeDevice::CPU );
-            ui->blocksGpuLBL->setVisible(  id == ComputeDevice::GPU );
-            ui->blocksGpuSPB->setVisible(  id == ComputeDevice::GPU );
-            ui->threadsGpuLBL->setVisible( id == ComputeDevice::GPU );
-            ui->threadsGpuSPB->setVisible( id == ComputeDevice::GPU );
+            Q_UNUSED(id);
+            updateDeviceControls();
         });
+    connect(ui->autoTuneGridCHB, &QCheckBox::toggled,
+        this, [this](bool) { updateDeviceControls(); });
     connect(ui->buttonBox, &QDialogButtonBox::accepted,
         this, [this]() {
             saveSettings();
@@ -255,6 +252,26 @@ void SettingsDialog::applyDeviceLimits()
             .arg(prop.maxThreadsPerBlock));
 }
 
+// Поля числа блоков и нитей нужны только видеокарте, а при включённом
+// автоподборе ещё и не используются — тогда они остаются на виду, но
+// недоступны: так видно, что значения не потеряны, просто не в деле.
+void SettingsDialog::updateDeviceControls()
+{
+    const bool gpu  = computeDeviceBGP->checkedId() == ComputeDevice::GPU;
+    const bool auto_ = gpu && ui->autoTuneGridCHB->isChecked();
+
+    ui->blocksGpuLBL->setVisible(gpu);
+    ui->blocksGpuSPB->setVisible(gpu);
+    ui->threadsGpuLBL->setVisible(gpu);
+    ui->threadsGpuSPB->setVisible(gpu);
+    ui->autoTuneGridCHB->setVisible(gpu);
+
+    ui->blocksGpuLBL->setEnabled(!auto_);
+    ui->blocksGpuSPB->setEnabled(!auto_);
+    ui->threadsGpuLBL->setEnabled(!auto_);
+    ui->threadsGpuSPB->setEnabled(!auto_);
+}
+
 void SettingsDialog::checkGpuAvailable() {
     if (isGpuAvailable()) {
         ui->gpuRB->setEnabled(true);
@@ -263,12 +280,7 @@ void SettingsDialog::checkGpuAvailable() {
     else {
         ui->gpuRB->setEnabled(false);
         ui->cpuRB->setChecked(true);
-        //ui->threadsCpuLBL->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::CPU);
-        //ui->threadsCpuSPB->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::CPU);
-        ui->blocksGpuLBL->setVisible(computeDeviceBGP->checkedId()  == ComputeDevice::GPU);
-        ui->blocksGpuSPB->setVisible(computeDeviceBGP->checkedId()  == ComputeDevice::GPU);
-        ui->threadsGpuLBL->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::GPU);
-        ui->threadsGpuSPB->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::GPU);
+        updateDeviceControls();
     }
 }
 
@@ -285,6 +297,7 @@ void SettingsDialog::saveSettings() {
     settings.compDevSet.threadsCpu = ui->threadsCpuSPB->value();
     settings.compDevSet.blocksGpu = ui->blocksGpuSPB->value();
     settings.compDevSet.threadsGpu = ui->threadsGpuSPB->value();
+    settings.autoTuneGrid          = ui->autoTuneGridCHB->isChecked();
 
     settings.timeIntSet.saveSpectrumInterval = ui->saveSpectrumIntervalCBX->currentData().toInt();
     settings.timeIntSet.updateSpectrumInterval = ui->updateSpectrumIntervalCBX->currentData().toInt();
@@ -322,14 +335,12 @@ void SettingsDialog::loadSettings() {
     int maxThreads = omp_get_max_threads();
     ui->threadsCpuSPB->setMaximum(maxThreads);
 
-    ui->blocksGpuLBL->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::GPU);
-    ui->blocksGpuSPB->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::GPU);
-    ui->threadsGpuLBL->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::GPU);
-    ui->threadsGpuSPB->setVisible(computeDeviceBGP->checkedId() == ComputeDevice::GPU);
-
     ui->threadsCpuSPB->setValue(std::min(maxThreads, settings.compDevSet.threadsCpu));
     ui->blocksGpuSPB->setValue(settings.compDevSet.blocksGpu);
     ui->threadsGpuSPB->setValue(settings.compDevSet.threadsGpu);
+    ui->autoTuneGridCHB->setChecked(settings.autoTuneGrid);
+
+    updateDeviceControls();
 
     int index = ui->saveSpectrumIntervalCBX->findData(settings.timeIntSet.saveSpectrumInterval);
     if (index != -1) {

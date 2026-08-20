@@ -80,6 +80,13 @@ public:
     // Оба нуля — обычный режим работы.
     void setCheckpointOpsPolicy(quint64 everyOps, quint64 stopAfterOps);
 
+    // Порог, ниже которого подбор сетки не окупается и не проводится.
+    // Тесты ставят ноль, чтобы гонять подбор на маленьких матрицах.
+    void setGridTuningThreshold(double seconds);
+
+    // Печатать таблицу замеров подбора. Для режима --sweep в тестах.
+    void setGridTuningVerbose(bool on);
+
 public slots:
     void computeSpectrum( );
     void setSettings( const QJsonObject& jsonSettings );
@@ -101,6 +108,9 @@ signals:
                                  quint64 doneOps, quint64 totalOps );
     // Сигнал того, что надо показать значок сохранения
     void showSaveLBL();
+    // Подобранная замером сетка запуска. Пользователю её стоит показать:
+    // иначе непонятно, на чём считает программа.
+    void gridTuned( int blocks, int threads );
 private:
     /* Функции для работы с биноминальными коэффициентами */
     quint64   totalCombinations(quint64 k, quint64 maxComb) const;
@@ -112,6 +122,9 @@ private:
     // Упаковывает матрицу из строк QStringList в биты и раскладывает буферы
     // по памяти хоста и устройства.
     void prepareBuffers(const CodeGeometry& g);
+    // Замеряет несколько сеток на настоящем ядре и ставит в g лучшую.
+    // Ничего не делает, если подбор не включён или не применим.
+    void tuneGrid(CodeGeometry& g);
     // Выбирает вычислительную функцию по алгоритму, устройству и длине кода.
     void dispatchComputation(const CodeGeometry& g);
     // Финальная выгрузка спектра, сигналы и освобождение ресурсов.
@@ -162,6 +175,9 @@ private:
     // 0 — обычный режим; см. setCheckpointOpsPolicy
     quint64                     stopAfterOps   = 0;
     quint64                     checkpointEveryOps = 0;
+    // См. setGridTuningThreshold
+    double                      tuneThresholdSec   = 10.0;
+    bool                        tuneVerbose        = false;
 
     // Все ресурсы владеющие: освобождаются вместе с объектом, каким бы путём
     // ни завершился расчёт — успехом, отменой или исключением.

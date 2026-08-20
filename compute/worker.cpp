@@ -1,4 +1,5 @@
 #include "worker.h"
+#include "gridtuner.h"
 
 Worker::Worker(QObject *parent)
     : QObject(parent)
@@ -1329,6 +1330,65 @@ void Worker::prepareBuffers(const CodeGeometry& g)
 }
 
 // Выбор вычислительной функции: алгоритм, устройство, длина кода.
+void Worker::tuneGrid(CodeGeometry& g)
+{
+    if (!settings.autoTuneGrid || !g.useGpu)
+        return;
+
+    // Длинный путь не подбирается: там сетка задаёт ещё и размеры буферов
+    // начальных масок, и размер чанка, то есть замер пришлось бы делать
+    // не ядром, а всем конвейером целиком. Выигрыш там при этом был
+    // наименьший из всех путей.
+    if (g.isLongCode)
+        return;
+
+    GridTuneTask task;
+    task.gray        = settings.algorithmType != ComputationSettings::SimpleXor;
+    task.numOfCols   = int(g.numOfCols);
+    task.numOfRows   = int(g.numOfRows);
+    task.wordsPerRow = int(g.wordsPerRow);
+    task.binomTable  = d_binomTable.get();
+    task.chunkSize   = g.chunkSize;
+    task.minWorthSeconds = tuneThresholdSec;
+    task.userGrid    = { g.blocksGpu, g.threadsGpu };
+    task.verbose     = tuneVerbose;
+
+    if (task.gray) {
+        task.availableMasks = 1ULL << g.numOfRows;
+        task.totalMasks     = task.availableMasks;
+    }
+    else {
+        // Меряем на самом населённом слое: там расчёт и проведёт почти всё
+        // время, а стоимость одной маски зависит от числа складываемых строк.
+        quint64 bestCount = 0;
+        for (quint64 r = 0; r <= g.maxRows && r <= g.numOfRows; ++r) {
+            const quint64 count = binomTable(g.numOfRows, r);
+            if (count > bestCount) {
+                bestCount      = count;
+                task.numOfOnes = r;
+            }
+        }
+        task.availableMasks = bestCount;
+        task.totalMasks     = totalCombinations(g.numOfRows, g.maxRows);
+    }
+
+    // Отдельный буфер: замер не имеет права попасть в настоящий спектр.
+    DeviceBuffer<quint64> scratch;
+    scratch.allocate(g.spectrumSize);
+    scratch.fillZero();
+    task.scratchSpectrum = scratch.get();
+
+    const LaunchGrid grid = tuneLaunchGrid(task, stream.get());
+    if (!grid.isValid())
+        return;   // ни один вариант не запустился — остаёмся на настройках
+
+    // Сигнал уходит и тогда, когда победили настройки пользователя: это
+    // не пустой результат, а подтверждение замером, и видеть его полезно.
+    g.blocksGpu  = grid.blocks;
+    g.threadsGpu = grid.threads;
+    emit gridTuned(grid.blocks, grid.threads);
+}
+
 void Worker::dispatchComputation(const CodeGeometry& g)
 {
     // Дуальный код считается по проверочной матрице тем же кодом Грея
@@ -1387,7 +1447,7 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
 
 void Worker::computeSpectrumImpl()
 {
-    const CodeGeometry g = describeTask();
+    CodeGeometry g = describeTask();
 
     // Спектр мог прийти из чекпоинта — тогда размер уже верный
     if (quint64(runState.spectrum.size()) != g.spectrumSize)
@@ -1396,6 +1456,7 @@ void Worker::computeSpectrumImpl()
     omp_set_num_threads(settings.compDevSet.threadsCpu);
 
     prepareBuffers(g);
+    tuneGrid(g);
 
     // Частоты обновления из настроек. Сам отсчёт запускает вычислительная
     // функция: только она знает общее число операций.
@@ -1455,6 +1516,16 @@ bool Worker::isCancelled()
     return (bool)cancelled.load();
 }
 
+
+void Worker::setGridTuningThreshold(double seconds)
+{
+    tuneThresholdSec = seconds;
+}
+
+void Worker::setGridTuningVerbose(bool on)
+{
+    tuneVerbose = on;
+}
 
 void Worker::setCheckpointOpsPolicy(quint64 everyOps, quint64 stopAfter)
 {

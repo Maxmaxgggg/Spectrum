@@ -78,6 +78,8 @@ struct RunConfig
     int         threadsCpu = 4;
     int         blocksGpu  = 64;
     int         threadsGpu = 256;
+    // Подбирать сетку замером вместо blocksGpu/threadsGpu.
+    bool        autoTune   = false;
 };
 
 static ComputationSettings makeSettings(const RunConfig& cfg)
@@ -91,6 +93,7 @@ static ComputationSettings makeSettings(const RunConfig& cfg)
     s.compDevSet.threadsCpu = cfg.threadsCpu;
     s.compDevSet.blocksGpu  = cfg.blocksGpu;
     s.compDevSet.threadsGpu = cfg.threadsGpu;
+    s.autoTuneGrid          = cfg.autoTune;
     // Интервалы задраны так, чтобы за время теста чекпоинт не сработал:
     // сохранение состояния проверяется отдельными тестами.
     s.timeIntSet.saveSpectrumInterval   = 100000;
@@ -119,6 +122,9 @@ static Spectrum runWorker(const RunConfig& cfg,
 
     worker.setSettings(makeSettings(cfg).toJson());
     worker.setCheckpointOpsPolicy(checkpointEveryOps, stopAfterOps);
+    // Тестовые матрицы мелкие, и в боевом режиме подбор на них не запустился
+    // бы вовсе — тесты про подбор стали бы пустыми.
+    worker.setGridTuningThreshold(0.0);
     worker.initializeRunState(loadMode);
     worker.computeSpectrum();
 
@@ -559,6 +565,171 @@ static void testCheckpointPortability()
     checkResume(QStringLiteral("длинный: GPU -> CPU"), lngGpu, lngCpu, 3000000, 3000000);
 }
 
+// ------------------------------------------------------ автоподбор сетки
+
+// Сетка, которую выбрал подбор. {0,0} — подбор не сработал или не применим.
+static QPair<int, int> tunedGridFor(const RunConfig& cfg, bool verbose = false)
+{
+    Worker worker;
+    QPair<int, int> grid(0, 0);
+
+    QObject::connect(&worker, &Worker::gridTuned,
+                     [&grid](int blocks, int threads) { grid = qMakePair(blocks, threads); });
+
+    RunConfig tuned = cfg;
+    tuned.autoTune = true;
+    worker.setSettings(makeSettings(tuned).toJson());
+    worker.setGridTuningThreshold(0.0);
+    worker.setGridTuningVerbose(verbose);
+    worker.initializeRunState(LoadMode::Reset);
+    worker.computeSpectrum();
+    return grid;
+}
+
+// Главное свойство подбора: он не имеет права изменить результат. Спектр,
+// посчитанный на подобранной сетке, обязан совпасть с посчитанным на
+// настройках пользователя — до последней единицы.
+static void checkTuned(const QString& name, const RunConfig& cfg)
+{
+    if (!g_gpuAvailable) {
+        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        return;
+    }
+
+    RunConfig plain = cfg;  plain.autoTune = false;
+    RunConfig tuned = cfg;  tuned.autoTune = true;
+
+    const Spectrum expected = runWorker(plain);
+    const Spectrum actual   = runWorker(tuned);
+    const QPair<int, int> grid = tunedGridFor(cfg);
+
+    const QString gridText = grid.first > 0
+        ? QStringLiteral("  (выбрано %1 x %2)").arg(grid.first).arg(grid.second)
+        : QStringLiteral("  (подбор не сработал)");
+
+    if (grid.first <= 0) {
+        ++g_failed;
+        out << QStringLiteral("  ПРОВАЛ   ") << name
+            << QStringLiteral("  — подбор не сработал, проверять нечего") << Qt::endl;
+        return;
+    }
+
+    if (actual == expected && !expected.isEmpty()) {
+        ++g_passed;
+        out << "  ok       " << name << gridText << Qt::endl;
+        return;
+    }
+
+    ++g_failed;
+    out << QStringLiteral("  ПРОВАЛ   ") << name << gridText << Qt::endl;
+    out << QStringLiteral("      без подбора: ") << formatSpectrum(expected) << Qt::endl;
+    out << QStringLiteral("      с подбором:  ") << formatSpectrum(actual)   << Qt::endl;
+}
+
+static void testAutoTunedGrid()
+{
+    out << Qt::endl << QStringLiteral("Автоподбор сетки") << Qt::endl;
+
+    RunConfig cfg;
+    cfg.device = ComputeDevice::GPU;
+
+    // Узкий код: по замерам --sweep именно здесь у сетки оставался почти
+    // двукратный запас.
+    cfg.matrix    = Reference::randomMatrix(40, 50, 3);
+    cfg.algorithm = Algorithm::SimpleXor;
+    cfg.maxRows   = 6;
+    checkTuned(QStringLiteral("короткий XOR, узкий код"), cfg);
+
+    // Широкий код: другое ядро по числу слов в строке.
+    cfg.matrix    = Reference::randomMatrix(36, 1500, 7);
+    cfg.maxRows   = 5;
+    checkTuned(QStringLiteral("короткий XOR, широкий код"), cfg);
+
+    // Голей целиком — на нём же сверяется аналитический спектр ниже.
+    cfg.matrix    = Reference::golay24_12();
+    cfg.maxRows   = 0;
+    checkTuned(QStringLiteral("Голей (24,12), полный перебор"), cfg);
+
+    // Код Грея — ядро другое, и оптимум по нитям у него ведёт себя иначе.
+    cfg.matrix    = Reference::identity(20);
+    cfg.algorithm = Algorithm::GrayCode;
+    cfg.maxRows   = 0;
+    checkTuned(QStringLiteral("код Грея"), cfg);
+
+    // Дуальный код считается тем же ядром Грея, но по проверочной матрице.
+    cfg.matrix    = Reference::hamming7_4();
+    cfg.algorithm = Algorithm::DualCode;
+    checkTuned(QStringLiteral("дуальный код"), cfg);
+
+    // Сверка с аналитикой, а не только «сам с собой»: единичная матрица
+    // на 20 строках даёт биномиальные коэффициенты.
+    RunConfig ident;
+    ident.device    = ComputeDevice::GPU;
+    ident.matrix    = Reference::identity(20);
+    ident.algorithm = Algorithm::SimpleXor;
+    ident.autoTune  = true;
+    check(QStringLiteral("подбор: I(20) против биномов"), ident,
+          Reference::identityPartialSpectrum(20, 20));
+
+    if (!g_gpuAvailable)
+        return;
+
+    // Длинный путь подбору не поддаётся — сигнал не должен приходить вовсе,
+    // а расчёт обязан идти на настройках пользователя.
+    const RunConfig lng = longConfig(ComputeDevice::GPU);
+    const QPair<int, int> lngGrid = tunedGridFor(lng);
+    if (lngGrid.first == 0) {
+        ++g_passed;
+        out << "  ok       " << QStringLiteral("длинный код: подбор не применяется") << Qt::endl;
+    } else {
+        ++g_failed;
+        out << QStringLiteral("  ПРОВАЛ   длинный код: подбор вмешался (%1 x %2)")
+                   .arg(lngGrid.first).arg(lngGrid.second) << Qt::endl;
+    }
+
+    // На CPU подбирать нечего.
+    RunConfig cpu;
+    cpu.matrix    = Reference::golay24_12();
+    cpu.algorithm = Algorithm::SimpleXor;
+    cpu.device    = ComputeDevice::CPU;
+    const QPair<int, int> cpuGrid = tunedGridFor(cpu);
+    if (cpuGrid.first == 0) {
+        ++g_passed;
+        out << "  ok       " << QStringLiteral("CPU: подбор не применяется") << Qt::endl;
+    } else {
+        ++g_failed;
+        out << QStringLiteral("  ПРОВАЛ   CPU: подбор вмешался") << Qt::endl;
+    }
+}
+
+// Подбор гоняется заново при каждом запуске и может выбрать другую сетку,
+// чем в прошлый раз. Значит, чекпоинт обязан переноситься и через него.
+static void testAutoTunedCheckpoints()
+{
+    out << Qt::endl << QStringLiteral("Автоподбор: перенос чекпоинтов") << Qt::endl;
+
+    RunConfig base;
+    base.matrix    = Reference::golay24_12();
+    base.algorithm = Algorithm::SimpleXor;
+    base.device    = ComputeDevice::GPU;
+
+    RunConfig tuned = base;  tuned.autoTune = true;
+    RunConfig plain = base;  plain.autoTune = false;
+
+    checkResume(QStringLiteral("подбор -> подбор"),      tuned, tuned, 1000, 1000);
+    checkResume(QStringLiteral("без подбора -> подбор"), plain, tuned, 1000, 1000);
+    checkResume(QStringLiteral("подбор -> без подбора"), tuned, plain, 1000, 1000);
+
+    // Код Грея: маски нумеруются сплошь, точка обрыва — номер маски.
+    RunConfig gray;
+    gray.matrix    = Reference::identity(22);
+    gray.algorithm = Algorithm::GrayCode;
+    gray.device    = ComputeDevice::GPU;
+    RunConfig grayTuned = gray;  grayTuned.autoTune = true;
+    checkResume(QStringLiteral("Грей: подбор -> подбор"), grayTuned, grayTuned, 2000000, 2000000);
+    checkResume(QStringLiteral("Грей: подбор -> без подбора"), grayTuned, gray, 2000000, 2000000);
+}
+
 // Матрица шире MAX_COLS не влезает в фиксированные массивы ядер. Раньше предел
 // проверялся только в интерфейсе, и вызов Worker напрямую — как здесь —
 // приводил к записи за границу codeword[] прямо на видеокарте, молча.
@@ -897,28 +1068,87 @@ static int dumpGolden(const QString& path)
 // а не рассуждением.
 //
 // Запуск: SpectrumTests.exe --sweep <случай>
-static int sweepLaunchParams(const QString& which)
+// Случаи для --sweep и --tune. false — имя не опознано.
+static bool sweepCase(const QString& which, RunConfig& base)
 {
-    RunConfig base;
+    base = RunConfig();
     base.device = ComputeDevice::GPU;
 
     if (which == QStringLiteral("wide")) {
         base.matrix    = Reference::randomMatrix(50, 2000, 10);
         base.algorithm = Algorithm::SimpleXor;
-        base.maxRows   = 8;
+        base.maxRows   = 10;
     } else if (which == QStringLiteral("narrow")) {
         base.matrix    = Reference::randomMatrix(50, 50, 3);
         base.algorithm = Algorithm::SimpleXor;
-        base.maxRows   = 9;
+        base.maxRows   = 11;
     } else if (which == QStringLiteral("gray")) {
-        base.matrix    = Reference::randomMatrix(28, 1000, 12);
+        // Случай намеренно крупный: на прежних 28 строках весь расчёт
+        // укладывался в три сотых секунды, и мерить там было нечего.
+        base.matrix    = Reference::randomMatrix(35, 1000, 12);
         base.algorithm = Algorithm::GrayCode;
-        base.maxRows   = 28;
+        base.maxRows   = 35;
     } else if (which == QStringLiteral("long")) {
         base.matrix    = Reference::randomMatrix(70, 1000, 11);
         base.algorithm = Algorithm::SimpleXor;
         base.maxRows   = 6;
     } else {
+        return false;
+    }
+    return true;
+}
+
+// Только подбор: его таблица замеров и сравнение с умолчанием. Полный перебор
+// сетки в --sweep занимает минуты, а для правки самого подбора нужен быстрый
+// цикл.
+//
+// Запуск: SpectrumTests.exe --tune <случай>
+static int tuneOnly(const QString& which)
+{
+    RunConfig base;
+    if (!sweepCase(which, base)) {
+        out << QStringLiteral("ожидалось --tune wide|narrow|gray|long") << Qt::endl;
+        return 2;
+    }
+    if (!g_gpuAvailable) {
+        out << QStringLiteral("GPU недоступен") << Qt::endl;
+        return 1;
+    }
+
+    out << QStringLiteral("Подбор сетки, случай ") << which << Qt::endl;
+    out.flush();
+
+    const QPair<int, int> chosen = tunedGridFor(base, true);
+    fflush(stdout);
+
+    RunConfig plain = base;
+    RunConfig tuned = base;  tuned.autoTune = true;
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const Spectrum sp = runWorker(plain);
+    const double plainSec = std::chrono::duration<double>(
+                                std::chrono::steady_clock::now() - t0).count();
+
+    const auto t1 = std::chrono::steady_clock::now();
+    const Spectrum st = runWorker(tuned);
+    const double tunedSec = std::chrono::duration<double>(
+                                std::chrono::steady_clock::now() - t1).count();
+
+    out << Qt::endl
+        << QStringLiteral("настройки %1 x %2: %3 с").arg(base.blocksGpu).arg(base.threadsGpu)
+               .arg(plainSec, 0, 'f', 2) << Qt::endl
+        << QStringLiteral("подбор выбрал %1 x %2: %3 с, выигрыш %4x")
+               .arg(chosen.first).arg(chosen.second).arg(tunedSec, 0, 'f', 2)
+               .arg(tunedSec > 0 ? plainSec / tunedSec : 0.0, 0, 'f', 2)
+        << (sp == st ? QString() : QStringLiteral("   ВНИМАНИЕ: спектр разошёлся"))
+        << Qt::endl;
+    return 0;
+}
+
+static int sweepLaunchParams(const QString& which)
+{
+    RunConfig base;
+    if (!sweepCase(which, base)) {
         out << QStringLiteral("ожидалось --sweep wide|narrow|gray|long") << Qt::endl;
         return 2;
     }
@@ -928,11 +1158,26 @@ static int sweepLaunchParams(const QString& which)
         return 1;
     }
 
-    const QVector<int> blocks  { 23, 46, 92, 138, 184, 276, 368 };
+    // Список блоков строится от числа мультипроцессоров этой карты, а не от
+    // зашитых чисел: на другой карте они превращаются в бессмыслицу. 64 в
+    // списке отдельно — это нынешнее умолчание, с ним и сравниваем.
+    int smCount = 0;
+    {
+        cudaDeviceProp prop{};
+        if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess)
+            smCount = prop.multiProcessorCount;
+    }
+    if (smCount <= 0) smCount = 8;
+
+    QVector<int> blocks;
+    for (int perSm : { 1, 2, 3, 4, 6, 8 })
+        blocks << perSm * smCount;
+    if (!blocks.contains(64)) blocks << 64;
+    std::sort(blocks.begin(), blocks.end());
     const QVector<int> threads { 64, 128, 256, 512, 1024 };
 
     out << QStringLiteral("Перебор параметров, случай ") << which
-        << QStringLiteral(" (46 мультипроцессоров)") << Qt::endl << Qt::endl;
+        << QStringLiteral(" (%1 мультипроцессоров)").arg(smCount) << Qt::endl << Qt::endl;
     out << QStringLiteral("блоки \ нити");
     for (int t : threads) out << QStringLiteral("%1").arg(t, 9);
     out << Qt::endl;
@@ -978,6 +1223,28 @@ static int sweepLaunchParams(const QString& which)
                .arg(sec, 0, 'f', 2).arg(best > 0 ? sec / best : 0.0, 0, 'f', 2)
         << (s == reference ? QString()
                            : QStringLiteral("   ВНИМАНИЕ: спектр разошёлся"))
+        << Qt::endl;
+
+    // И то же самое с автоподбором — вместе со временем самого подбора.
+    // Здесь видно главное: насколько выбранная замером сетка отстаёт от
+    // найденной полным перебором и окупается ли подбор вообще.
+    RunConfig tuned = base;
+    tuned.autoTune = true;
+    const auto t1 = std::chrono::steady_clock::now();
+    const Spectrum st = runWorker(tuned);
+    const double tunedSec = std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() - t1).count();
+    out.flush();
+    const QPair<int, int> chosen = tunedGridFor(base, true);
+
+    out << QStringLiteral("автоподбор выбрал %1 x %2: %3 с, выигрыш %4x, "
+                          "до оптимума %5x")
+               .arg(chosen.first).arg(chosen.second)
+               .arg(tunedSec, 0, 'f', 2)
+               .arg(tunedSec > 0 ? sec / tunedSec : 0.0, 0, 'f', 2)
+               .arg(best > 0 ? tunedSec / best : 0.0, 0, 'f', 2)
+        << (st == reference ? QString()
+                            : QStringLiteral("   ВНИМАНИЕ: спектр разошёлся"))
         << Qt::endl;
     return 0;
 }
@@ -1088,6 +1355,13 @@ int main(int argc, char* argv[])
         return rc;
     }
 
+    const int tuneAt = args.indexOf(QStringLiteral("--tune"));
+    if (tuneAt >= 0 && tuneAt + 1 < args.size()) {
+        const int rc = tuneOnly(args.at(tuneAt + 1));
+        out.flush();
+        return rc;
+    }
+
     const int profAt = args.indexOf(QStringLiteral("--profile"));
     if (profAt >= 0 && profAt + 1 < args.size()) {
         const int rc = runSingleForProfiling(args.at(profAt + 1));
@@ -1128,8 +1402,11 @@ int main(int argc, char* argv[])
 
     testDualCode(QStringLiteral("Хэмминг (7,4)"), Reference::hamming7_4());
 
+    testAutoTunedGrid();
+
     testCheckpoints();
     testCheckpointPortability();
+    testAutoTunedCheckpoints();
     testOversizedMatrixRejected();
 
     out << Qt::endl

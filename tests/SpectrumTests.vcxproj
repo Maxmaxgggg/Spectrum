@@ -14,6 +14,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="..\compute\worker.cpp" />
     <ClCompile Include="..\compute\dualcode.cpp" />
+    <ClCompile Include="..\compute\gridtuner.cpp" />
     <ClCompile Include="..\helpers\workwithmatrix.cpp" />
   </ItemGroup>
   <ItemGroup>

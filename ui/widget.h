@@ -57,6 +57,7 @@ private slots:
     void handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed,
                                       quint64 doneOps, quint64 totalOps);
     void showSaveLBL();
+    void handleGridTuned(int blocks, int threads);
     void handleMatrixChanged();
 
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -80,6 +81,8 @@ private:
     std::unique_ptr<SpectrumPlot> spectrumPlot;
 
     int remainingMinutes = -1;
+    // Строка о подобранной сетке. Пустая, если подбор не проводился.
+    QString tunedGrid;
 
 
     QString matrixError() const;

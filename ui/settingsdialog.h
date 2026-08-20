@@ -33,6 +33,8 @@ private slots:
 private:
     void checkGpuAvailable();
     void applyDeviceLimits();
+    // Показывает поля вычислителя, подходящие текущему устройству.
+    void updateDeviceControls();
     bool isGpuAvailable();
     void loadSettings();
     void saveSettings();
