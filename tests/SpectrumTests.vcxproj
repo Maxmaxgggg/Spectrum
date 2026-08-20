@@ -19,6 +19,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="reference.h" />
+    <ClInclude Include="..\ui\axisticks.h" />
     <QtMoc Include="..\compute\worker.h" />
   </ItemGroup>
   <ItemGroup>

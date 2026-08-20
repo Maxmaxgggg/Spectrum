@@ -20,6 +20,7 @@
 // разобрать до windows.h, иначе макросы min/max из windows.h ломают тело класса.
 #include "worker.h"
 #include "reference.h"
+#include "ui/axisticks.h"
 
 #ifdef Q_OS_WIN
     #define NOMINMAX
@@ -739,6 +740,76 @@ static void testAutoTunedCheckpoints()
     checkResume(QStringLiteral("Грей: подбор -> без подбора"), grayTuned, gray, 2000000, 2000000);
 }
 
+// ------------------------------------------------- подписи оси графика
+
+// Регрессия: приложение падало при попытке убрать график вправо. Сплиттер
+// схлопывает виджет в нулевую ширину, деление на неё даёт бесконечность, а
+// int от бесконечности — INT_MIN. Цикл построения подписей с отрицательным
+// шагом не заканчивается и набивает массивы точек, пока не кончится память.
+//
+// Здесь проверяется только арифметика шага: ни окна, ни QCustomPlot для
+// этого поднимать не нужно.
+static void testAxisLabelStep()
+{
+    out << Qt::endl << QStringLiteral("Подписи оси графика") << Qt::endl;
+
+    struct Case { int size; int width; const char* what; };
+    const Case cases[] = {
+        {   50,    0, "график схлопнут"      },
+        { 2049,    0, "график схлопнут"      },
+        {    0,  900, "спектр пуст"          },
+        {   -1,  900, "спектр пуст"          },
+        {   50,   -8, "ширина отрицательная" },
+    };
+
+    bool ok = true;
+    for (const Case& c : cases) {
+        const int step = axisLabelStep(c.size, c.width, 30.0);
+        if (step != 0) {
+            ok = false;
+            out << QStringLiteral("      %1: ожидался 0, получено %2")
+                       .arg(QString::fromUtf8(c.what)).arg(step) << Qt::endl;
+        }
+    }
+    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("вырожденные размеры дают ноль") << Qt::endl; }
+    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   вырожденные размеры") << Qt::endl; }
+
+    // На любых рабочих размерах шаг обязан лежать в [1, size] — только тогда
+    // цикл по подписям заканчивается.
+    ok = true;
+    for (int size : { 1, 2, 25, 50, 300, 2049 }) {
+        for (int width : { 1, 2, 7, 31, 200, 900, 4000, 100000 }) {
+            const int step = axisLabelStep(size, width, 30.0);
+            if (step < 1 || step > size) {
+                ok = false;
+                out << QStringLiteral("      size=%1 width=%2 -> шаг %3")
+                           .arg(size).arg(width).arg(step) << Qt::endl;
+            }
+        }
+    }
+    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("шаг всегда в пределах [1, длина спектра]") << Qt::endl; }
+    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   шаг вне пределов") << Qt::endl; }
+
+    // И сам цикл: он обязан завершиться и выдать разумное число подписей.
+    ok = true;
+    for (int size : { 1, 25, 50, 2049 }) {
+        for (int width : { 1, 200, 900, 4000 }) {
+            const int step = axisLabelStep(size, width, 30.0);
+            int labels = 0;
+            for (int i = 0; i < size; i += step) {
+                if (++labels > size) break;
+            }
+            if (labels < 1 || labels > size) {
+                ok = false;
+                out << QStringLiteral("      size=%1 width=%2 -> %3 подписей")
+                           .arg(size).arg(width).arg(labels) << Qt::endl;
+            }
+        }
+    }
+    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("цикл подписей заканчивается") << Qt::endl; }
+    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   цикл подписей") << Qt::endl; }
+}
+
 // Матрица шире MAX_COLS не влезает в фиксированные массивы ядер. Раньше предел
 // проверялся только в интерфейсе, и вызов Worker напрямую — как здесь —
 // приводил к записи за границу codeword[] прямо на видеокарте, молча.
@@ -1421,6 +1492,8 @@ int main(int argc, char* argv[])
     testLongCode(64, 2);
 
     testDualCode(QStringLiteral("Хэмминг (7,4)"), Reference::hamming7_4());
+
+    testAxisLabelStep();
 
     testAutoTunedGrid();
 

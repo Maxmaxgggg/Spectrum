@@ -1,5 +1,7 @@
 #include "spectrumplot.h"
 
+#include "axisticks.h"
+
 #include "qcustomplot.h"
 
 #include <cmath>
@@ -100,9 +102,15 @@ void SpectrumPlot::refresh()
 
 void SpectrumPlot::updateTicker()
 {
-    const int size = xValues.size();
-    const double pixelsPerBar = double(plot->width()) / double(size);
-    const int step = int(std::ceil(LABEL_SPACING_PX / pixelsPerBar));
+    const int size  = xValues.size();
+    const int width = plot->width();
+
+    // Ноль означает схлопнутый график: подписывать нечего. Вся арифметика
+    // и её краевые случаи — в axisticks.h, там же и объяснение, почему это
+    // отдельная функция.
+    const int step = axisLabelStep(size, width, LABEL_SPACING_PX);
+    if (step == 0)
+        return;
 
     if (tickStep == step && !ticker.isNull())
         return;

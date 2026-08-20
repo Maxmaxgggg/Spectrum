@@ -31,6 +31,7 @@
     <ClInclude Include="compute\dualcode.h" />
     <ClInclude Include="compute\gridtuner.h" />
     <ClInclude Include="defines.h" />
+    <ClInclude Include="ui\axisticks.h" />
     <ClInclude Include="ui\format.h" />
     <ClInclude Include="ui\matrixlibrary.h" />
     <QtMoc Include="ui\matrixmenu.h" />
