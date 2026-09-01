@@ -28,6 +28,9 @@ public slots:
     void handleMatrixChanged(int rows, int cols);
     void handleSettingsRequested();
     void setInterfaceEnabled(bool enabled);
+    // Ставит настройки расчёта из поднятого автосохранения: иначе кнопка
+    // «Продолжить» искала бы запись другого алгоритма и не нашла бы её.
+    void applyFromAutosave(int algorithm, int enumType, int maxRows);
 private slots:
 
 private:

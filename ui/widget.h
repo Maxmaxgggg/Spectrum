@@ -42,6 +42,8 @@ public: signals:
     
     void sendSettingsToWorker( const QJsonObject& );
     void requestSettings();
+    // Настройки расчёта из поднятого автосохранения.
+    void applySettingsFromAutosave(int algorithm, int enumType, int maxRows);
 
 private slots:
 
@@ -78,7 +80,10 @@ private:
     AutosaveStore   autosave;
     QGraphicsOpacityEffect* saveLBLOpacityEffect;
     // состояние выполнения: Idle / Running / Paused
-    enum class RunState { Idle, Running, Paused };
+    // Loaded — из диалога поднято автосохранение: спектр и прогресс уже на
+    // экране, кнопка предлагает продолжить, и спрашивать при запуске второй
+    // раз незачем.
+    enum class RunState { Idle, Running, Paused, Loaded };
     RunState runState = RunState::Idle;
 
     // График спектра. Создаётся в конструкторе, когда виджет из .ui готов.
@@ -96,6 +101,9 @@ private:
 
     void setWorker();
     void showAutosaveDialog();
+    void applyAutosave(const Matrix& matrix, const AutosaveRecord& record);
+    // Пока матрица подставляется из записи, правкой её считать нельзя.
+    bool applyingAutosave = false;
     void setMatrixMenu();
     void setToolTips();
     void connectSettingsDialog();

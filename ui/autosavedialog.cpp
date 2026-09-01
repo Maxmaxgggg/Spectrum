@@ -20,27 +20,6 @@
 
 namespace {
 
-// Полное число операций расчёта — по нему считается процент готовности.
-// Через double: точность здесь не нужна, а биномы для кода длиной под тысячу
-// не помещаются никуда, кроме как в приблизительное число.
-double totalOperations(const AutosaveEntry& entry)
-{
-    const int rows = entry.rows;
-
-    if (entry.record.algorithm != ComputationSettings::SimpleXor)
-        return std::pow(2.0, double(rows));
-
-    const int maxRows = entry.record.maxRows > 0 ? qMin(entry.record.maxRows, rows) : rows;
-
-    double total = 0.0;
-    double term  = 1.0;               // C(rows, 0)
-    for (int r = 0; r <= maxRows; ++r) {
-        total += term;
-        term = term * double(rows - r) / double(r + 1);
-    }
-    return total;
-}
-
 QString formatBytes(qint64 bytes)
 {
     if (bytes >= 1024 * 1024)
@@ -129,7 +108,7 @@ QString AutosaveDialog::describeProgress(const AutosaveEntry& entry)
         return tr("готово до %1 строк").arg(record.maxRows);
     }
 
-    const double total = totalOperations(entry);
+    const double total = totalOperations(entry.record, entry.rows);
     if (total <= 0.0)
         return tr("%1 слов").arg(Format::count(record.state.doneOps));
 
@@ -244,8 +223,23 @@ void AutosaveDialog::loadMatrixOfSelected()
         return;
     }
 
-    emit matrixRequested(matrix);
+    // Вместе с матрицей уходит и сама запись: окно поднимет по ней спектр,
+    // прогресс и настройки расчёта, чтобы можно было сразу продолжить.
+    emit entryChosen(matrix, entryOf(selected.first()));
     accept();
+}
+
+AutosaveRecord AutosaveDialog::entryOf(QTreeWidgetItem* item) const
+{
+    const QString folder = item->data(0, FOLDER_ROLE).toString();
+    const auto algorithm = static_cast<ComputationSettings::Algorithm>(
+        item->data(0, ALGORITHM_ROLE).toInt());
+
+    for (const AutosaveEntry& entry : store->list())
+        if (entry.folder == folder && entry.record.algorithm == algorithm)
+            return entry.record;
+
+    return AutosaveRecord();
 }
 
 void AutosaveDialog::openFolder()

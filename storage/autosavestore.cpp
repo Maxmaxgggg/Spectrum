@@ -13,6 +13,7 @@
 #include <QTextStream>
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 
@@ -73,6 +74,25 @@ bool canResume(const AutosaveRecord& record, const ComputationSettings& settings
     // Ровная граница слоёв: посчитано всё до rOffset - 1 включительно, и
     // rOffset == maxRows + 1 означает «уже готово».
     return record.state.rOffset <= maxRows + 1;
+}
+
+double totalOperations(const AutosaveRecord& record, int rows)
+{
+    if (rows <= 0)
+        return 0.0;
+
+    if (record.algorithm != ComputationSettings::SimpleXor)
+        return std::pow(2.0, double(rows));
+
+    const int maxRows = record.maxRows > 0 ? qMin(record.maxRows, rows) : rows;
+
+    double total = 0.0;
+    double term  = 1.0;               // C(rows, 0)
+    for (int r = 0; r <= maxRows; ++r) {
+        total += term;
+        term = term * double(rows - r) / double(r + 1);
+    }
+    return total;
 }
 
 // ---------------------------------------------------------------- хранилище

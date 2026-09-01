@@ -74,6 +74,11 @@ struct AutosaveEntry
 // maxRows там не при чём.
 bool canResume(const AutosaveRecord& record, const ComputationSettings& settings);
 
+// Полное число операций расчёта записи — по нему считается процент готовности.
+// Через double: точность здесь не нужна, а сумма биномов для кода длиной под
+// тысячу ни во что целое не помещается.
+double totalOperations(const AutosaveRecord& record, int rows);
+
 class AutosaveStore
 {
 public:

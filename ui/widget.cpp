@@ -2,6 +2,7 @@
 #include "format.h"
 #include "matrixlibrary.h"
 #include "autosavedialog.h"
+#include "format.h"
 #include "matrixmenu.h"
 #include "spectrumplot.h"
 #include "ui_widget.h"
@@ -88,10 +89,48 @@ void MainWindow::setMatrixMenu()
 void MainWindow::showAutosaveDialog()
 {
     AutosaveDialog dialog(&autosave, this);
-    connect(&dialog, &AutosaveDialog::matrixRequested, this, [this](const Matrix& matrix) {
-        ui->matrixPTE->setPlainText(matrix.join(QLatin1Char('\n')));
-    });
+    connect(&dialog, &AutosaveDialog::entryChosen, this, &MainWindow::applyAutosave);
     dialog.exec();
+}
+
+// Поднимает состояние из записи: матрицу, настройки расчёта, накопленный
+// спектр и прогресс. Дальше кнопка предлагает продолжить с этого места.
+void MainWindow::applyAutosave(const Matrix& matrix, const AutosaveRecord& record)
+{
+    // handleMatrixChanged сбрасывает поднятое состояние — он для того и нужен,
+    // чтобы ловить правку матрицы руками. Своя подстановка правкой не считается.
+    applyingAutosave = true;
+    ui->matrixPTE->setPlainText(matrix.join(QLatin1Char('\n')));
+    applyingAutosave = false;
+
+    // Настройки берутся из записи. Без этого «Продолжить» искал бы сохранение
+    // другого алгоритма, не нашёл и молча начал бы с нуля.
+    emit applySettingsFromAutosave(int(record.algorithm), int(record.enumType),
+                                   record.maxRows);
+
+    // Спектр показывается сырым — ровно так же, как во время расчёта: у
+    // дуального кода преобразование Мак-Вильямс делается только в конце.
+    SpectrumFloat plot;
+    SpectrumText  text;
+    for (int w = 0; w < record.state.spectrum.size(); ++w) {
+        const quint64 value = record.state.spectrum.at(w);
+        plot.append(float(value));
+        if (value != 0)
+            text.append(QString::number(w) + " - " + QString::number(value));
+    }
+    handleUpdateSpectrumPlot(plot);
+    handleUpdateSpectrumPTE(text);
+
+    const double total = totalOperations(record, matrix.size());
+    const int percent = total > 0.0 ? int(100.0 * double(record.state.doneOps) / total) : 0;
+    ui->infoPBR->setValue(qBound(0, percent, 100));
+    ui->infoLBL->setText(tr("Загружено сохранение: перебрано %1 слов")
+                             .arg(Format::count(record.state.doneOps)));
+    ui->infoLBL->show();
+
+    runState = RunState::Loaded;
+    ui->executePBN->setText(UIStrings::CONTINUE_TEXT);
+    ui->executePBN->setToolTip(UIStrings::CONTINUE_TOOLTIP);
 }
 
 void MainWindow::setToolTips() {
@@ -135,6 +174,7 @@ void MainWindow::connectSettingsDialog()
     connect( this,     &MainWindow::matrixChanged,            settingsDialog, &SettingsDialog::handleMatrixChanged     );
     connect( this,     &MainWindow::setInterfaceEnabled,      settingsDialog, &SettingsDialog::setInterfaceEnabled     );
     connect( this,     &MainWindow::requestSettings,          settingsDialog, &SettingsDialog::handleSettingsRequested );
+    connect( this,     &MainWindow::applySettingsFromAutosave, settingsDialog, &SettingsDialog::applyFromAutosave       );
 
     // Записываем матрицу при получении
     connect( settingsDialog, &SettingsDialog::sendSettingsToWidget,
@@ -150,7 +190,8 @@ void MainWindow::on_executePBN_clicked()
 {
     // Одна и та же кнопка запускает, ставит на паузу и продолжает расчёт.
     switch (runState) {
-        case RunState::Idle:    startComputation();  break;
+        case RunState::Idle:
+        case RunState::Loaded:  startComputation();  break;
         case RunState::Running: pauseComputation();  break;
         case RunState::Paused:  resumeComputation(); break;
     }
@@ -181,6 +222,8 @@ QString MainWindow::matrixError() const
 
 void MainWindow::startComputation()
 {
+    const bool resuming = runState == RunState::Loaded;
+
     // Прошлый подбор к новому расчёту отношения не имеет.
     tunedGrid.clear();
 
@@ -210,17 +253,26 @@ void MainWindow::startComputation()
     workerThreadPtr->start();
     emit requestSettings();
 
-    if (hasCheckpoint()) {
+    // Запись подняли из диалога — пользователь уже сказал, что продолжает,
+    // и спрашивать второй раз незачем.
+    LoadMode mode = LoadMode::Reset;
+    if (resuming) {
+        mode = LoadMode::FromCheckpoint;
+    }
+    else if (hasCheckpoint()) {
         const auto reply = QMessageBox::question(this,
             tr("Найден спектр"),
             tr("Для текущих настроек обнаружен сохранённый спектр\n"
                "Продолжить вычисление с сохранённого состояния?"),
             QMessageBox::Yes | QMessageBox::No);
-
-        QMetaObject::invokeMethod(workerPtr, "initializeRunState", Qt::QueuedConnection,
-            Q_ARG(LoadMode, reply == QMessageBox::Yes ? LoadMode::FromCheckpoint
-                                                      : LoadMode::Reset));
+        if (reply == QMessageBox::Yes)
+            mode = LoadMode::FromCheckpoint;
     }
+
+    // Режим задаётся всегда, а не только при найденном сохранении: иначе
+    // воркер начинал бы с того состояния, что осталось от прошлого запуска.
+    QMetaObject::invokeMethod(workerPtr, "initializeRunState", Qt::QueuedConnection,
+                              Q_ARG(LoadMode, mode));
 
     QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection);
 
@@ -382,6 +434,13 @@ void MainWindow::showSaveLBL()
 }
 void MainWindow::handleMatrixChanged()
 {
+    // Матрицу правят руками — поднятое сохранение к ней больше не относится.
+    if (runState == RunState::Loaded && !applyingAutosave) {
+        runState = RunState::Idle;
+        ui->executePBN->setText(UIStrings::START_TEXT);
+        ui->executePBN->setToolTip(UIStrings::START_TOOLTIP);
+    }
+
     Matrix rows = ui->matrixPTE->toStringList();
     int maxLen = 0;
     for (const QString& row : rows)

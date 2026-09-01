@@ -185,6 +185,25 @@ void SettingsDialog::setInterfaceEnabled( bool enabled )
     }
 }
 
+void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int maxRows)
+{
+    if (QAbstractButton* button = algorithmBGP->button(algorithm))
+        button->setChecked(true);
+
+    if (algorithm == Algorithm::SimpleXor)
+        xorEnumType = static_cast<EnumerationType>(enumType);
+    if (maxRows > 0)
+        xorMaxRows = maxRows;
+
+    updateEnumTypeControls();
+
+    settings.algorithmType = static_cast<Algorithm>(algorithm);
+    settings.enumType      = static_cast<EnumerationType>(enumeratorBGP->checkedId());
+    settings.maxRows       = ui->maxRowsSPB->value();
+
+    emit sendSettingsToWidget(settings.toJson());
+}
+
 void SettingsDialog::handleMatrixChanged(int rows, int cols) {
     // Если число строк порождающей матрицы больше 63
     if (rows > 63) {

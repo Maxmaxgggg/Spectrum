@@ -7,6 +7,7 @@
 class QLabel;
 class QPushButton;
 class QTreeWidget;
+class QTreeWidgetItem;
 
 // Список автосохранений: что уже посчитано, насколько и когда.
 //
@@ -24,8 +25,9 @@ public:
     AutosaveDialog(AutosaveStore* store, QWidget* parent = nullptr);
 
 signals:
-    // Пользователь попросил вернуть матрицу записи в редактор.
-    void matrixRequested(const Matrix& matrix);
+    // Пользователь попросил поднять эту запись: матрица возвращается в
+    // редактор, а вместе с ней окно восстанавливает спектр и прогресс.
+    void entryChosen(const Matrix& matrix, const AutosaveRecord& record);
 
 private:
     void refresh();
@@ -38,6 +40,7 @@ private:
     // Строка состояния записи: «готово до 7 строк», «47 %».
     static QString describeProgress(const AutosaveEntry& entry);
     static QString describeAlgorithm(const AutosaveRecord& record);
+    AutosaveRecord entryOf(QTreeWidgetItem* item) const;
 
     AutosaveStore* store = nullptr;
 
