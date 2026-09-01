@@ -93,3 +93,20 @@ QString Format::count(quint64 n)
     // До тысячи сокращать нечего, а «847,00» вместо «847» только мешает.
     return QString::number(n);
 }
+
+QString Format::groupDigits(const QString& digits)
+{
+    QString out;
+    out.reserve(digits.size() + digits.size() / 3);
+
+    int seen = 0;
+    for (int i = digits.size() - 1; i >= 0; --i) {
+        if (!digits.at(i).isDigit())          // знак или мусор — дальше не режем
+            return digits;
+        if (seen && seen % 3 == 0)
+            out.prepend(QChar(0x00A0));       // неразрывный пробел: не переносится
+        out.prepend(digits.at(i));
+        ++seen;
+    }
+    return out;
+}

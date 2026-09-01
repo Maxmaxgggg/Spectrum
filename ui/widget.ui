@@ -22,6 +22,19 @@
     <item>
      <layout class="QHBoxLayout" name="horizontalLayout_2">
       <item>
+       <widget class="QToolButton" name="matrixToggleTBN">
+        <property name="checkable">
+         <bool>true</bool>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+        <property name="autoRaise">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
        <widget class="QLabel" name="matrixLBL">
         <property name="text">
          <string>Матрица кодовых слов:</string>
@@ -75,14 +88,8 @@
      </layout>
     </item>
     <item>
-     <widget class="QPlainTextEdit" name="spectrumPTE">
-      <property name="lineWrapMode">
-       <enum>QPlainTextEdit::NoWrap</enum>
-      </property>
-      <property name="readOnly">
-       <bool>true</bool>
-      </property>
-     </widget>
+     <widget class="QTableWidget" name="spectrumTBL">
+      </widget>
     </item>
     <item>
      <widget class="QCustomPlot" name="spectrumCPT" native="true" />

@@ -6,6 +6,9 @@ namespace Constants
     constexpr  int CONST_MEM_SIZE = 1 << 16;							// Размер константной памяти видеокарты
     constexpr  int WORD_SIZE = 8;								// Размер слова (под словом понимается тип данных quint64)
     constexpr  int MAX_CONST_WORDS = CONST_MEM_SIZE / WORD_SIZE;		// Максимальный размер массива в константной памяти видеокарты
+    // До скольких строк редактор матрицы разворачивается сам при первом
+    // запуске. Дальше пользы от него нет: прочитать всё равно нельзя.
+    constexpr  int MATRIX_ROWS_TO_EXPAND = 20;
     constexpr  int MAX_POSITIONS = 33;
     // Потолок кандидатов автоподбора: под столько нитей длинному пути надо
     // заранее заготовить стартовые маски.
@@ -30,6 +33,9 @@ namespace SettingsKeys
     constexpr const char COMPUTATION_SETTINGS[]     = "computationSettings";
     constexpr const char CODE_MATRIX[]              = "matrix";
     constexpr const char SPECTRUM_TEXT[]            = "spectrumText";
+    // Развёрнут ли редактор матрицы. Отсутствие ключа — первый запуск:
+    // тогда решает размер матрицы.
+    constexpr const char MATRIX_EXPANDED[]          = "matrixExpanded";
     constexpr const char SPECTRUM_VALUES[]          = "spectrumValues";
     constexpr const char MATRICES_JSON[]            = "matricesJson";
     // Тип перебора, выбранный для простого XOR. Хранится отдельно от

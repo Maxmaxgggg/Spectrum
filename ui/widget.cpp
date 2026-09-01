@@ -1,5 +1,8 @@
 #include "widget.h"
 #include "fonticons.h"
+
+#include <QHeaderView>
+#include <QTableWidget>
 #include "format.h"
 #include "matrixlibrary.h"
 #include "autosavedialog.h"
@@ -20,7 +23,7 @@ MainWindow::MainWindow(QWidget* parent)
     /********      УБРАТЬ В UI     ********/
         splitter = new QSplitter(this);
         splitter->setOrientation(Qt::Horizontal);
-        splitter->addWidget( ui->spectrumPTE );
+        splitter->addWidget( ui->spectrumTBL );
         splitter->addWidget( ui->spectrumCPT );
         ui->verticalLayout->insertWidget( 3, splitter );
         ui->verticalLayout->setStretch(1, 1);
@@ -44,7 +47,9 @@ MainWindow::MainWindow(QWidget* parent)
         });
 
 
+    setupSpectrumTable();
     loadSettings();
+    setupMatrixToggle();
     ui->spectrumCPT->installEventFilter(this);
     connectSettingsDialog();
     setWorker();
@@ -155,6 +160,98 @@ void MainWindow::updateExecuteButton()
             ui->executePBN->setIcon(FluentIcons::icon(this, FluentIcons::PLAY));
             break;
     }
+}
+
+void MainWindow::setupSpectrumTable()
+{
+    QTableWidget* const table = ui->spectrumTBL;
+
+    table->setColumnCount(2);
+    table->setHorizontalHeaderLabels({ tr("Вес"), tr("Число слов") });
+    table->verticalHeader()->setVisible(false);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setAlternatingRowColors(true);
+    table->setShowGrid(false);
+    table->setWordWrap(false);
+
+    // Вес — узкая колонка по содержимому, число занимает всё остальное.
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->horizontalHeader()->setHighlightSections(false);
+
+    // Строки плотнее подписи: спектр длинного кода — это сотни строк.
+    table->verticalHeader()->setDefaultSectionSize(
+        table->fontMetrics().height() + 4);
+}
+
+// Заполняет таблицу строками вида «45 - 153263», как их присылает воркер.
+// Разбор, а не приём готовых пар: тот же формат уходит в тесты и в дуальный
+// расчёт, где компоненты считаются в GMP и в quint64 не помещаются.
+void MainWindow::setSpectrumRows(const SpectrumText& lines)
+{
+    lastSpectrum = lines;
+
+    QTableWidget* const table = ui->spectrumTBL;
+
+    // Позиция прокрутки сохраняется: спектр обновляется раз в секунду, и без
+    // этого список дёргался бы в начало на каждом обновлении.
+    QScrollBar* const bar = table->verticalScrollBar();
+    const int scroll = bar->value();
+
+    table->setUpdatesEnabled(false);
+    table->setRowCount(lines.size());
+
+    for (int row = 0; row < lines.size(); ++row) {
+        const QString& line = lines.at(row);
+        const int dash = line.indexOf(QStringLiteral(" - "));
+
+        const QString weight = dash < 0 ? line : line.left(dash);
+        const QString count  = dash < 0 ? QString() : line.mid(dash + 3);
+
+        QTableWidgetItem* const weightItem = new QTableWidgetItem(weight);
+        weightItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        QTableWidgetItem* const countItem =
+            new QTableWidgetItem(Format::groupDigits(count));
+        countItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        table->setItem(row, 0, weightItem);
+        table->setItem(row, 1, countItem);
+    }
+
+    table->setUpdatesEnabled(true);
+    bar->setValue(scroll);
+}
+
+void MainWindow::setupMatrixToggle()
+{
+    connect(ui->matrixToggleTBN, &QToolButton::toggled,
+            this, &MainWindow::setMatrixExpanded);
+
+    QSettings settings;
+    if (settings.contains(SettingsKeys::MATRIX_EXPANDED)) {
+        setMatrixExpanded(settings.value(SettingsKeys::MATRIX_EXPANDED).toBool());
+        return;
+    }
+
+    // Первый запуск: разворачиваем, только если матрица заведомо помещается.
+    // На коде (336,96) развёрнутый редактор занимает пол-окна и показывает
+    // стену цифр, в которой всё равно ничего не разобрать.
+    setMatrixExpanded(ui->matrixPTE->toStringList().size() <= Constants::MATRIX_ROWS_TO_EXPAND);
+}
+
+void MainWindow::setMatrixExpanded(bool expanded)
+{
+    ui->matrixPTE->setVisible(expanded);
+
+    ui->matrixToggleTBN->setChecked(expanded);
+    ui->matrixToggleTBN->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+    ui->matrixToggleTBN->setToolTip(expanded ? tr("Свернуть матрицу")
+                                             : tr("Развернуть матрицу"));
+
+    QSettings settings;
+    settings.setValue(SettingsKeys::MATRIX_EXPANDED, expanded);
 }
 
 void MainWindow::setToolTips() {
@@ -391,13 +488,7 @@ void MainWindow::handleUpdateSpectrumPlot(const SpectrumFloat spectrum)
 
 void MainWindow::handleUpdateSpectrumPTE( const SpectrumText spectrum )
 {
-    QString str = spectrum.join('\n');
-    if (!str.isEmpty() && str.endsWith('\n'))
-        str.chop(1);
-    QScrollBar *vbar = ui->spectrumPTE->verticalScrollBar();
-    int pos = vbar->value();
-    ui->spectrumPTE->setPlainText( str );
-    vbar->setValue(pos);
+    setSpectrumRows(spectrum);
 }
 // Сетку показываем: иначе при включённом автоподборе непонятно, на чём
 // программа в итоге считает и почему время отличается от прошлого запуска.
@@ -547,7 +638,7 @@ void MainWindow::saveSettings()
     if( splitter )
         s.setValue(SettingsKeys::SPLITTER_STATE,  this->splitter->saveState()    );
     s.setValue(SettingsKeys::CODE_MATRIX,     ui->matrixPTE->toPlainText()   );
-    s.setValue(SettingsKeys::SPECTRUM_TEXT,   ui->spectrumPTE->toPlainText() );
+    s.setValue(SettingsKeys::SPECTRUM_TEXT,   lastSpectrum.join(QLatin1Char('\n')) );
     s.setValue(SettingsKeys::WIDGET_GEOMETRY, this->saveGeometry()           );
     QVariantList values;
     for (double v : spectrumPlot->values())
@@ -563,7 +654,8 @@ void MainWindow::loadSettings()
 
     this->restoreGeometry(                    s.value(SettingsKeys::WIDGET_GEOMETRY                ).toByteArray()       );
     if( splitter ) splitter->restoreState(    s.value(SettingsKeys::SPLITTER_STATE                 ).toByteArray()       );
-    ui->spectrumPTE->setPlainText(            s.value(SettingsKeys::SPECTRUM_TEXT                  ).toString()          );
+    setSpectrumRows( s.value(SettingsKeys::SPECTRUM_TEXT).toString()
+                          .split(QLatin1Char('\n'), Qt::SkipEmptyParts) );
     ui->matrixPTE->setPlainText(              s.value(SettingsKeys::CODE_MATRIX                    ).toString()          );
     if (s.contains(SettingsKeys::SPECTRUM_VALUES)) {
         QVariantList values = s.value(SettingsKeys::SPECTRUM_VALUES).toList();

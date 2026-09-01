@@ -105,6 +105,19 @@ private:
     // добавить состояние, как подпись и значок разъезжались.
     void updateExecuteButton();
 
+    // Спектр показывается таблицей из двух колонок: вес и число слов.
+    // Одним полем числа было не сравнить — они не выровнены и без разрядов.
+    void setupSpectrumTable();
+    void setSpectrumRows(const SpectrumText& lines);
+
+    // Редактор матрицы сворачивается: на настоящих кодах это стена из нулей
+    // и единиц во весь экран, которую всё равно не прочитать.
+    void setupMatrixToggle();
+    void setMatrixExpanded(bool expanded);
+
+    // Последний показанный спектр — его же и сохраняем между запусками.
+    SpectrumText lastSpectrum;
+
     void showAutosaveDialog();
     void applyAutosave(const Matrix& matrix, const AutosaveRecord& record);
     // Пока матрица подставляется из записи, правкой её считать нельзя.
