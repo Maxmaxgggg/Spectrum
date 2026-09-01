@@ -46,6 +46,10 @@ MainWindow::MainWindow(QWidget* parent)
     setMatrixMenu();
     setToolTips();
     emit handleMatrixChanged();
+    // Старые чекпоинты лежали в реестре, по мегабайту с матрицей на запись.
+    // Переносим их в файлы один раз и вычищаем ветку.
+    autosave.migrateFromRegistry();
+
     taskbar = std::make_unique<TaskbarProgress>(this);
 }
 
@@ -428,29 +432,12 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
 bool MainWindow::hasCheckpoint() const
 {
-    // Считаем хеш текущих настроек
-    quint64 hash = settings.computeHash();
-    // Хеш - имя чекпоинта
-    QString group = QString("checkpoints/%1").arg(hash);
-
-    QSettings s;
-    s.beginGroup(group);
-
-    // Проверяем, есть ли чекпоинт вообще
-    if (!s.contains("settings")) {
-        s.endGroup();
+    AutosaveRecord record;
+    if (!autosave.load(settings.matrix, settings.algorithmType, record))
         return false;
-    }
 
-    // Защита от коллизий
-    QJsonObject savedSettingsObj = s.value("settings").toJsonObject();
-    ComputationSettings saved = ComputationSettings::fromJson(savedSettingsObj);
-    // Переписать
-    if (!(saved == settings)/* && !(saved <= settings) */) {
-        s.endGroup();
-        return false;
-    }
-    return true;
+    // Запись может оказаться непригодной: она ушла дальше, чем просят сейчас.
+    return canResume(record, settings);
 }
 
 // Применить настройки

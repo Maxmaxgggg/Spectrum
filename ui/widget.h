@@ -7,6 +7,7 @@
 #include "workwithmatrix.h"
 #include "defines.h"
 
+#include "autosavestore.h"
 #include "matrixmenu.h"
 #include "spectrumplot.h"
 #include "taskbarprogress.h"
@@ -72,6 +73,9 @@ private:
     QThread        *workerThreadPtr  = nullptr;
     SettingsDialog *settingsDialog   = nullptr;
     MatrixMenu     *matrixMenu       = nullptr;
+
+    // Автосохранения расчёта на диске.
+    AutosaveStore   autosave;
     QGraphicsOpacityEffect* saveLBLOpacityEffect;
     // состояние выполнения: Idle / Running / Paused
     enum class RunState { Idle, Running, Paused };

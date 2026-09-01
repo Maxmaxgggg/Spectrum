@@ -14,6 +14,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="..\compute\worker.cpp" />
     <ClCompile Include="..\compute\dualcode.cpp" />
+    <ClCompile Include="..\storage\autosavestore.cpp" />
     <ClCompile Include="..\compute\gridtuner.cpp" />
     <ClCompile Include="..\helpers\workwithmatrix.cpp" />
   </ItemGroup>
@@ -75,7 +76,7 @@
     <ClCompile>
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(SpectrumRoot);$(SpectrumRoot)compute;$(SpectrumRoot)helpers;$(SpectrumRoot)tests</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(SpectrumRoot);$(SpectrumRoot)compute;$(SpectrumRoot)storage;$(SpectrumRoot)helpers;$(SpectrumRoot)tests</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4146</DisableSpecificWarnings>
       <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING</PreprocessorDefinitions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -90,7 +91,7 @@
     <CudaCompile>
       <CodeGeneration>compute_50,sm_50;compute_86,sm_86;compute_50,compute_50</CodeGeneration>
       <AdditionalOptions>--extended-lambda %(AdditionalOptions)</AdditionalOptions>
-      <Include>$(SpectrumRoot)compute;$(SpectrumRoot);$(VcpkgStaticRoot)include;%(Include)</Include>
+      <Include>$(SpectrumRoot)compute;$(SpectrumRoot)storage;$(SpectrumRoot);$(VcpkgStaticRoot)include;%(Include)</Include>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">

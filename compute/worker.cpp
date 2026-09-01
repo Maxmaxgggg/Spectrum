@@ -1187,24 +1187,30 @@ void Worker::updateSpectrumDual(int numOfCols, int numOfRows)
         emit updateSpectrumPlot(spectrumCopyPlot);
     }
 }
-void Worker::makeCheckpoint(int numOfCols)
+void Worker::makeCheckpoint(int numOfCols, bool finished)
 {
-    // 1. Обновляем spectrum из GPU буфера
     runState.spectrum.resize(numOfCols + 1);
-    for (int i = 0; i < numOfCols + 1; i++) {
+    for (int i = 0; i < numOfCols + 1; i++)
         runState.spectrum[i] = h_spectrum[i];
-    }
-    // 2. Хеш → имя группы
-    quint64 hash = settings.computeHash();
-    QString group = QString("checkpoints/%1").arg(hash);
-    QSettings s;
-    s.beginGroup(group);
-    // 3. Сохраняем settings
-    s.setValue("settings", settings.toJson());
-    // 4. Сохраняем runState
-    s.setValue("runState", runState.toJson());
-    s.endGroup();
+
+    AutosaveRecord record;
+    record.algorithm = settings.algorithmType;
+    record.enumType  = settings.enumType;
+    record.maxRows   = settings.maxRows;
+    record.finished  = finished;
+    record.savedAt   = QDateTime::currentDateTime();
+    record.state     = runState;
+
+    // Ключ — матрица и алгоритм. Сама матрица в запись не попадает: она лежит
+    // одним файлом на папку, иначе на коде (1000,997) каждое сохранение тащило
+    // бы с собой мегабайт нулей и единиц.
+    autosave.save(settings.matrix, record);
     emit showSaveLBL();
+}
+
+void Worker::setAutosaveRoot(const QString& dir)
+{
+    autosave = AutosaveStore(dir);
 }
 // Точка входа расчёта. Ловит всё, что может бросить вычислитель: раньше
 // ошибка CUDA звала abort() и приложение молча исчезало, а переполнение в
@@ -1463,10 +1469,8 @@ void Worker::dispatchComputation(const CodeGeometry& g)
 // Забирает итоговый спектр, рассылает сигналы и освобождает ресурсы.
 void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point startedAt)
 {
-    // Состояние сброшено, но сам чекпоинт на диске остаётся
-    initializeRunState(LoadMode::Reset);
-
     if (cancelled.load()) {
+        initializeRunState(LoadMode::Reset);
         emit finished(Constants::ERROR_OCCURED);
         emit updateInfoPBR(0);
         updateSpectrum(int(g.numOfCols));
@@ -1479,6 +1483,29 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
         CUDA_CALL(cudaMemcpy(h_spectrum.get(), d_spectrum.get(),
                              g.spectrumSize * sizeof(quint64), cudaMemcpyDeviceToHost));
     }
+
+    // Автосохранение остаётся и после успеха. Слои по числу складываемых строк
+    // независимы и идут по возрастанию, поэтому досчитанный до maxRows спектр —
+    // это ровно начало расчёта до большего maxRows. Состояние помечается как
+    // «всё до maxRows пройдено», и следующий запуск продолжит со следующего
+    // слоя, а не с нуля.
+    if (settings.algorithmType == ComputationSettings::SimpleXor) {
+        runState.rOffset     = g.maxRows + 1;
+        runState.chunkOffset = 0;
+    }
+    else {
+        // У кода Грея слоёв нет: пройденным считается весь диапазон масок.
+        runState.rOffset     = 0;
+        runState.chunkOffset = 1ULL << g.numOfRows;
+    }
+    runState.doneOps    = progress.doneOps();
+    runState.elapsedSec = duration_cast<seconds>(steady_clock::now() - startedAt).count();
+
+    // Пишется до преобразования Мак-Вильямс: в записи должен лежать сырой
+    // спектр перебираемой матрицы, с него и продолжают.
+    makeCheckpoint(int(g.numOfCols), true);
+
+    initializeRunState(LoadMode::Reset);
 
     // Дуальный расчёт даёт спектр проверочной матрицы — исходный получается
     // из него преобразованием Мак-Вильямс.
@@ -1598,37 +1625,14 @@ void Worker::initializeRunState(LoadMode lm)
         return;
     }
     else {
-        // Считаем хеш текущих настроек
-        quint64 hash = settings.computeHash();
-        // Хеш - имя чекпоинта
-        QString group = QString("checkpoints/%1").arg(hash);
-
-        QSettings s;
-        s.beginGroup(group);
-
-        // Проверяем, есть ли чекпоинт вообще
-        if (!s.contains("runState")){
-            s.endGroup();
+        AutosaveRecord record;
+        if (!autosave.load(settings.matrix, settings.algorithmType, record)
+            || !canResume(record, settings)) {
             initializeRunState(LoadMode::Reset);
             return;
         }
 
-        // --- Проверка settings ---
-        QJsonObject savedSettingsObj = s.value("settings").toJsonObject();
-        ComputationSettings saved = ComputationSettings::fromJson(savedSettingsObj);
-
-        // Защита от коллизий. Если случилась - сбрасываем RunState
-        if (!(saved == settings)) {
-            s.endGroup();
-            initializeRunState(LoadMode::Reset);
-            return;
-        }
-
-        // Если всё ок, то загружаем RunState
-        QJsonObject runObj = s.value("runState").toJsonObject();
-        runState = RunState::fromJson(runObj);
-
-        s.endGroup();
+        runState = record.state;
         // Ставим флаг, что надо выгрузить спектр
         exportSpectrum = true;
     }

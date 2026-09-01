@@ -19,6 +19,7 @@
     <ClCompile Include="qcustomplot.cpp" />
     <ClCompile Include="ui\filterplaintextedit.cpp" />
     <ClCompile Include="ui\settingsdialog.cpp" />
+    <ClCompile Include="storage\autosavestore.cpp" />
     <ClCompile Include="ui\format.cpp" />
     <ClCompile Include="ui\matrixlibrary.cpp" />
     <ClCompile Include="ui\matrixmenu.cpp" />
@@ -31,6 +32,7 @@
     <ClInclude Include="compute\dualcode.h" />
     <ClInclude Include="compute\gridtuner.h" />
     <ClInclude Include="defines.h" />
+    <ClInclude Include="storage\autosavestore.h" />
     <ClInclude Include="ui\axisticks.h" />
     <ClInclude Include="ui\format.h" />
     <ClInclude Include="ui\matrixlibrary.h" />
@@ -125,7 +127,7 @@
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(ProjectDir)helpers;$(ProjectDir)ui;$(ProjectDir)ui\icons;$(ProjectDir)compute;$(ProjectDir)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(ProjectDir)helpers;$(ProjectDir)ui;$(ProjectDir)ui\icons;$(ProjectDir)compute;$(ProjectDir)storage;$(ProjectDir)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4146</DisableSpecificWarnings>
       <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING</PreprocessorDefinitions>
     </ClCompile>
@@ -140,7 +142,7 @@
            остаётся для карт новее перечисленных. -->
       <CodeGeneration>compute_50,sm_50;compute_86,sm_86;compute_50,compute_50</CodeGeneration>
       <AdditionalOptions>--extended-lambda %(AdditionalOptions)</AdditionalOptions>
-      <Include>$(ProjectDir)compute;$(ProjectDir);$(VcpkgStaticRoot)include;%(Include)</Include>
+      <Include>$(ProjectDir)compute;$(ProjectDir)storage;$(ProjectDir);$(VcpkgStaticRoot)include;%(Include)</Include>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -148,7 +150,7 @@
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(ProjectDir)helpers;$(ProjectDir)ui;$(ProjectDir)ui\icons;$(ProjectDir)compute;$(ProjectDir)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(ProjectDir)helpers;$(ProjectDir)ui;$(ProjectDir)ui\icons;$(ProjectDir)compute;$(ProjectDir)storage;$(ProjectDir)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4146</DisableSpecificWarnings>
       <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING</PreprocessorDefinitions>
     </ClCompile>
@@ -156,7 +158,7 @@
       <CodeGeneration>compute_50,sm_50;compute_86,sm_86;compute_50,compute_50</CodeGeneration>
       <CudaRuntime>Static</CudaRuntime>
       <AdditionalOptions>--extended-lambda %(AdditionalOptions)</AdditionalOptions>
-      <Include>$(ProjectDir)compute;$(ProjectDir);$(VcpkgStaticRoot)include;%(Include)</Include>
+      <Include>$(ProjectDir)compute;$(ProjectDir)storage;$(ProjectDir);$(VcpkgStaticRoot)include;%(Include)</Include>
     </CudaCompile>
     <Link>
       <AdditionalDependencies>cudart_static.lib;%(AdditionalDependencies);cudart.lib;cudadevrt.lib;gmpxx.lib;gmp.lib</AdditionalDependencies>

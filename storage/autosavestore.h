@@ -1,0 +1,120 @@
+#pragma once
+
+#include "settings.h"
+#include "types.h"
+
+#include <QDateTime>
+#include <QString>
+#include <QVector>
+
+// Хранилище автосохранений расчёта.
+//
+// Раньше всё лежало в реестре: по записи на хеш настроек, и в каждой — своя
+// копия матрицы. На матрице 1000x997 это два мегабайта в HKCU за запись, а
+// удалять их было нечем вовсе.
+//
+// Теперь на диске, по папке на матрицу:
+//
+//     autosave/
+//       49x16-a3f19c2b/
+//         matrix.txt        сама матрица, одна на все записи этой папки
+//         xor.json          автосохранение расчёта простым XOR
+//         gray.json         ... кодом Грея
+//       1000x997-5b2ac190/
+//         ...
+//
+// Имя папки — размер кода, как он показан в интерфейсе, плюс восемь знаков
+// SHA-1 от текста матрицы: размеров мало, а матриц одного размера может быть
+// сколько угодно.
+//
+// Ключ записи — матрица и алгоритм, и больше ничего. Число потоков, блоков и
+// нитей, устройство и даже тип перебора в ключ не входят: спектр от них не
+// зависит (это проверяется тестами переноса), а раньше входили, и смена
+// спинбокса осиротила бы сохранение на ровном месте.
+struct AutosaveRecord
+{
+    ComputationSettings::Algorithm       algorithm = ComputationSettings::SimpleXor;
+    ComputationSettings::EnumerationType enumType  = ComputationSettings::Full;
+
+    // До скольких строк шёл расчёт.
+    int  maxRows  = 0;
+    // Слои до maxRows включительно посчитаны полностью.
+    bool finished = false;
+
+    QDateTime savedAt;
+    RunState  state;
+
+    QJsonObject toJson() const;
+    static AutosaveRecord fromJson(const QJsonObject& obj);
+};
+
+// Строка списка для диалога управления. Матрица сюда не читается: она бывает
+// в мегабайт, а размеры кода видны прямо из имени папки.
+struct AutosaveEntry
+{
+    QString folder;
+    int     cols  = 0;
+    int     rows  = 0;
+    qint64  bytes = 0;
+
+    AutosaveRecord record;
+};
+
+// Годится ли запись для расчёта с такими настройками.
+//
+// Слои по числу складываемых строк независимы и перебираются по возрастанию,
+// поэтому сохранение, дошедшее до слоя r, — это законное начало любого расчёта
+// с maxRows >= r. Обратно нельзя: в накопленном спектре уже учтён слой,
+// которого при меньшем maxRows быть не должно, и результат вышел бы завышен.
+//
+// Отдельно учитывается недосчитанный слой: если chunkOffset не ноль, часть
+// слоя rOffset уже в спектре, и остановиться раньше этого слоя нельзя.
+//
+// У кода Грея и дуального расчёта слоёв нет — маски нумеруются сплошь, и
+// maxRows там не при чём.
+bool canResume(const AutosaveRecord& record, const ComputationSettings& settings);
+
+class AutosaveStore
+{
+public:
+    // Пустой путь — стандартное место приложения. Явный нужен тестам.
+    explicit AutosaveStore(const QString& rootDir = QString());
+
+    QString rootPath() const { return root; }
+
+    // <столбцов>x<строк>-<8 знаков SHA-1 от текста матрицы>
+    static QString folderName(const Matrix& matrix);
+
+    bool save(const Matrix& matrix, const AutosaveRecord& record);
+    // false, если записи нет или файл не читается.
+    bool load(const Matrix& matrix, ComputationSettings::Algorithm algorithm,
+              AutosaveRecord& out) const;
+    bool contains(const Matrix& matrix, ComputationSettings::Algorithm algorithm) const;
+
+    // Удаляет одну запись; вместе с последней уходит и папка матрицы.
+    bool remove(const Matrix& matrix, ComputationSettings::Algorithm algorithm);
+    bool removeFolder(const QString& folder);
+    void removeAll();
+
+    // Всё содержимое, свежие записи первыми.
+    QVector<AutosaveEntry> list() const;
+
+    // Матрица из папки — нужна диалогу, чтобы вернуть её в редактор.
+    Matrix matrixOf(const QString& folder) const;
+
+    // Оставляет не больше maxRecords записей и удаляет всё старше maxAgeDays.
+    // Ноль в любом из пределов означает «не ограничивать».
+    void applyRetention(int maxRecords, int maxAgeDays);
+
+    // Переносит записи из старой ветки реестра и стирает её. Возвращает,
+    // сколько записей перенесено. Из нескольких записей одной матрицы и
+    // алгоритма остаётся самая дальняя по числу операций: раньше в ключ
+    // входили параметры запуска, и одна и та же задача плодила копии.
+    int migrateFromRegistry();
+
+private:
+    QString folderPath(const Matrix& matrix) const;
+    static QString fileNameFor(ComputationSettings::Algorithm algorithm);
+
+    QString root;
+};

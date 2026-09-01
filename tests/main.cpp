@@ -9,6 +9,7 @@
 // (float), не теряет разрядность на больших значениях.
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QJsonObject>
 #include <QSettings>
@@ -19,6 +20,7 @@
 // worker.h тянет gmpxx.h, где есть std::numeric_limits<...>::min(). Его нужно
 // разобрать до windows.h, иначе макросы min/max из windows.h ломают тело класса.
 #include "worker.h"
+#include "autosavestore.h"
 #include "reference.h"
 #include "ui/axisticks.h"
 
@@ -31,6 +33,7 @@
 using Reference::Spectrum;
 using Algorithm     = ComputationSettings::Algorithm;
 using ComputeDevice = ComputationSettings::ComputeDevice;
+using EnumerationType = ComputationSettings::EnumerationType;
 
 static QTextStream out(stdout);
 static int g_passed = 0;
@@ -102,6 +105,20 @@ static ComputationSettings makeSettings(const RunConfig& cfg)
     return s;
 }
 
+// Автосохранения на время прогона складываются в свой каталог: боевой лежит
+// в AppData пользователя, и топтать его тестами нельзя.
+static QString autosaveRoot()
+{
+    static const QString dir =
+        QDir::tempPath() + QStringLiteral("/SpectrumTests-autosave");
+    return dir;
+}
+
+static AutosaveStore testStore()
+{
+    return AutosaveStore(autosaveRoot());
+}
+
 // Прогоняет расчёт синхронно и возвращает итоговый спектр.
 //
 // loadMode задаёт, начинать с нуля или продолжить с сохранённого состояния.
@@ -112,6 +129,7 @@ static Spectrum runWorker(const RunConfig& cfg,
                           quint64  stopAfterOps       = 0)
 {
     Worker worker;
+    worker.setAutosaveRoot(autosaveRoot());
     Spectrum captured;
     bool errored = false;
     QString errorMessage;
@@ -136,12 +154,10 @@ static Spectrum runWorker(const RunConfig& cfg,
     return stripZeros(captured);
 }
 
-// Стирает все сохранённые чекпоинты, чтобы прогон не зависел от предыдущего.
+// Стирает все сохранённые записи, чтобы прогон не зависел от предыдущего.
 static void clearCheckpoints()
 {
-    QSettings s;
-    s.remove(QStringLiteral("checkpoints"));
-    s.sync();
+    testStore().removeAll();
 }
 
 // Полное число операций, которое должен выполнить расчёт при данных настройках.
@@ -160,20 +176,14 @@ static quint64 expectedTotalOps(const RunConfig& cfg)
     return total;
 }
 
-// Сколько операций записано в единственном сохранённом чекпоинте.
-// -1 — чекпоинта нет вовсе.
+// Сколько операций записано в единственном сохранённом автосохранении.
+// -1 — записи нет вовсе.
 static qint64 savedDoneOps()
 {
-    QSettings s;
-    s.beginGroup(QStringLiteral("checkpoints"));
-    const QStringList groups = s.childGroups();
-    if (groups.isEmpty()) return -1;
-
-    s.beginGroup(groups.first());
-    const QJsonObject runState = s.value(QStringLiteral("runState")).toJsonObject();
-    if (runState.isEmpty()) return -1;
-
-    return runState[QStringLiteral("doneOps")].toVariant().toLongLong();
+    const QVector<AutosaveEntry> entries = testStore().list();
+    if (entries.isEmpty())
+        return -1;
+    return qint64(entries.first().record.state.doneOps);
 }
 
 // ------------------------------------------------------------------ проверка
@@ -572,6 +582,7 @@ static void testCheckpointPortability()
 static QPair<int, int> tunedGridFor(const RunConfig& cfg, bool verbose = false)
 {
     Worker worker;
+    worker.setAutosaveRoot(autosaveRoot());
     QPair<int, int> grid(0, 0);
 
     QObject::connect(&worker, &Worker::gridTuned,
@@ -740,6 +751,237 @@ static void testAutoTunedCheckpoints()
     checkResume(QStringLiteral("Грей: подбор -> без подбора"), grayTuned, gray, 2000000, 2000000);
 }
 
+// ------------------------------------------------- хранилище автосохранений
+
+static void expectStore(const QString& name, bool condition)
+{
+    if (condition) { ++g_passed; out << "  ok       " << name << Qt::endl; }
+    else           { ++g_failed; out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl; }
+}
+
+static void testAutosaveStore()
+{
+    out << Qt::endl << QStringLiteral("Хранилище автосохранений") << Qt::endl;
+
+    const QString root = QDir::tempPath() + QStringLiteral("/SpectrumTests-store");
+    QDir(root).removeRecursively();
+    AutosaveStore store(root);
+
+    const Matrix a = Reference::identity(8);
+    Matrix b = Reference::identity(8);
+    b[0] = QStringLiteral("11000000");   // тот же размер, другая матрица
+
+    // Имя папки: размер как в интерфейсе плюс хеш. Один размер, разные матрицы —
+    // разные папки, иначе вторая затёрла бы matrix.txt первой.
+    expectStore(QStringLiteral("имя папки начинается с размера кода"),
+                AutosaveStore::folderName(a).startsWith(QStringLiteral("8x8-")));
+    expectStore(QStringLiteral("имя папки одно и то же при повторном вызове"),
+                AutosaveStore::folderName(a) == AutosaveStore::folderName(a));
+    expectStore(QStringLiteral("матрицы одного размера не сталкиваются"),
+                AutosaveStore::folderName(a) != AutosaveStore::folderName(b));
+
+    AutosaveRecord record;
+    record.algorithm = Algorithm::SimpleXor;
+    record.enumType  = EnumerationType::Partial;
+    record.maxRows   = 4;
+    record.finished  = false;
+    record.savedAt   = QDateTime::currentDateTime();
+    record.state.rOffset     = 3;
+    record.state.chunkOffset = 17;
+    record.state.doneOps     = 1234;
+    record.state.elapsedSec  = 42;
+    record.state.spectrum    = QVector<quint64>{ 1, 0, 5, 9 };
+
+    expectStore(QStringLiteral("запись сохраняется"), store.save(a, record));
+
+    AutosaveRecord back;
+    const bool loaded = store.load(a, Algorithm::SimpleXor, back);
+    expectStore(QStringLiteral("запись читается обратно"), loaded);
+    expectStore(QStringLiteral("состояние не изменилось при записи и чтении"),
+                loaded && back.state.rOffset == record.state.rOffset
+                       && back.state.chunkOffset == record.state.chunkOffset
+                       && back.state.doneOps == record.state.doneOps
+                       && back.state.spectrum == record.state.spectrum
+                       && back.maxRows == record.maxRows
+                       && back.enumType == record.enumType);
+
+    expectStore(QStringLiteral("чужой алгоритм не подхватывается"),
+                !store.load(a, Algorithm::GrayCode, back));
+    expectStore(QStringLiteral("чужая матрица не подхватывается"),
+                !store.load(b, Algorithm::SimpleXor, back));
+
+    // Матрица лежит одним файлом на папку, а не в каждой записи: на коде
+    // (1000,997) это разница между мегабайтом и мегабайтом на каждое
+    // сохранение.
+    AutosaveRecord gray = record;
+    gray.algorithm = Algorithm::GrayCode;
+    store.save(a, gray);
+    const QDir folder(root + QLatin1Char('/') + AutosaveStore::folderName(a));
+    expectStore(QStringLiteral("матрица одна на папку, записей две"),
+                folder.entryList(QStringList() << QStringLiteral("*.json"), QDir::Files).size() == 2
+                && folder.entryList(QStringList() << QStringLiteral("matrix.txt"), QDir::Files).size() == 1);
+    expectStore(QStringLiteral("матрица читается из папки без изменений"),
+                store.matrixOf(AutosaveStore::folderName(a)) == a);
+
+    expectStore(QStringLiteral("в списке обе записи"), store.list().size() == 2);
+
+    // Пока в папке есть другие записи, она остаётся.
+    store.remove(a, Algorithm::GrayCode);
+    expectStore(QStringLiteral("удаление одной записи не трогает соседнюю"),
+                store.contains(a, Algorithm::SimpleXor) && !store.contains(a, Algorithm::GrayCode));
+    store.remove(a, Algorithm::SimpleXor);
+    expectStore(QStringLiteral("с последней записью уходит и папка матрицы"),
+                !folder.exists());
+
+    // Ограничение по числу записей: остаются самые свежие.
+    for (int i = 0; i < 5; ++i) {
+        Matrix m = Reference::identity(8);
+        m[0] = QStringLiteral("1000000") + QString::number(i % 2);
+        m[1] = QString::number(i) + QStringLiteral("1000000").mid(1);
+        AutosaveRecord r = record;
+        r.savedAt = QDateTime::currentDateTime().addDays(-i);
+        store.save(m, r);
+    }
+    store.applyRetention(3, 0);
+    expectStore(QStringLiteral("лимит по числу записей соблюдается"),
+                store.list().size() == 3);
+
+    store.applyRetention(0, 1);
+    const QVector<AutosaveEntry> left = store.list();
+    bool allFresh = true;
+    for (const AutosaveEntry& e : left)
+        if (e.record.savedAt.daysTo(QDateTime::currentDateTime()) > 1)
+            allFresh = false;
+    expectStore(QStringLiteral("лимит по возрасту соблюдается"), allFresh);
+
+    store.removeAll();
+    expectStore(QStringLiteral("удаление всего чистит каталог"), store.list().isEmpty());
+    QDir(root).removeRecursively();
+}
+
+// Годность записи для расчёта с другим maxRows. Слои по числу складываемых
+// строк независимы, поэтому вперёд продолжать можно, а назад нельзя.
+static void testCanResume()
+{
+    out << Qt::endl << QStringLiteral("Годность автосохранения") << Qt::endl;
+
+    ComputationSettings settings;
+    settings.algorithmType = Algorithm::SimpleXor;
+    settings.maxRows       = 7;
+
+    AutosaveRecord record;
+    record.algorithm = Algorithm::SimpleXor;
+
+    record.state.rOffset = 5;
+    expectStore(QStringLiteral("оборванный на слое 5 годится для maxRows 7"),
+                canResume(record, settings));
+
+    record.state.rOffset = 8;   // досчитано всё до maxRows = 7
+    expectStore(QStringLiteral("досчитанный до 7 годится для maxRows 7"),
+                canResume(record, settings));
+
+    settings.maxRows = 8;
+    expectStore(QStringLiteral("досчитанный до 7 годится для maxRows 8"),
+                canResume(record, settings));
+
+    settings.maxRows = 6;
+    expectStore(QStringLiteral("досчитанный до 7 НЕ годится для maxRows 6"),
+                !canResume(record, settings));
+
+    record.state.rOffset = 5;
+    settings.maxRows = 3;
+    expectStore(QStringLiteral("ушедший до слоя 5 НЕ годится для maxRows 3"),
+                !canResume(record, settings));
+
+    // Недосчитанный слой: его вклад уже в спектре, значит остановиться на
+    // предыдущем нельзя — иначе спектр вышел бы завышенным.
+    record.state.rOffset     = 8;
+    record.state.chunkOffset = 118656860160ULL;
+    settings.maxRows = 7;
+    expectStore(QStringLiteral("посреди слоя 8 НЕ годится для maxRows 7"),
+                !canResume(record, settings));
+    settings.maxRows = 8;
+    expectStore(QStringLiteral("посреди слоя 8 годится для maxRows 8"),
+                canResume(record, settings));
+    record.state.chunkOffset = 0;
+    settings.maxRows = 7;
+    expectStore(QStringLiteral("на границе слоя 8 годится для maxRows 7"),
+                canResume(record, settings));
+
+    // У кода Грея слоёв нет, maxRows там ни при чём.
+    settings.algorithmType = Algorithm::GrayCode;
+    record.algorithm = Algorithm::GrayCode;
+    record.state.rOffset = 0;
+    expectStore(QStringLiteral("код Грея годится независимо от maxRows"),
+                canResume(record, settings));
+}
+
+// Досчёт: посчитать до maxRows = n, потом попросить n + 1 и сверить с прямым
+// расчётом до n + 1. Ради этого запись и не удаляется после успеха.
+static void checkExtend(const QString& name, RunConfig cfg, int from, int to)
+{
+    if (cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        return;
+    }
+
+    RunConfig target = cfg;  target.maxRows = to;
+    clearCheckpoints();
+    const Spectrum direct = runWorker(target);
+
+    clearCheckpoints();
+    RunConfig first = cfg;   first.maxRows = from;
+    runWorker(first);                       // досчитали до конца, запись осталась
+
+    const qint64 saved = savedDoneOps();
+    if (saved <= 0) {
+        ++g_failed;
+        out << QStringLiteral("  ПРОВАЛ   ") << name
+            << QStringLiteral("  — после успешного расчёта записи не осталось,"
+                              " досчитывать не с чего") << Qt::endl;
+        clearCheckpoints();
+        return;
+    }
+
+    const Spectrum extended = runWorker(target, LoadMode::FromCheckpoint);
+    clearCheckpoints();
+
+    if (extended == direct) {
+        ++g_passed;
+        out << "  ok       " << name
+            << QStringLiteral("  (досчитано с ") << saved << QStringLiteral(" оп.)") << Qt::endl;
+        return;
+    }
+
+    ++g_failed;
+    out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
+    out << QStringLiteral("      напрямую: ") << formatSpectrum(direct)   << Qt::endl;
+    out << QStringLiteral("      досчётом: ") << formatSpectrum(extended) << Qt::endl;
+}
+
+static void testExtendMaxRows()
+{
+    out << Qt::endl << QStringLiteral("Досчёт до большего числа строк") << Qt::endl;
+
+    RunConfig cfg;
+    cfg.matrix     = Reference::identity(20);
+    cfg.algorithm  = Algorithm::SimpleXor;
+    cfg.device     = ComputeDevice::CPU;
+    cfg.threadsCpu = 4;
+    checkExtend(QStringLiteral("CPU I(20): 5 строк, потом 7"), cfg, 5, 7);
+
+    cfg.device = ComputeDevice::GPU;
+    checkExtend(QStringLiteral("GPU I(20): 5 строк, потом 7"), cfg, 5, 7);
+
+    // Длинный путь: там своё разбиение на чанки и свои слои.
+    RunConfig lng;
+    lng.matrix     = Reference::identity(70);
+    lng.algorithm  = Algorithm::SimpleXor;
+    lng.device     = ComputeDevice::GPU;
+    lng.threadsCpu = 4;
+    checkExtend(QStringLiteral("GPU I(70): 3 строки, потом 4"), lng, 3, 4);
+}
+
 // ------------------------------------------------- подписи оси графика
 
 // Регрессия: приложение падало при попытке убрать график вправо. Сплиттер
@@ -831,6 +1073,7 @@ static void testOversizedMatrixRejected()
     cfg.device    = ComputeDevice::GPU;
 
     Worker worker;
+    worker.setAutosaveRoot(autosaveRoot());
     bool errored = false;
     QObject::connect(&worker, &Worker::errorOccurred,
                      [&errored](const QString&) { errored = true; });
@@ -1494,6 +1737,10 @@ int main(int argc, char* argv[])
     testDualCode(QStringLiteral("Хэмминг (7,4)"), Reference::hamming7_4());
 
     testAxisLabelStep();
+
+    testAutosaveStore();
+    testCanResume();
+    testExtendMaxRows();
 
     testAutoTunedGrid();
 

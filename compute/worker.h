@@ -17,6 +17,7 @@
 #include "binomtable.h"
 // Переопределяет CUDA_CALL из .cuh: там макрос звал abort(), здесь бросает.
 #include "cudabuffers.h"
+#include "autosavestore.h"
 
 using namespace std::chrono;
 enum LoadMode {
@@ -79,6 +80,10 @@ public:
     // разная, и результаты двух запусков не сравнить.
     // Оба нуля — обычный режим работы.
     void setCheckpointOpsPolicy(quint64 everyOps, quint64 stopAfterOps);
+
+    // Куда складывать автосохранения. Пустая строка — стандартное место
+    // приложения. Тестам нужен свой каталог, чтобы не топтать пользовательский.
+    void setAutosaveRoot(const QString& dir);
 
     // Порог, ниже которого подбор сетки не окупается и не проводится.
     // Тесты ставят ноль, чтобы гонять подбор на маленьких матрицах.
@@ -144,7 +149,9 @@ private:
 
 
     /* Функции для работы с чекпоинтами */
-    void    makeCheckpoint(int numOfCols);
+    // finished — расчёт дошёл до конца. Такая запись не удаляется: по ней
+    // потом можно досчитать спектр до большего числа строк, а не с нуля.
+    void    makeCheckpoint(int numOfCols, bool finished = false);
     // Чекпоинт для GPU-путей: спектр надо забрать с устройства синхронно.
     // Поток передаётся явно — длинный путь работает на собственном, а не на
     // потоке класса. false — ошибка CUDA, расчёт продолжать нельзя.
@@ -187,6 +194,7 @@ private:
     HostBuffer<quint64>  h_spectrum;
     HostBuffer<quint64>  h_matrix;
     BinomTable           binomTable;
+    AutosaveStore        autosave;
 
     DeviceBuffer<quint64> d_spectrum;
     DeviceBuffer<quint64> d_matrix;
