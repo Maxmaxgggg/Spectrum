@@ -174,16 +174,24 @@ bool AutosaveStore::contains(const Matrix& matrix,
 
 bool AutosaveStore::remove(const Matrix& matrix, ComputationSettings::Algorithm algorithm)
 {
-    const QString dir = folderPath(matrix);
+    return removeRecord(folderName(matrix), algorithm);
+}
+
+bool AutosaveStore::removeRecord(const QString& folder,
+                                 ComputationSettings::Algorithm algorithm)
+{
+    if (folder.isEmpty() || folder.contains(QLatin1Char('/'))
+                         || folder.contains(QLatin1Char('\\')))
+        return false;   // только имя папки, без путей наружу
+
+    const QString dir = root + QLatin1Char('/') + folder;
     if (!QFile::remove(dir + QLatin1Char('/') + fileNameFor(algorithm)))
         return false;
 
     // Осталась одна matrix.txt — папку держать незачем.
-    QDir folder(dir);
-    const QStringList left = folder.entryList(QStringList() << QStringLiteral("*.json"),
-                                              QDir::Files);
-    if (left.isEmpty())
-        folder.removeRecursively();
+    QDir folderDir(dir);
+    if (folderDir.entryList(QStringList() << QStringLiteral("*.json"), QDir::Files).isEmpty())
+        folderDir.removeRecursively();
 
     return true;
 }

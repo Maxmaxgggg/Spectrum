@@ -95,6 +95,7 @@ private:
     void resumeComputation();
 
     void setWorker();
+    void showAutosaveDialog();
     void setMatrixMenu();
     void setToolTips();
     void connectSettingsDialog();

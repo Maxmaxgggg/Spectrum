@@ -93,6 +93,9 @@ public:
 
     // Удаляет одну запись; вместе с последней уходит и папка матрицы.
     bool remove(const Matrix& matrix, ComputationSettings::Algorithm algorithm);
+    // То же по имени папки: диалогу списка незачем читать ради удаления
+    // матрицу, которая бывает в мегабайт.
+    bool removeRecord(const QString& folder, ComputationSettings::Algorithm algorithm);
     bool removeFolder(const QString& folder);
     void removeAll();
 

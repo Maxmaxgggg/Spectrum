@@ -85,7 +85,7 @@
      </widget>
     </item>
     <item>
-     <widget class="QCustomPlot" name="spectrumCPT" native="true"/>
+     <widget class="QCustomPlot" name="spectrumCPT" native="true" />
     </item>
     <item>
      <widget class="QProgressBar" name="infoPBR">
@@ -117,7 +117,7 @@
          </font>
         </property>
         <property name="text">
-         <string/>
+         <string />
         </property>
         <property name="alignment">
          <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignVCenter</set>
@@ -158,7 +158,7 @@
          </size>
         </property>
         <property name="text">
-         <string/>
+         <string />
         </property>
         <property name="pixmap">
          <pixmap resource="../q.qrc">:/ui/icons/disk-black.png</pixmap>
@@ -211,21 +211,14 @@
       <string>Удалить матрицу</string>
      </property>
     </widget>
-    <addaction name="addMatrixACN"/>
-    <addaction name="deleteMatrixMNU"/>
+    <addaction name="addMatrixACN" />
+    <addaction name="deleteMatrixMNU" />
    </widget>
-   <widget class="QMenu" name="spectrumMNU">
-    <property name="title">
-     <string>Спектры</string>
-    </property>
-    <addaction name="saveSpectrumACN"/>
-    <addaction name="loadSpectrumACN"/>
-   </widget>
-   <addaction name="settingsACN"/>
-   <addaction name="matrixMNU"/>
-   <addaction name="spectrumMNU"/>
+   <addaction name="settingsACN" />
+   <addaction name="matrixMNU" />
+   <addaction name="autosaveACN" />
   </widget>
-  <widget class="QStatusBar" name="statusbar"/>
+  <widget class="QStatusBar" name="statusbar" />
   <action name="addMatrixACN">
    <property name="text">
     <string>Сохранить матрицу…</string>
@@ -236,49 +229,9 @@
     <string>Настройки</string>
    </property>
   </action>
-  <action name="actioneee">
+  <action name="autosaveACN">
    <property name="text">
-    <string>eee</string>
-   </property>
-  </action>
-  <action name="action_2">
-   <property name="text">
-    <string/>
-   </property>
-  </action>
-  <action name="action_4">
-   <property name="text">
-    <string>укп</string>
-   </property>
-  </action>
-  <action name="action_6">
-   <property name="text">
-    <string>ер</string>
-   </property>
-  </action>
-  <action name="action_8">
-   <property name="text">
-    <string>пр</string>
-   </property>
-  </action>
-  <action name="saveMatrixToFileACN">
-   <property name="text">
-    <string>Сохранить матрицу в файл</string>
-   </property>
-  </action>
-  <action name="loadMatrixFromFileACN">
-   <property name="text">
-    <string>Загрузить матрицу из файла</string>
-   </property>
-  </action>
-  <action name="saveSpectrumACN">
-   <property name="text">
-    <string>Сохранить спектр</string>
-   </property>
-  </action>
-  <action name="loadSpectrumACN">
-   <property name="text">
-    <string>Загрузить спектр</string>
+    <string>Сохранения</string>
    </property>
   </action>
  </widget>
@@ -296,7 +249,7 @@
   </customwidget>
  </customwidgets>
  <resources>
-  <include location="../q.qrc"/>
+  <include location="../q.qrc" />
  </resources>
- <connections/>
+ <connections />
 </ui>

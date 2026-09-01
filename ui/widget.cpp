@@ -1,6 +1,7 @@
 #include "widget.h"
 #include "format.h"
 #include "matrixlibrary.h"
+#include "autosavedialog.h"
 #include "matrixmenu.h"
 #include "spectrumplot.h"
 #include "ui_widget.h"
@@ -32,6 +33,8 @@ MainWindow::MainWindow(QWidget* parent)
         settingsDialog = new SettingsDialog(this);
     spectrumPlot = std::make_unique<SpectrumPlot>(ui->spectrumCPT);
     connect( ui->matrixPTE, &FilterPlainTextEdit::textChanged, this,  &MainWindow::handleMatrixChanged    );
+    connect(ui->autosaveACN, &QAction::triggered,
+        this, &MainWindow::showAutosaveDialog);
     connect(ui->settingsACN, &QAction::triggered,
         this, [this]() {
             settingsDialog->exec();
@@ -80,6 +83,15 @@ void MainWindow::setMatrixMenu()
     connect(matrixMenu, &MatrixMenu::matrixChosen, this, [this](const QString& text) {
         ui->matrixPTE->setPlainText(text);
     });
+}
+
+void MainWindow::showAutosaveDialog()
+{
+    AutosaveDialog dialog(&autosave, this);
+    connect(&dialog, &AutosaveDialog::matrixRequested, this, [this](const Matrix& matrix) {
+        ui->matrixPTE->setPlainText(matrix.join(QLatin1Char('\n')));
+    });
+    dialog.exec();
 }
 
 void MainWindow::setToolTips() {
