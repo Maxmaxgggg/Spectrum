@@ -1,4 +1,5 @@
 #include "widget.h"
+#include "fonticons.h"
 #include "format.h"
 #include "matrixlibrary.h"
 #include "autosavedialog.h"
@@ -129,15 +130,40 @@ void MainWindow::applyAutosave(const Matrix& matrix, const AutosaveRecord& recor
     ui->infoLBL->show();
 
     runState = RunState::Loaded;
-    ui->executePBN->setText(UIStrings::CONTINUE_TEXT);
-    ui->executePBN->setToolTip(UIStrings::CONTINUE_TOOLTIP);
+    updateExecuteButton();
+}
+
+void MainWindow::updateExecuteButton()
+{
+    switch (runState) {
+        case RunState::Running:
+            ui->executePBN->setText(UIStrings::PAUSE_TEXT);
+            ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP);
+            ui->executePBN->setIcon(FluentIcons::icon(this, FluentIcons::PAUSE));
+            break;
+
+        case RunState::Paused:
+        case RunState::Loaded:
+            ui->executePBN->setText(UIStrings::CONTINUE_TEXT);
+            ui->executePBN->setToolTip(UIStrings::CONTINUE_TOOLTIP);
+            ui->executePBN->setIcon(FluentIcons::icon(this, FluentIcons::PLAY));
+            break;
+
+        case RunState::Idle:
+            ui->executePBN->setText(UIStrings::START_TEXT);
+            ui->executePBN->setToolTip(UIStrings::START_TOOLTIP);
+            ui->executePBN->setIcon(FluentIcons::icon(this, FluentIcons::PLAY));
+            break;
+    }
 }
 
 void MainWindow::setToolTips() {
     ui->matrixLBL->setToolTip(UIStrings::MATRIX_TOOLTIP);
     ui->spectrumLBL->setToolTip(UIStrings::SPECTRUM_TOOLTIP);
-    ui->executePBN->setToolTip(UIStrings::START_TOOLTIP);
     ui->cancelPBN->setToolTip(UIStrings::CANCEL_TOOLTIP);
+    // Квадрат остановки у отмены не меняется, поэтому ставится один раз.
+    ui->cancelPBN->setIcon(FluentIcons::icon(this, FluentIcons::STOP));
+    updateExecuteButton();
     ui->exitPBN->setToolTip(UIStrings::EXIT_TOOLTIP);
 }
 
@@ -277,8 +303,7 @@ void MainWindow::startComputation()
     QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection);
 
     runState = RunState::Running;
-    ui->executePBN->setText(UIStrings::PAUSE_TEXT);
-    ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP);
+    updateExecuteButton();
 }
 
 void MainWindow::pauseComputation()
@@ -288,8 +313,7 @@ void MainWindow::pauseComputation()
 
     runState = RunState::Paused;
     setWindowTitle(UIStrings::PAUSE_TEXT);
-    ui->executePBN->setText(UIStrings::CONTINUE_TEXT);
-    ui->executePBN->setToolTip(UIStrings::CONTINUE_TOOLTIP);
+    updateExecuteButton();
 }
 
 void MainWindow::resumeComputation()
@@ -298,8 +322,7 @@ void MainWindow::resumeComputation()
         workerPtr->resume();
 
     runState = RunState::Running;
-    ui->executePBN->setText(UIStrings::PAUSE_TEXT);
-    ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP);
+    updateExecuteButton();
 
     // Оценка времени с прошлого запуска ещё актуальна — возвращаем её
     // в заголовок вместо «Пауза».
@@ -437,8 +460,7 @@ void MainWindow::handleMatrixChanged()
     // Матрицу правят руками — поднятое сохранение к ней больше не относится.
     if (runState == RunState::Loaded && !applyingAutosave) {
         runState = RunState::Idle;
-        ui->executePBN->setText(UIStrings::START_TEXT);
-        ui->executePBN->setToolTip(UIStrings::START_TOOLTIP);
+        updateExecuteButton();
     }
 
     Matrix rows = ui->matrixPTE->toStringList();
@@ -457,7 +479,7 @@ void MainWindow::handleError(const QString& message)
     QMessageBox::critical(this, UIStrings::ERROR_TITLE, message);
     // reset UI
     runState = RunState::Idle;
-    ui->executePBN->setText(UIStrings::START_TEXT);
+    updateExecuteButton();
 }
 
 void MainWindow::handleFinished(int elapsedSec)
@@ -474,8 +496,7 @@ void MainWindow::handleFinished(int elapsedSec)
     ui->cancelPBN->setEnabled(  false );
     matrixMenu->setActionsEnabled(true);
 
-    ui->executePBN->setText( UIStrings::START_TEXT  );
-    ui->executePBN->setToolTip( UIStrings::START_TOOLTIP );
+    updateExecuteButton();
     this->setWindowTitle( UIStrings::MAIN_TITLE  );
     if ( workerPtr->isCancelled() ) {
         workerPtr->uncancel();

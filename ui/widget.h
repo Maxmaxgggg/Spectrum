@@ -100,6 +100,11 @@ private:
     void resumeComputation();
 
     void setWorker();
+    // Текст, подсказка и значок кнопки запуска — по текущему состоянию.
+    // Одним местом: раньше эти три вещи выставлялись в шести, и стоило
+    // добавить состояние, как подпись и значок разъезжались.
+    void updateExecuteButton();
+
     void showAutosaveDialog();
     void applyAutosave(const Matrix& matrix, const AutosaveRecord& record);
     // Пока матрица подставляется из записи, правкой её считать нельзя.
