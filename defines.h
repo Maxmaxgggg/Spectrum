@@ -32,6 +32,12 @@ namespace SettingsKeys
     constexpr const char SPECTRUM_TEXT[]            = "spectrumText";
     constexpr const char SPECTRUM_VALUES[]          = "spectrumValues";
     constexpr const char MATRICES_JSON[]            = "matricesJson";
+    // Тип перебора, выбранный для простого XOR. Хранится отдельно от
+    // computationSettings: там при коде Грея лежит принудительный «Полный».
+    constexpr const char XOR_ENUM_TYPE[]            = "xorEnumType";
+    // Вписанное число строк для частичного перебора — по той же причине:
+    // при полном там лежит число строк матрицы.
+    constexpr const char XOR_MAX_ROWS[]             = "xorMaxRows";
 }
 
 namespace DefaultValues

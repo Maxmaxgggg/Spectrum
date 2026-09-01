@@ -58,17 +58,21 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     settings.autoTuneGrid = ui->autoTuneGridCHB->isChecked();
 
     connect(algorithmBGP, &QButtonGroup::idClicked,
-        this, [=](int id)
-        {
-            ui->enumTypeGBX->setVisible( id == Algorithm::SimpleXor );
-        });
+        this, [this](int) { updateEnumTypeControls(); });
     //Если выбран полный перебор, то отключаем выбор числа строк
     connect(enumeratorBGP, &QButtonGroup::idClicked,
-        this, [=](int id) {
-            ui->maxRowsSPB->setVisible( id == EnumerationType::Partial );
-            ui->maxRowsSPB->setValue(   ui->maxRowsSPB->maximum()     );
-            ui->maxRowsLBL->setVisible( id == EnumerationType::Partial );
+        this, [this](int id) {
+            // Запоминается только осознанный выбор пользователя: idClicked
+            // на программное setChecked не приходит, поэтому принудительный
+            // «Полный» на коде Грея сюда не попадает и выбор не затирает.
+            xorEnumType = static_cast<EnumerationType>(id);
+            updateEnumTypeControls();
         });
+    // Вписанное число строк запоминается отдельно. Сигналы поля на время
+    // программной установки блокируются, так что сюда доходит только ввод
+    // пользователя и подрезка по новому максимуму при смене матрицы.
+    connect(ui->maxRowsSPB, QOverload<int>::of(&QSpinBox::valueChanged),
+        this, [this](int value) { xorMaxRows = value; });
     connect(computeDeviceBGP, &QButtonGroup::idClicked,
         this, [=](int id) {
             Q_UNUSED(id);
@@ -108,24 +112,58 @@ void SettingsDialog::handleSettingsRequested()
     emit sendSettingsToWidget(settings.toJson());
 }
 
+// Группа «Тип перебора» имеет смысл только для простого XOR: код Грея и
+// дуальный расчёт идут по всем 2^k маскам, частичного перебора у них нет.
+//
+// Раньше группа на них просто исчезала, и вкладка оставалась полупустой.
+// Теперь она блокируется и показывает «Полный» — видно, что вариант есть,
+// но к этому алгоритму неприменим.
+void SettingsDialog::updateEnumTypeControls()
+{
+    const bool forXor = algorithmBGP->checkedId() == Algorithm::SimpleXor;
+
+    ui->enumTypeGBX->setEnabled(forXor);
+
+    EnumerationType shown = EnumerationType::Full;
+    if (forXor) {
+        shown = xorEnumType;
+        // У длинных кодов полный перебор запрещён независимо от того, что
+        // пользователь выбирал раньше.
+        if (!ui->fullEnumRB->isEnabled())
+            shown = EnumerationType::Partial;
+    }
+
+    if (QAbstractButton* button = enumeratorBGP->button(shown))
+        button->setChecked(true);
+
+    const bool partial = shown == EnumerationType::Partial;
+
+    // Поле не прячется, а блокируется: при полном переборе оно показывает,
+    // сколько строк складывается на самом деле — все, сколько их в матрице.
+    // Пропадавшая надпись оставляла на её месте дыру, да и не было видно,
+    // что настройка вообще есть.
+    ui->maxRowsLBL->setEnabled(partial);
+    ui->maxRowsSPB->setEnabled(partial);
+
+    // Без блокировки сигналов setValue сам же и затёр бы запомненное число.
+    const QSignalBlocker block(ui->maxRowsSPB);
+    ui->maxRowsSPB->setValue(partial
+        ? qBound(ui->maxRowsSPB->minimum(), xorMaxRows, ui->maxRowsSPB->maximum())
+        : ui->maxRowsSPB->maximum());
+}
+
 void SettingsDialog::setInterfaceEnabled( bool enabled )
 {
-    if (!enabled) {
-        // Выключаем весь интерфейс
-        ui->algorithmGBX->setEnabled(             false );
-        ui->enumTypeGBX->setEnabled(              false );
-        ui->computeDeviceGBX->setEnabled(         false );
-        ui->computeDeviceSettingsGBX->setEnabled( false );
-        ui->saveAndUpdateSpectrumGBX->setEnabled( false );
-    }
-    else {
-        // Включаем весь интерфейс
-        ui->algorithmGBX->setEnabled(             true  );
-        ui->enumTypeGBX->setEnabled(              true  );
-        ui->computeDeviceGBX->setEnabled(         true  );
-        ui->computeDeviceSettingsGBX->setEnabled( true  );
-        ui->saveAndUpdateSpectrumGBX->setEnabled( true  );
-        // Частично выключаем его
+    // Гасятся страницы, а не сам QTabWidget: иначе вместе с ними отключится
+    // и полоса вкладок, и во время расчёта нельзя будет даже посмотреть, что
+    // выставлено на соседней.
+    ui->computationTab->setEnabled(enabled);
+    ui->deviceTab->setEnabled(enabled);
+    ui->savingTab->setEnabled(enabled);
+
+    if (enabled) {
+        // Часть пунктов недоступна и в покое: код Грея не бывает длиннее
+        // 63 строк, дуальный расчёт — тоже.
         if ( codeLength == Length::Short ) {
             ui->grayCodeRB->setEnabled(true);
             // Включаем возможность полного перебора
@@ -156,7 +194,6 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
         // Если перед отключением было включено использование кода Грея, то насильно выключаем его
         if ( ui->grayCodeRB->isChecked() ){
             ui->simpleXorRB->setChecked(true);
-            ui->enumTypeGBX->setVisible(true);
             settings.algorithmType = Algorithm::SimpleXor;
         }
             
@@ -167,8 +204,6 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
         settings.enumType = EnumerationType::Partial;
         // Находим максимальное количество строк, которые можем сложить, не выходя за uint64
         ui->maxRowsSPB->setMaximum(maxCombIndex(rows));
-        ui->maxRowsSPB->setVisible(enumeratorBGP->checkedId() == EnumerationType::Partial);
-        ui->maxRowsLBL->setVisible(enumeratorBGP->checkedId() == EnumerationType::Partial);
         if (settings.maxRows > ui->maxRowsSPB->maximum())
             settings.maxRows = ui->maxRowsSPB->value();
     }
@@ -195,8 +230,6 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
             if (rows > 63) {
                 ui->simpleXorRB->setChecked(true);
                 settings.algorithmType = Algorithm::SimpleXor;
-                ui->enumTypeGBX->setVisible(true);
-                ui->partialEnumRB->setChecked(true);
                 ui->fullEnumRB->setEnabled(false);
             }
             // Иначе - с использованием кода грея
@@ -211,6 +244,10 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
         dualCodeLength = Length::Short;
         ui->dualCodeRB->setEnabled(true);
     }
+    // Доступность полного перебора и сам алгоритм могли только что поменяться —
+    // приводим группу в согласованный вид одним местом, а не в каждой ветке.
+    updateEnumTypeControls();
+
     // Отправляем новые настройки в виджет
     emit sendSettingsToWidget(settings.toJson());
 }
@@ -304,6 +341,10 @@ void SettingsDialog::saveSettings() {
 
     QJsonDocument doc(settings.toJson());
     s.setValue(SettingsKeys::COMPUTATION_SETTINGS, doc.toJson());
+    // Отдельно от JSON: в settings.enumType при коде Грея лежит «Полный», и
+    // выбор пользователя для XOR там не сохранить.
+    s.setValue(SettingsKeys::XOR_ENUM_TYPE, int(xorEnumType));
+    s.setValue(SettingsKeys::XOR_MAX_ROWS,  xorMaxRows);
 
     s.endGroup(); // ← не забыть
 }
@@ -319,16 +360,21 @@ void SettingsDialog::loadSettings() {
         settings = ComputationSettings::fromJson(doc.object());
     }
 
-    s.endGroup(); // ← не забыть
-
     // дальше UI без изменений
     algorithmBGP->button(settings.algorithmType)->setChecked(true);
-    ui->enumTypeGBX->setVisible(algorithmBGP->checkedId() == Algorithm::SimpleXor);
 
-    enumeratorBGP->button(settings.enumType)->setChecked(true);
-    ui->maxRowsSPB->setVisible(enumeratorBGP->checkedId() == EnumerationType::Partial);
-    ui->maxRowsLBL->setVisible(enumeratorBGP->checkedId() == EnumerationType::Partial);
+    // Выбор для XOR хранится отдельно от settings: в самих настройках при
+    // выбранном коде Грея лежит «Полный», иначе выбор терялся бы при каждом
+    // перезапуске.
+    xorEnumType = static_cast<EnumerationType>(
+        s.value(SettingsKeys::XOR_ENUM_TYPE, int(settings.enumType)).toInt());
+
     ui->maxRowsSPB->setValue(settings.maxRows);
+    xorMaxRows = s.value(SettingsKeys::XOR_MAX_ROWS, settings.maxRows).toInt();
+
+    updateEnumTypeControls();
+
+    s.endGroup(); // ← не забыть
 
     computeDeviceBGP->button(settings.compDev)->setChecked(true);
 
