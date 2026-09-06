@@ -27,9 +27,4 @@ QString speed(double wordsPerSecond);
 // без сокращения читать невозможно.
 QString count(quint64 n);
 
-// Разбивает число на разряды по три: «19222128» -> «19 222 128».
-// Работает со строкой, а не с числом: у дуального расчёта компоненты спектра
-// считаются в GMP и в quint64 не помещаются.
-QString groupDigits(const QString& digits);
-
 } // namespace Format

@@ -6,9 +6,15 @@ namespace Constants
     constexpr  int CONST_MEM_SIZE = 1 << 16;							// Размер константной памяти видеокарты
     constexpr  int WORD_SIZE = 8;								// Размер слова (под словом понимается тип данных quint64)
     constexpr  int MAX_CONST_WORDS = CONST_MEM_SIZE / WORD_SIZE;		// Максимальный размер массива в константной памяти видеокарты
-    // До скольких строк редактор матрицы разворачивается сам при первом
-    // запуске. Дальше пользы от него нет: прочитать всё равно нельзя.
-    constexpr  int MATRIX_ROWS_TO_EXPAND = 20;
+    // Через сколько после последнего изменения размера перерисовывать график.
+    // Меньше — рисуется прямо во время перетаскивания панели; заметно больше —
+    // виден пустой прямоугольник после того, как отпустили.
+    constexpr  int PLOT_REFRESH_DELAY_MS = 60;
+
+    // Номер раскладки доков. Менять при добавлении или удалении панели:
+    // сохранённая раскладка старого набора тогда просто не подхватится.
+    constexpr  int LAYOUT_VERSION = 1;
+
     constexpr  int MAX_POSITIONS = 33;
     // Потолок кандидатов автоподбора: под столько нитей длинному пути надо
     // заранее заготовить стартовые маски.
@@ -29,13 +35,13 @@ namespace Constants
 namespace SettingsKeys
 {
     constexpr const char WIDGET_GEOMETRY[]          = "geometry";
-    constexpr const char SPLITTER_STATE[]           = "splitterState";
+    // Раскладка доков: что пришвартовано, что вытащено, что закрыто.
+    // Пришло на смену splitterState — сплиттер убран вместе с жёсткой
+    // компоновкой.
+    constexpr const char WINDOW_STATE[]             = "windowState";
     constexpr const char COMPUTATION_SETTINGS[]     = "computationSettings";
     constexpr const char CODE_MATRIX[]              = "matrix";
     constexpr const char SPECTRUM_TEXT[]            = "spectrumText";
-    // Развёрнут ли редактор матрицы. Отсутствие ключа — первый запуск:
-    // тогда решает размер матрицы.
-    constexpr const char MATRIX_EXPANDED[]          = "matrixExpanded";
     constexpr const char SPECTRUM_VALUES[]          = "spectrumValues";
     constexpr const char MATRICES_JSON[]            = "matricesJson";
     // Тип перебора, выбранный для простого XOR. Хранится отдельно от
@@ -73,7 +79,9 @@ namespace UIStrings
     constexpr const char CANCEL_TOOLTIP[]           = "Остановка расчета спектра";
     constexpr const char EXIT_TOOLTIP[]             = "Выход из приложения";
     constexpr const char SETTINGS_TOOLTIP[]         = "Настройки приложения";
-    constexpr const char SPECTRUM_TOOLTIP[]         = "Текстовое и графическое представление спектра кода";
+    constexpr const char SPECTRUM_TOOLTIP[]         = "Спектр кода: сколько кодовых слов приходится на каждый вес";
+    constexpr const char PLOT_TOOLTIP[]             = "Тот же спектр столбчатой диаграммой";
+    constexpr const char VIEW_RESET_TEXT[]          = "Раскладка по умолчанию";
     constexpr const char MATRIX_TOOLTIP[]           = "Порождающая матрица кода";
 
 }

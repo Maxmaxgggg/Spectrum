@@ -140,7 +140,6 @@ void AutosaveDialog::refresh()
                              ? QLocale().toString(entry.record.savedAt, QLocale::ShortFormat)
                              : QString());
         item->setText(4, formatBytes(entry.bytes));
-        item->setTextAlignment(4, Qt::AlignRight | Qt::AlignVCenter);
 
         item->setData(0, FOLDER_ROLE,    entry.folder);
         item->setData(0, ALGORITHM_ROLE, int(entry.record.algorithm));

@@ -90,14 +90,20 @@ void SpectrumPlot::setSpectrum(const SpectrumFloat& spectrum)
             maxValue = v;
     }
 
-    redraw();
+    applyData();
+    redrawGeometry();
 }
 
 void SpectrumPlot::refresh()
 {
     if (yValues.isEmpty())
         return;
-    redraw();
+
+    // Только геометрия: при изменении размера спектр тот же, и перезаливать
+    // точки незачем. Раньше здесь вызывался setData на каждое событие
+    // изменения размера — а их при перетаскивании панели десятки в секунду,
+    // и каждое копировало и сортировало весь контейнер точек заново.
+    redrawGeometry();
 }
 
 void SpectrumPlot::updateTicker()
@@ -131,14 +137,12 @@ void SpectrumPlot::updateTicker()
     plot->xAxis->setTicker(ticker);
 }
 
-void SpectrumPlot::redraw()
+void SpectrumPlot::applyData()
 {
-    updateTicker();
-
     if (hasNonFinite) {
+        // Компоненты не поместились в float: рисовать нечего.
         overflowMessage->setVisible(true);
         bars->setVisible(false);
-        plot->replot();
         return;
     }
 
@@ -147,6 +151,16 @@ void SpectrumPlot::redraw()
     bars->setData(xValues, yValues);
     bars->setBrush(QBrush(barColor));
     bars->setPen(QPen(Qt::black));
+}
+
+void SpectrumPlot::redrawGeometry()
+{
+    updateTicker();
+
+    if (hasNonFinite) {
+        plot->replot();
+        return;
+    }
 
     // Хвосты нулей по краям не несут информации: показываем только занятый
     // диапазон весов, с запасом в один столбец с каждой стороны.

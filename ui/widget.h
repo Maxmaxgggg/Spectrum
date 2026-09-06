@@ -70,7 +70,18 @@ private slots:
 private:
 
     Ui::MainWindow *ui;
-    QSplitter      *splitter         = nullptr;
+    QDockWidget    *matrixDock       = nullptr;
+    QDockWidget    *spectrumDock     = nullptr;
+    QDockWidget    *plotDock         = nullptr;
+    // Снимок раскладки сразу после сборки — по нему работает «Раскладка по
+    // умолчанию». Собирать её заново расстановкой доков ненадёжно: Qt не
+    // обещает, что повторное добавление даст те же пропорции.
+    QByteArray      defaultLayout;
+
+    // Перерисовка графика откладывается: при перетаскивании панели события
+    // изменения размера идут десятками в секунду, и рисовать на каждое —
+    // это и есть подлагивание. Ждём, пока размер перестанет меняться.
+    QTimer*         plotRefreshTimer = nullptr;
     Worker         *workerPtr        = nullptr;
     QThread        *workerThreadPtr  = nullptr;
     SettingsDialog *settingsDialog   = nullptr;
@@ -105,15 +116,13 @@ private:
     // добавить состояние, как подпись и значок разъезжались.
     void updateExecuteButton();
 
-    // Спектр показывается таблицей из двух колонок: вес и число слов.
-    // Одним полем числа было не сравнить — они не выровнены и без разрядов.
-    void setupSpectrumTable();
+    // Спектр показывается списком строк «вес - число слов».
     void setSpectrumRows(const SpectrumText& lines);
 
-    // Редактор матрицы сворачивается: на настоящих кодах это стена из нулей
-    // и единиц во весь экран, которую всё равно не прочитать.
-    void setupMatrixToggle();
-    void setMatrixExpanded(bool expanded);
+    // Три панели живут в доках: любую можно вытащить в отдельное окно и
+    // закрыть, а вернуть из меню «Вид». Раскладка запоминается целиком.
+    void setupDocks();
+    void resetLayout();
 
     // Последний показанный спектр — его же и сохраняем между запусками.
     SpectrumText lastSpectrum;

@@ -38,7 +38,11 @@ public:
 private:
     // Перестраивает подписи оси X, если сменился шаг между ними.
     void updateTicker();
-    void redraw();
+    // Заливает точки в столбцы. Дорого: QCustomPlot копирует и сортирует весь
+    // контейнер, поэтому зовётся только когда спектр действительно поменялся.
+    void applyData();
+    // Подписи, диапазоны осей и перерисовка. Данные не трогает.
+    void redrawGeometry();
 
     QCustomPlot* plot            = nullptr;
     QCPBars*     bars            = nullptr;
