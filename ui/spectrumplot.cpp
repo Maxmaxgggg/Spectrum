@@ -137,6 +137,12 @@ void SpectrumPlot::updateTicker()
     plot->xAxis->setTicker(ticker);
 }
 
+// Сводит спектр к тому, что реально имеет смысл рисовать.
+//
+// Если весов не больше потолка — столбец на вес, один к одному. Иначе веса
+// делятся на равные корзины и значения внутри складываются: график остаётся
+// той же гистограммой, просто грубее. Складываются, а не усредняются, — тогда
+// суммарная площадь по картинке равна общему числу кодовых слов.
 void SpectrumPlot::applyData()
 {
     if (hasNonFinite) {
@@ -146,11 +152,60 @@ void SpectrumPlot::applyData()
         return;
     }
 
+    // Корзины раскладываются по занятому диапазону весов, а не по всей длине
+    // спектра. Разница принципиальная: у частичного перебора длинного кода
+    // спектр длиной в тысячу весов, а ненулевых из них восемь. Деление всей
+    // тысячи на сто шестьдесят корзин загоняло эти восемь весов в две корзины
+    // шириной по шесть весов — вместо графика получались два столбища во весь
+    // экран.
+    const int first = firstNonZero < 0 ? 0 : int(firstNonZero);
+    const int last  = lastNonZero  < 0 ? yValues.size() - 1 : int(lastNonZero);
+    const int span  = last - first + 1;
+
+    const int bins = (maxBars > 0 && span > maxBars) ? maxBars : span;
+
+    barX.resize(bins);
+    barY.resize(bins);
+    barMax   = 0.0;
+    barWidth = double(span) / double(bins);
+
+    for (int b = 0; b < bins; ++b) {
+        // Границы корзины в весах. Через умножение, а не накоплением шага:
+        // так последняя корзина заканчивается ровно на границе диапазона.
+        const int from = first + int(double(b)     * span / bins);
+        const int to   = first + int(double(b + 1) * span / bins);
+
+        double sum = 0.0;
+        for (int i = from; i < to; ++i)
+            sum += yValues.at(i);
+
+        // Точка ставится в середину корзины: столбец шириной barWidth тогда
+        // накрывает ровно свой диапазон весов.
+        barX[b] = (from + to - 1) / 2.0;
+        barY[b] = sum;
+        if (sum > barMax)
+            barMax = sum;
+    }
+
     overflowMessage->setVisible(false);
     bars->setVisible(true);
-    bars->setData(xValues, yValues);
+    bars->setWidth(barWidth);
+    bars->setData(barX, barY);
     bars->setBrush(QBrush(barColor));
     bars->setPen(QPen(Qt::black));
+}
+
+void SpectrumPlot::setMaxBars(int limit)
+{
+    if (limit == maxBars)
+        return;
+
+    maxBars = limit;
+    if (yValues.isEmpty())
+        return;
+
+    applyData();
+    redrawGeometry();
 }
 
 void SpectrumPlot::redrawGeometry()
@@ -169,7 +224,9 @@ void SpectrumPlot::redrawGeometry()
     else
         plot->xAxis->setRange(firstNonZero - 1, lastNonZero + 1);
 
-    plot->yAxis->setRange(0.0, maxValue * 1.1);
+    // Предел берётся по нарисованному: при группировке столбец — это сумма по
+    // корзине, и она выше любого отдельного значения.
+    plot->yAxis->setRange(0.0, barMax * 1.1);
 
     plot->replot(QCustomPlot::rpQueuedReplot);
 }

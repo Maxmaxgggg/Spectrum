@@ -32,6 +32,12 @@ public:
 
     void setBarColor(const QColor& color);
 
+    // Потолок числа столбцов. Спектр длинного кода — это тысяча весов, и
+    // столбец выходит тоньше пикселя: соседние веса сливаются в один столбец,
+    // а их значения складываются. Форма распределения при этом сохраняется,
+    // сумма по картинке — тоже. Ноль снимает ограничение.
+    void setMaxBars(int maxBars);
+
     // Показанные значения: окно сохраняет их между запусками.
     const QVector<double>& values() const { return yValues; }
 
@@ -48,8 +54,18 @@ private:
     QCPBars*     bars            = nullptr;
     QCPItemText* overflowMessage = nullptr;
 
+    // Спектр как он есть: вес i, значение yValues[i].
     QVector<double> xValues;
     QVector<double> yValues;
+
+    // Что реально нарисовано. При группировке короче исходного: одна точка на
+    // корзину весов, значение — сумма по корзине.
+    QVector<double> barX;
+    QVector<double> barY;
+    double          barWidth = 1.0;
+    double          barMax   = 0.0;
+
+    int maxBars = 0;
 
     QSharedPointer<QCPAxisTicker> ticker;
     int tickStep = -1;
@@ -58,7 +74,7 @@ private:
     // его заново по тем же самым числам.
     qint64 firstNonZero = -1;
     qint64 lastNonZero  = -1;
-    double maxValue     = 0.0;
+    double maxValue     = 0.0;   // максимум по исходному спектру
     // Компоненты не поместились в float: рисовать нечего, показываем текст.
     bool   hasNonFinite = false;
 

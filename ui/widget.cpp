@@ -2,6 +2,7 @@
 #include "fonticons.h"
 
 #include <QHeaderView>
+#include <QApplication>
 #include <QDockWidget>
 #include "format.h"
 #include "matrixlibrary.h"
@@ -44,7 +45,16 @@ MainWindow::MainWindow(QWidget* parent)
     plotRefreshTimer = new QTimer(this);
     plotRefreshTimer->setSingleShot(true);
     plotRefreshTimer->setInterval(Constants::PLOT_REFRESH_DELAY_MS);
-    connect(plotRefreshTimer, &QTimer::timeout, this, [this]() { spectrumPlot->refresh(); });
+    connect(plotRefreshTimer, &QTimer::timeout, this, [this]() {
+        // Пока кнопка мыши зажата, панель ещё тащат. Перерисовка на этом
+        // месте переразмечает окно, и разделитель теряет захват мыши — со
+        // стороны это выглядит как «тянется через раз». Ждём дальше.
+        if (QApplication::mouseButtons() != Qt::NoButton) {
+            plotRefreshTimer->start();
+            return;
+        }
+        spectrumPlot->refresh();
+    });
 
     ui->spectrumCPT->installEventFilter(this);
     connectSettingsDialog();
@@ -268,6 +278,7 @@ void MainWindow::connectSettingsDialog()
         this, [this]( const QJsonObject& obj ) {
             settings = ComputationSettings::fromJson(obj);
             settings.matrix = ui->matrixPTE->toStringList();
+            spectrumPlot->setMaxBars(settings.maxPlotBars);
             MainWindow::sendSettingsToWorker(settings.toJson());
         });
 }
@@ -596,6 +607,8 @@ bool MainWindow::hasCheckpoint() const
 // Применить настройки
 void MainWindow::applySettings()
 {
+    spectrumPlot->setMaxBars(settings.maxPlotBars);
+
     // Точка, где настройки из диалога попадают в интерфейс. Сейчас
     // единственное, что сюда просилось, — цвет и прозрачность столбцов,
     // но эти поля в диалоге пока не подключены.

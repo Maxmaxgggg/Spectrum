@@ -56,6 +56,12 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     settings.compDevSet.blocksGpu = ui->blocksGpuSPB->value();
     settings.compDevSet.threadsGpu = ui->threadsGpuSPB->value();
     settings.autoTuneGrid = ui->autoTuneGridCHB->isChecked();
+    settings.maxPlotBars = ui->maxPlotBarsSPB->value();
+
+    ui->maxPlotBarsSPB->setToolTip(
+        tr("Сколько столбцов рисовать на графике.\n"
+           "Если весов больше, соседние сливаются в один столбец,\n"
+           "а их значения складываются — форма распределения сохраняется."));
 
     connect(algorithmBGP, &QButtonGroup::idClicked,
         this, [this](int) { updateEnumTypeControls(); });
@@ -354,6 +360,7 @@ void SettingsDialog::saveSettings() {
     settings.compDevSet.blocksGpu = ui->blocksGpuSPB->value();
     settings.compDevSet.threadsGpu = ui->threadsGpuSPB->value();
     settings.autoTuneGrid          = ui->autoTuneGridCHB->isChecked();
+    settings.maxPlotBars           = ui->maxPlotBarsSPB->value();
 
     settings.timeIntSet.saveSpectrumInterval = ui->saveSpectrumIntervalCBX->currentData().toInt();
     settings.timeIntSet.updateSpectrumInterval = ui->updateSpectrumIntervalCBX->currentData().toInt();
@@ -404,6 +411,7 @@ void SettingsDialog::loadSettings() {
     ui->blocksGpuSPB->setValue(settings.compDevSet.blocksGpu);
     ui->threadsGpuSPB->setValue(settings.compDevSet.threadsGpu);
     ui->autoTuneGridCHB->setChecked(settings.autoTuneGrid);
+    ui->maxPlotBarsSPB->setValue(settings.maxPlotBars);
 
     updateDeviceControls();
 

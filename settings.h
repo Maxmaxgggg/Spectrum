@@ -44,6 +44,10 @@ struct ComputationSettings
         int threadsGpu = 1;
     } compDevSet;
 
+    // Потолок числа столбцов на графике. К расчёту отношения не имеет и в
+    // ключ автосохранения не входит — это только вид.
+    int             maxPlotBars = 160;
+
     struct timeIntervalSettings {
         // Частота сохранения спектра в реестр
         int saveSpectrumInterval = TenSeconds;
@@ -60,6 +64,7 @@ struct ComputationSettings
         , maxRows(other.maxRows)
         , compDev(other.compDev)
         , autoTuneGrid(other.autoTuneGrid)
+        , maxPlotBars(other.maxPlotBars)
         , compDevSet(other.compDevSet)
         , timeIntSet(other.timeIntSet) { }
 
@@ -73,6 +78,7 @@ struct ComputationSettings
         maxRows = other.maxRows;
         compDev = other.compDev;
         autoTuneGrid = other.autoTuneGrid;
+        maxPlotBars = other.maxPlotBars;
         compDevSet = other.compDevSet;
         timeIntSet = other.timeIntSet;
         return *this;
@@ -104,6 +110,7 @@ struct ComputationSettings
         obj["enumType"] = static_cast<int>(enumType);
         obj["maxRows"] = maxRows;
         obj["compDev"] = static_cast<int>(compDev);
+        obj["maxPlotBars"] = maxPlotBars;
         obj["autoTuneGrid"] = autoTuneGrid;
 
         QJsonObject dev;
@@ -138,6 +145,9 @@ struct ComputationSettings
         s.enumType = static_cast<EnumerationType>(obj["enumType"].toInt());
         s.maxRows = obj["maxRows"].toInt();
         s.compDev = static_cast<ComputeDevice>(obj["compDev"].toInt());
+        // Ноль означает «ключа не было» — остаётся значение по умолчанию.
+        if (obj["maxPlotBars"].toInt() > 0)
+            s.maxPlotBars = obj["maxPlotBars"].toInt();
         s.autoTuneGrid = obj["autoTuneGrid"].toBool();
 
         QJsonObject dev = obj["compDevSet"].toObject();
