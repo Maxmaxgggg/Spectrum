@@ -36,11 +36,15 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     ui->saveSpectrumIntervalCBX->setItemData(3, FiveMinutes);
     ui->saveSpectrumIntervalCBX->setItemData(4, TenMinutes);
 
-    ui->updateSpectrumIntervalCBX->setItemData(0, OneSecond);
-    ui->updateSpectrumIntervalCBX->setItemData(1, FiveSeconds);
-    ui->updateSpectrumIntervalCBX->setItemData(2, TenSeconds);
-    ui->updateSpectrumIntervalCBX->setItemData(3, ThirtySeconds);
-    ui->updateSpectrumIntervalCBX->setItemData(4, OneMinute);
+    ui->updateSpectrumIntervalCBX->setItemData(0, ThirtyTimesASecond);
+    ui->updateSpectrumIntervalCBX->setItemData(1, EveryTenthSecond);
+    ui->updateSpectrumIntervalCBX->setItemData(2, EveryQuarterSecond);
+    ui->updateSpectrumIntervalCBX->setItemData(3, EveryHalfSecond);
+    ui->updateSpectrumIntervalCBX->setItemData(4, EverySecond);
+    ui->updateSpectrumIntervalCBX->setItemData(5, EveryFiveSeconds);
+    ui->updateSpectrumIntervalCBX->setItemData(6, EveryTenSeconds);
+    ui->updateSpectrumIntervalCBX->setItemData(7, EveryThirtySeconds);
+    ui->updateSpectrumIntervalCBX->setItemData(8, EveryMinute);
 
     loadSettings();
     checkGpuAvailable();

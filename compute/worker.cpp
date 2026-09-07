@@ -1536,7 +1536,7 @@ void Worker::computeSpectrumImpl()
     // Частоты обновления из настроек. Сам отсчёт запускает вычислительная
     // функция: только она знает общее число операций.
     progress.setIntervals(
-        std::chrono::seconds{ settings.timeIntSet.updateSpectrumInterval },
+        std::chrono::milliseconds{ settings.timeIntSet.updateSpectrumInterval },
         std::chrono::seconds{ settings.timeIntSet.saveSpectrumInterval });
     progress.setOpsCheckpoint(checkpointEveryOps);
 

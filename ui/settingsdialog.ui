@@ -368,6 +368,26 @@
              <widget class="QComboBox" name="updateSpectrumIntervalCBX">
               <item>
                <property name="text">
+                <string>33 мс (30 Гц)</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>0,1 с</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>0,25 с</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>0,5 с</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
                 <string>1 с</string>
                </property>
               </item>

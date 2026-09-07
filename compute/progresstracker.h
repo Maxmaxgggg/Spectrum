@@ -20,6 +20,9 @@ class ProgressTracker
 public:
     using clock   = std::chrono::steady_clock;
     using seconds = std::chrono::seconds;
+    // Обновление спектра задаётся в миллисекундах: секунда — слишком грубый
+    // шаг для показа хода расчёта, глазу заметно.
+    using millis  = std::chrono::milliseconds;
 
     // Что назрело к текущему моменту.
     struct Due {
@@ -29,7 +32,7 @@ public:
         bool checkpoint = false;   // сохранить состояние
     };
 
-    void setIntervals(seconds spectrum, seconds checkpoint)
+    void setIntervals(millis spectrum, seconds checkpoint)
     {
         m_spectrumInterval   = spectrum;
         m_checkpointInterval = checkpoint;
@@ -135,7 +138,7 @@ private:
     clock::time_point m_lastSpectrum;
     clock::time_point m_lastCheckpoint;
 
-    seconds m_spectrumInterval   { 1  };
+    millis  m_spectrumInterval   { 1000 };
     seconds m_checkpointInterval { 10 };
     const seconds m_barInterval  { 1  };
 };

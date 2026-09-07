@@ -13,6 +13,21 @@ enum TimeInterval {
     TenMinutes = 600
 };
 
+// Интервал обновления спектра на экране — в миллисекундах, отдельной шкалой.
+// Секунда здесь слишком грубый шаг: ход расчёта виден рывками. Сохранение на
+// диск, наоборот, чаще десяти секунд не нужно, поэтому оно осталось в секундах.
+enum UpdateInterval {
+    ThirtyTimesASecond = 33,
+    EveryTenthSecond   = 100,
+    EveryQuarterSecond = 250,
+    EveryHalfSecond    = 500,
+    EverySecond        = 1000,
+    EveryFiveSeconds   = 5000,
+    EveryTenSeconds    = 10000,
+    EveryThirtySeconds = 30000,
+    EveryMinute        = 60000
+};
+
 struct ComputationSettings
 {
     // Порождающая матрица кода
@@ -51,8 +66,8 @@ struct ComputationSettings
     struct timeIntervalSettings {
         // Частота сохранения спектра в реестр
         int saveSpectrumInterval = TenSeconds;
-        // Частота обновления спетрка в gui 
-        int updateSpectrumInterval = OneSecond;
+        // Частота обновления спектра на экране, миллисекунды
+        int updateSpectrumInterval = EverySecond;
     } timeIntSet;
 
     ComputationSettings() noexcept = default;
@@ -158,6 +173,24 @@ struct ComputationSettings
         QJsonObject timeInt = obj["timeIntSet"].toObject();
         s.timeIntSet.saveSpectrumInterval   = timeInt["saveSpectrumInterval"].toInt();
         s.timeIntSet.updateSpectrumInterval = timeInt["updateSpectrumInterval"].toInt();
+        // Настройки прошлых версий хранили этот интервал в секундах. Без
+        // пересчёта расчёт стал бы обновлять спектр шестьдесят раз в секунду
+        // вместо раза в минуту.
+        //
+        // Сравнение идёт по списку старых значений, а не по диапазону: 33 мс
+        // тоже попадает между единицей и шестьюдесятью, и по диапазону этот
+        // интервал превращался бы при чтении в 33 секунды.
+        switch (s.timeIntSet.updateSpectrumInterval) {
+        case TimeInterval::OneSecond:
+        case TimeInterval::FiveSeconds:
+        case TimeInterval::TenSeconds:
+        case TimeInterval::ThirtySeconds:
+        case TimeInterval::OneMinute:
+            s.timeIntSet.updateSpectrumInterval *= 1000;
+            break;
+        default:
+            break;
+        }
         return s;
     }
     quint64 computeHash(quint64 seed = 0ULL) const
