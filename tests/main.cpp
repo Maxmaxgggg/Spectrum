@@ -1427,6 +1427,8 @@ static bool sweepCase(const QString& which, RunConfig& base)
     return true;
 }
 
+static bool sweepCase(const QString& which, RunConfig& base);
+
 // Как часто спектр на самом деле уходит в интерфейс.
 //
 // Понадобилось, когда на интервале 33 мс спектр стал обновляться реже, чем на
@@ -1435,8 +1437,8 @@ static bool sweepCase(const QString& which, RunConfig& base)
 // нет вовсе: сигнал ловится напрямую в потоке расчёта, и видно, что отдаёт сам
 // воркер.
 //
-// Запуск: SpectrumTests.exe --rate <мс> [<строк>]
-static int updateRate(int intervalMs, int rows)
+// Запуск: SpectrumTests.exe --rate <случай|файл матрицы> <мс> [<строк>]
+static int updateRate(const QString& which, int intervalMs, int rows)
 {
     if (!g_gpuAvailable) {
         out << QStringLiteral("GPU недоступен") << Qt::endl;
@@ -1445,10 +1447,25 @@ static int updateRate(int intervalMs, int rows)
     clearCheckpoints();
 
     RunConfig cfg;
-    cfg.device    = ComputeDevice::GPU;
-    cfg.matrix    = Reference::randomMatrix(70, 1000, 11);
-    cfg.algorithm = Algorithm::SimpleXor;
-    cfg.maxRows   = rows;
+    if (!sweepCase(which, cfg)) {
+        // Не имя случая — значит путь к файлу с матрицей: так меряется
+        // конфигурация, на которой всё это и всплыло.
+        QFile file(which);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            out << QStringLiteral("не открыть матрицу: ") << which << Qt::endl;
+            return 2;
+        }
+        cfg = RunConfig();
+        cfg.device    = ComputeDevice::GPU;
+        cfg.algorithm = Algorithm::SimpleXor;
+        const QStringList lines = QString::fromUtf8(file.readAll())
+                                      .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        for (const QString& line : lines) {
+            const QString row = line.trimmed();
+            if (!row.isEmpty()) cfg.matrix.append(row);
+        }
+    }
+    if (rows > 0) cfg.maxRows = rows;
 
     ComputationSettings settings = makeSettings(cfg);
     settings.timeIntSet.updateSpectrumInterval = intervalMs;
@@ -1475,8 +1492,11 @@ static int updateRate(int intervalMs, int rows)
                              std::chrono::steady_clock::now() - started).count();
 
     out << Qt::endl
-        << QStringLiteral("интервал в настройках: %1 мс, строк %2")
-               .arg(intervalMs).arg(rows) << Qt::endl
+        << QStringLiteral("матрица %1 x %2, строк в переборе %3, сетка %4 x %5")
+               .arg(cfg.matrix.isEmpty() ? 0 : cfg.matrix.first().size())
+               .arg(cfg.matrix.size()).arg(cfg.maxRows)
+               .arg(cfg.blocksGpu).arg(cfg.threadsGpu) << Qt::endl
+        << QStringLiteral("интервал в настройках: %1 мс").arg(intervalMs) << Qt::endl
         << QStringLiteral("расчёт занял %1 с, отправок спектра %2")
                .arg(total / 1000.0, 0, 'f', 2).arg(stamps.size()) << Qt::endl;
 
@@ -1491,6 +1511,13 @@ static int updateRate(int intervalMs, int rows)
         gaps.append(stamps.at(i) - stamps.at(i - 1));
     std::sort(gaps.begin(), gaps.end());
 
+    // Последовательность пауз как есть: средние прячут структуру, а она тут
+    // и есть ответ — видно, идут ли отправки ровно или пачками.
+    QStringList shown;
+    for (int i = 1; i < stamps.size() && shown.size() < 40; ++i)
+        shown.append(QString::number(stamps.at(i) - stamps.at(i - 1), 'f', 1));
+    out << QStringLiteral("паузы подряд, мс: ") << shown.join(QStringLiteral(" ")) << Qt::endl;
+
     const double sum = std::accumulate(gaps.begin(), gaps.end(), 0.0);
     out << QStringLiteral("пауза между отправками: медиана %1 мс, среднее %2 мс, "
                           "минимум %3, максимум %4")
@@ -1498,8 +1525,11 @@ static int updateRate(int intervalMs, int rows)
                .arg(sum / gaps.size(), 0, 'f', 1)
                .arg(gaps.first(), 0, 'f', 1)
                .arg(gaps.last(), 0, 'f', 1) << Qt::endl
-        << QStringLiteral("получилось %1 обновлений в секунду")
-               .arg(1000.0 * gaps.size() / sum, 0, 'f', 1) << Qt::endl;
+        // Делить надо на всё время прогона, а не на сумму пауз: при двух
+        // отправках сумма пауз — это одна пауза, и получается бодрое «86 в
+        // секунду» вместо честных 0,3.
+        << QStringLiteral("получилось %1 отправок в секунду")
+               .arg(1000.0 * stamps.size() / total, 0, 'f', 2) << Qt::endl;
     return 0;
 }
 
@@ -1769,10 +1799,11 @@ int main(int argc, char* argv[])
         return rc;
     }
 
+    // --rate <случай|файл матрицы> <мс> [<строк>]
     const int rateAt = args.indexOf(QStringLiteral("--rate"));
-    if (rateAt >= 0 && rateAt + 1 < args.size()) {
-        const int rows = rateAt + 2 < args.size() ? args.at(rateAt + 2).toInt() : 9;
-        const int rc = updateRate(args.at(rateAt + 1).toInt(), rows > 0 ? rows : 9);
+    if (rateAt >= 0 && rateAt + 2 < args.size()) {
+        const int rows = rateAt + 3 < args.size() ? args.at(rateAt + 3).toInt() : 0;
+        const int rc = updateRate(args.at(rateAt + 1), args.at(rateAt + 2).toInt(), rows);
         out.flush();
         return rc;
     }

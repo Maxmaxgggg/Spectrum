@@ -135,6 +135,13 @@ struct ComputationSettings
 
         obj["compDevSet"] = dev;
 
+        // Версия схемы. Нужна ровно для одного: отличить настройки, где
+        // интервал обновления лежал в секундах, от нынешних, где он в
+        // миллисекундах. Без метки различать приходилось по самому значению,
+        // а это угадывание: 30 — это тридцать секунд по-старому и тридцать
+        // миллисекунд по-новому, и по числу они неразличимы.
+        obj["version"] = 2;
+
         QJsonObject timeInt;
         timeInt["saveSpectrumInterval"]   = timeIntSet.saveSpectrumInterval;
         timeInt["updateSpectrumInterval"] = timeIntSet.updateSpectrumInterval;
@@ -173,24 +180,11 @@ struct ComputationSettings
         QJsonObject timeInt = obj["timeIntSet"].toObject();
         s.timeIntSet.saveSpectrumInterval   = timeInt["saveSpectrumInterval"].toInt();
         s.timeIntSet.updateSpectrumInterval = timeInt["updateSpectrumInterval"].toInt();
-        // Настройки прошлых версий хранили этот интервал в секундах. Без
-        // пересчёта расчёт стал бы обновлять спектр шестьдесят раз в секунду
-        // вместо раза в минуту.
-        //
-        // Сравнение идёт по списку старых значений, а не по диапазону: 33 мс
-        // тоже попадает между единицей и шестьюдесятью, и по диапазону этот
-        // интервал превращался бы при чтении в 33 секунды.
-        switch (s.timeIntSet.updateSpectrumInterval) {
-        case TimeInterval::OneSecond:
-        case TimeInterval::FiveSeconds:
-        case TimeInterval::TenSeconds:
-        case TimeInterval::ThirtySeconds:
-        case TimeInterval::OneMinute:
+        // Настройки без метки версии писала программа, хранившая этот
+        // интервал в секундах. Без пересчёта расчёт стал бы обновлять спектр
+        // шестьдесят раз в секунду вместо раза в минуту.
+        if (obj["version"].toInt() < 2)
             s.timeIntSet.updateSpectrumInterval *= 1000;
-            break;
-        default:
-            break;
-        }
         return s;
     }
     quint64 computeHash(quint64 seed = 0ULL) const
