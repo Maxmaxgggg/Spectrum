@@ -17,6 +17,10 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
+#include <chrono>
+#include <numeric>
+
 // worker.h тянет gmpxx.h, где есть std::numeric_limits<...>::min(). Его нужно
 // разобрать до windows.h, иначе макросы min/max из windows.h ломают тело класса.
 #include "worker.h"
@@ -1423,6 +1427,82 @@ static bool sweepCase(const QString& which, RunConfig& base)
     return true;
 }
 
+// Как часто спектр на самом деле уходит в интерфейс.
+//
+// Понадобилось, когда на интервале 33 мс спектр стал обновляться реже, чем на
+// 100 мс. GUI-поток при этом простаивал на 98 %, то есть дело не в том, что
+// интерфейс не успевает рисовать, а в том, что ему нечего рисовать. Здесь окна
+// нет вовсе: сигнал ловится напрямую в потоке расчёта, и видно, что отдаёт сам
+// воркер.
+//
+// Запуск: SpectrumTests.exe --rate <мс> [<строк>]
+static int updateRate(int intervalMs, int rows)
+{
+    if (!g_gpuAvailable) {
+        out << QStringLiteral("GPU недоступен") << Qt::endl;
+        return 1;
+    }
+    clearCheckpoints();
+
+    RunConfig cfg;
+    cfg.device    = ComputeDevice::GPU;
+    cfg.matrix    = Reference::randomMatrix(70, 1000, 11);
+    cfg.algorithm = Algorithm::SimpleXor;
+    cfg.maxRows   = rows;
+
+    ComputationSettings settings = makeSettings(cfg);
+    settings.timeIntSet.updateSpectrumInterval = intervalMs;
+
+    Worker worker;
+    worker.setAutosaveRoot(autosaveRoot());
+
+    // Соединение прямое: обработчик выполняется в потоке расчёта ровно в
+    // момент отправки, без очереди событий.
+    QVector<double> stamps;
+    const auto started = std::chrono::steady_clock::now();
+    QObject::connect(&worker, &Worker::updateSpectrumPTE,
+                     [&stamps, started](const SpectrumText&) {
+        stamps.append(std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - started).count());
+    });
+
+    worker.setSettings(settings.toJson());
+    worker.setGridTuningThreshold(0.0);
+    worker.initializeRunState(LoadMode::Reset);
+    worker.computeSpectrum();
+
+    const double total = std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - started).count();
+
+    out << Qt::endl
+        << QStringLiteral("интервал в настройках: %1 мс, строк %2")
+               .arg(intervalMs).arg(rows) << Qt::endl
+        << QStringLiteral("расчёт занял %1 с, отправок спектра %2")
+               .arg(total / 1000.0, 0, 'f', 2).arg(stamps.size()) << Qt::endl;
+
+    if (stamps.size() < 2) {
+        out << QStringLiteral("отправок слишком мало, увеличьте число строк") << Qt::endl;
+        return 0;
+    }
+
+    QVector<double> gaps;
+    gaps.reserve(stamps.size() - 1);
+    for (int i = 1; i < stamps.size(); ++i)
+        gaps.append(stamps.at(i) - stamps.at(i - 1));
+    std::sort(gaps.begin(), gaps.end());
+
+    const double sum = std::accumulate(gaps.begin(), gaps.end(), 0.0);
+    out << QStringLiteral("пауза между отправками: медиана %1 мс, среднее %2 мс, "
+                          "минимум %3, максимум %4")
+               .arg(gaps.at(gaps.size() / 2), 0, 'f', 1)
+               .arg(sum / gaps.size(), 0, 'f', 1)
+               .arg(gaps.first(), 0, 'f', 1)
+               .arg(gaps.last(), 0, 'f', 1) << Qt::endl
+        << QStringLiteral("получилось %1 обновлений в секунду")
+               .arg(1000.0 * gaps.size() / sum, 0, 'f', 1) << Qt::endl;
+    return 0;
+}
+
 // Только подбор: его таблица замеров и сравнение с умолчанием. Полный перебор
 // сетки в --sweep занимает минуты, а для правки самого подбора нужен быстрый
 // цикл.
@@ -1685,6 +1765,14 @@ int main(int argc, char* argv[])
     const int sweepAt = args.indexOf(QStringLiteral("--sweep"));
     if (sweepAt >= 0 && sweepAt + 1 < args.size()) {
         const int rc = sweepLaunchParams(args.at(sweepAt + 1));
+        out.flush();
+        return rc;
+    }
+
+    const int rateAt = args.indexOf(QStringLiteral("--rate"));
+    if (rateAt >= 0 && rateAt + 1 < args.size()) {
+        const int rows = rateAt + 2 < args.size() ? args.at(rateAt + 2).toInt() : 9;
+        const int rc = updateRate(args.at(rateAt + 1).toInt(), rows > 0 ? rows : 9);
         out.flush();
         return rc;
     }
