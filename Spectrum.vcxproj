@@ -22,6 +22,7 @@
     <ClCompile Include="storage\autosavestore.cpp" />
     <ClCompile Include="ui\autosavedialog.cpp" />
     <ClCompile Include="ui\format.cpp" />
+    <ClCompile Include="ui\cachingstyle.cpp" />
     <ClCompile Include="ui\fonticons.cpp" />
     <ClCompile Include="ui\matrixlibrary.cpp" />
     <ClCompile Include="ui\matrixmenu.cpp" />
@@ -39,6 +40,7 @@
     <ClInclude Include="ui\format.h" />
     <ClInclude Include="ui\fonticons.h" />
     <ClInclude Include="ui\matrixlibrary.h" />
+    <QtMoc Include="ui\cachingstyle.h" />
     <QtMoc Include="ui\autosavedialog.h" />
     <QtMoc Include="ui\matrixmenu.h" />
     <ClInclude Include="ui\spectrumplot.h" />
@@ -188,11 +190,14 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <FunctionLevelLinking>true</FunctionLevelLinking>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <IntrinsicFunctions>true</IntrinsicFunctions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <!-- Символы для Release: на скорость не влияют, зато без них
+           профилировщик и разбор аварийного дампа показывают одни адреса. -->
+      <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
