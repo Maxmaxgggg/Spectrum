@@ -34,6 +34,7 @@
     <ClInclude Include="compute\computeSpectrumKernel.cuh" />
     <ClInclude Include="compute\dualcode.h" />
     <ClInclude Include="compute\gridtuner.h" />
+    <ClInclude Include="compute\spectrumring.h" />
     <ClInclude Include="defines.h" />
     <ClInclude Include="storage\autosavestore.h" />
     <ClInclude Include="ui\axisticks.h" />

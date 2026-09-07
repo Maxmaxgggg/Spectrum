@@ -213,7 +213,6 @@ void Worker::computeSpectrumGpuNoGrayShort(const CodeGeometry& g)
     const int     threadsPerBlock = g.threadsGpu;
     const quint64 maxComb         = g.maxRows;
 
-    bool copyPending = false;
     progress.begin(totalCombinations(numOfRows, maxComb), runState.doneOps, runState.elapsedSec);
 
     // rOffset — число единиц в маске; счётчик обязан быть беззнаковым, иначе
@@ -255,26 +254,19 @@ void Worker::computeSpectrumGpuNoGrayShort(const CodeGeometry& g)
             if (due.estimate)
                 reportEstimate();
 
-            // Метка спектра двигается только когда копирование реально
-            // началось: иначе при занятом копировании следующая попытка
-            // откладывалась бы на целый интервал.
-            if (!copyPending && due.spectrum) {
+            // Метка двигается только когда копия реально встала в очередь:
+            // иначе при занятом кольце следующая попытка откладывалась бы на
+            // целый интервал.
+            if (due.spectrum && spectrumRing.enqueue(d_spectrum.get(), stream.get()))
                 progress.markSpectrum();
-                cudaMemcpyAsync(h_spectrum.get(), d_spectrum.get(), (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream.get());
-                cudaEventRecord(ev.get(), stream.get());
-                copyPending = true;
-            }
-            if (copyPending && cudaEventQuery(ev.get()) == cudaSuccess) {
-                copyPending = false;
-                updateSpectrum(numOfCols);
-            }
+            if (const quint64* snapshot = spectrumRing.takeReady())
+                updateSpectrumFrom(snapshot, int(numOfCols));
             if (due.bar)
                 reportProgressBar();
 
             if (due.checkpoint) {
                 if (!saveGpuCheckpoint(stream.get(), numOfCols, r, offset + thisChunkSize))
                     return;
-                copyPending = false;   // синхронная копия сделала async-копию ненужной
             }
         }
         if (cancelled.load()) {
@@ -288,7 +280,6 @@ void Worker::computeSpectrumGpuNoGrayShort(const CodeGeometry& g)
         (numOfCols + 1) * sizeof(quint64),
         cudaMemcpyDeviceToHost,
         stream.get()));
-    CUDA_CALL(cudaEventRecord(ev.get(), stream.get()));
     CUDA_CALL(cudaStreamSynchronize(stream.get()));
 
     updateSpectrum(numOfCols);
@@ -302,7 +293,6 @@ void Worker::computeSpectrumGpuGrayShort(const CodeGeometry& g)
     const int     blockCount      = g.blocksGpu;
     const int     threadsPerBlock = g.threadsGpu;
 
-    bool          copyPending = false;
     const quint64 totalOps    = 1ULL << numOfRows;
 
     progress.begin(totalOps, runState.doneOps, runState.elapsedSec);
@@ -332,16 +322,10 @@ void Worker::computeSpectrumGpuGrayShort(const CodeGeometry& g)
         if (due.estimate)
             reportEstimate();
 
-        if (!copyPending && due.spectrum) {
+        if (due.spectrum && spectrumRing.enqueue(d_spectrum.get(), stream.get()))
             progress.markSpectrum();
-            cudaMemcpyAsync(h_spectrum.get(), d_spectrum.get(), (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream.get());
-            cudaEventRecord(ev.get(), stream.get());
-            copyPending = true;
-        }
-        if (copyPending && cudaEventQuery(ev.get()) == cudaSuccess) {
-            copyPending = false;
-            updateSpectrum(numOfCols);
-        }
+        if (const quint64* snapshot = spectrumRing.takeReady())
+            updateSpectrumFrom(snapshot, int(numOfCols));
         if (due.bar)
             reportProgressBar();
 
@@ -350,7 +334,6 @@ void Worker::computeSpectrumGpuGrayShort(const CodeGeometry& g)
             // нет — rOffset здесь всегда 0.
             if (!saveGpuCheckpoint(stream.get(), numOfCols, 0, chunkOffset + thisChunkSize))
                 return;
-            copyPending = false;
         }
     }
 
@@ -361,7 +344,6 @@ void Worker::computeSpectrumGpuGrayShort(const CodeGeometry& g)
         (numOfCols + 1) * sizeof(quint64),
         cudaMemcpyDeviceToHost,
         stream.get()));
-    CUDA_CALL(cudaEventRecord(ev.get(), stream.get()));
     CUDA_CALL(cudaStreamSynchronize(stream.get()));
 
     updateSpectrum(numOfCols);
@@ -424,11 +406,7 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
     // Собственный поток, а не поле класса: имя намеренно отличается, чтобы
     // не перекрывать Worker::stream и не синхронизировать по ошибке чужой.
     CudaStream localStream;
-    CudaEvent  evCopy;
     localStream.create();
-    evCopy.create();
-
-    bool copyPending = false;
 
     // Размер чанка в масках
     const quint64 chunkSizeTarget = maxThreads * masksPerThread;
@@ -555,22 +533,11 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
 
             const ProgressTracker::Due due = progress.due();
 
-            // Асинхронное копирование спектра для обновления интерфейса
-            if (!copyPending && due.spectrum) {
+            // Снимок спектра для интерфейса
+            if (due.spectrum && spectrumRing.enqueue(d_spectrum.get(), localStream.get()))
                 progress.markSpectrum();
-                CUDA_CALL(cudaMemcpyAsync(
-                    h_spectrum.get(),
-                    d_spectrum.get(),
-                    (numOfCols + 1) * sizeof(quint64),
-                    cudaMemcpyDeviceToHost,
-                    localStream.get()));
-                CUDA_CALL(cudaEventRecord(evCopy.get(), localStream.get()));
-                copyPending = true;
-            }
-            if (copyPending && cudaEventQuery(evCopy.get()) == cudaSuccess) {
-                copyPending = false;
-                updateSpectrum(numOfCols);
-            }
+            if (const quint64* snapshot = spectrumRing.takeReady())
+                updateSpectrumFrom(snapshot, int(numOfCols));
 
             if (due.bar)
                 reportProgressBar();
@@ -580,7 +547,6 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
             if (due.checkpoint) {
                 if (!saveGpuCheckpoint(localStream.get(), numOfCols, r, chunkOffset + chunkSize))
                     return;
-                copyPending = false;
             }
 
             if (cancelled.load()) break;
@@ -595,7 +561,6 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
         (numOfCols + 1) * sizeof(quint64),
         cudaMemcpyDeviceToHost,
         localStream.get()));
-    CUDA_CALL(cudaEventRecord(evCopy.get(), localStream.get()));
     CUDA_CALL(cudaStreamSynchronize(localStream.get()));
 
     updateSpectrum(numOfCols);
@@ -1140,7 +1105,12 @@ void Worker::computeSpectrumCpuNoGrayShort(const CodeGeometry& g)
 }
 void Worker::updateSpectrum(int numOfCols)
 {
-    if (!h_spectrum.get())
+    updateSpectrumFrom(h_spectrum.get(), numOfCols);
+}
+
+void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
+{
+    if (!spectrum)
         return;
     bool spectrumEmpty = true;
     QStringList spectrumCopyPTE;
@@ -1148,10 +1118,10 @@ void Worker::updateSpectrum(int numOfCols)
 
     quint64 val = 0;
     for (quint64 w = 0; w <= numOfCols; ++w) {
-        spectrumCopyPlot.append(float(h_spectrum[w]));
-        if (h_spectrum[w] != 0) {
-            val += h_spectrum[w];
-            spectrumCopyPTE.append(QString::number(w) + " - " + QString::number(h_spectrum[w]));
+        spectrumCopyPlot.append(float(spectrum[w]));
+        if (spectrum[w] != 0) {
+            val += spectrum[w];
+            spectrumCopyPTE.append(QString::number(w) + " - " + QString::number(spectrum[w]));
             spectrumEmpty = false;
         }
     }
@@ -1297,6 +1267,12 @@ void Worker::prepareBuffers(const CodeGeometry& g)
     // недоступен.
     h_spectrum.allocate(g.spectrumSize, g.useGpu ? HostBuffer<quint64>::Kind::Pinned
                                                  : HostBuffer<quint64>::Kind::Paged);
+    // Кольцо снимков нужно только видеокарте: на CPU спектр и так лежит в
+    // h_spectrum, копировать его неоткуда.
+    if (g.useGpu)
+        spectrumRing.allocate(g.spectrumSize);
+    else
+        spectrumRing.reset();
     if (exportSpectrum) {
         // Продолжаем с чекпоинта — переносим накопленный спектр
         for (quint64 i = 0; i < g.spectrumSize; ++i)
@@ -1321,7 +1297,6 @@ void Worker::prepareBuffers(const CodeGeometry& g)
     else
         d_spectrum.fillZero();
 
-    ev.create();
     stream.create();
 
     // Ядро коротких кодов читает таблицу как binomTable[n * 64 + k]. BinomTable
@@ -1562,7 +1537,6 @@ void Worker::releaseResources()
     d_matrix.reset();
     d_binomTable.reset();
 
-    ev.reset();
     stream.reset();
 }
 

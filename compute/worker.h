@@ -17,6 +17,7 @@
 #include "binomtable.h"
 // Переопределяет CUDA_CALL из .cuh: там макрос звал abort(), здесь бросает.
 #include "cudabuffers.h"
+#include "spectrumring.h"
 #include "autosavestore.h"
 
 using namespace std::chrono;
@@ -145,6 +146,9 @@ private:
 
     /* Функции, посылающие сигнал для обновления интерфейса */
     void updateSpectrum(int numOfCols);
+    // Отправить в интерфейс спектр, лежащий по указателю: снимки для показа
+    // берутся из кольца, а не из h_spectrum.
+    void updateSpectrumFrom(const quint64* spectrum, int numOfCols);
     void updateSpectrumDual( int numOfCols, int numOfRows );
 
 
@@ -189,9 +193,11 @@ private:
     // Все ресурсы владеющие: освобождаются вместе с объектом, каким бы путём
     // ни завершился расчёт — успехом, отменой или исключением.
     CudaStream           stream;
-    CudaEvent            ev;
 
     HostBuffer<quint64>  h_spectrum;
+    // Снимки спектра для показа по ходу расчёта. h_spectrum этим не занят:
+    // туда пишет чекпоинт и итоговая копия, и они должны быть точными.
+    SpectrumRing         spectrumRing;
     HostBuffer<quint64>  h_matrix;
     BinomTable           binomTable;
     AutosaveStore        autosave;
