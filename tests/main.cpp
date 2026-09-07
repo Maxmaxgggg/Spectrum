@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <chrono>
 #include <numeric>
+#include <thread>
 
 // worker.h тянет gmpxx.h, где есть std::numeric_limits<...>::min(). Его нужно
 // разобрать до windows.h, иначе макросы min/max из windows.h ломают тело класса.
@@ -27,6 +28,7 @@
 #include "autosavestore.h"
 #include "reference.h"
 #include "ui/axisticks.h"
+#include "ui/updateintervals.h"
 
 #ifdef Q_OS_WIN
     #define NOMINMAX
@@ -1428,6 +1430,83 @@ static bool sweepCase(const QString& which, RunConfig& base)
 }
 
 static bool sweepCase(const QString& which, RunConfig& base);
+static bool loadMatrixOrCase(const QString& which, RunConfig& cfg);
+
+// Проба потолка так, как её гоняет приложение по кнопке «Замерить».
+//
+// Нужна для сверки: --rate меряет частоту по целому расчёту, --probe — по
+// полутора секундам с последнего слоя. Числа обязаны сойтись, иначе проба
+// показывает пользователю не то, что он получит.
+//
+// Запуск: SpectrumTests.exe --probe <случай|файл матрицы> [<строк>]
+static int probeOnly(const QString& which, int rows)
+{
+    if (!g_gpuAvailable) {
+        out << QStringLiteral("GPU недоступен") << Qt::endl;
+        return 1;
+    }
+    clearCheckpoints();
+
+    RunConfig cfg;
+    if (!loadMatrixOrCase(which, cfg))
+        return 2;
+    if (rows > 0)
+        cfg.maxRows = rows;
+
+    Worker worker;
+    worker.setAutosaveRoot(autosaveRoot());
+    worker.setGridTuningThreshold(0.0);
+
+    double measured = -1.0;
+    QObject::connect(&worker, &Worker::updateRateMeasured,
+                     [&measured](double perSecond) { measured = perSecond; });
+    // В приложении пробу останавливает таймер интерфейса. Здесь цикла событий
+    // нет, поэтому отдельный поток: он спит столько же и зовёт тот же cancel.
+    std::thread stopper;
+    QObject::connect(&worker, &Worker::updateRateProbeStarted, [&worker, &stopper]() {
+        stopper = std::thread([&worker]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(Constants::PROBE_DURATION_MS));
+            worker.cancel();
+        });
+    });
+
+    worker.setSettings(makeSettings(cfg).toJson());
+    worker.measureUpdateRate();
+    if (stopper.joinable())
+        stopper.join();
+
+    out << Qt::endl
+        << QStringLiteral("матрица %1 x %2, строк в переборе %3, сетка %4 x %5")
+               .arg(cfg.matrix.isEmpty() ? 0 : cfg.matrix.first().size())
+               .arg(cfg.matrix.size()).arg(cfg.maxRows)
+               .arg(cfg.blocksGpu).arg(cfg.threadsGpu) << Qt::endl
+        << QStringLiteral("проба намерила %1 отправок в секунду")
+               .arg(measured, 0, 'f', 2) << Qt::endl;
+    return 0;
+}
+
+// Имя случая из sweepCase или путь к файлу с матрицей.
+static bool loadMatrixOrCase(const QString& which, RunConfig& cfg)
+{
+    if (sweepCase(which, cfg))
+        return true;
+
+    QFile file(which);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        out << QStringLiteral("не открыть матрицу: ") << which << Qt::endl;
+        return false;
+    }
+    cfg = RunConfig();
+    cfg.device    = ComputeDevice::GPU;
+    cfg.algorithm = Algorithm::SimpleXor;
+    const QStringList lines = QString::fromUtf8(file.readAll())
+                                  .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (const QString& line : lines) {
+        const QString row = line.trimmed();
+        if (!row.isEmpty()) cfg.matrix.append(row);
+    }
+    return !cfg.matrix.isEmpty();
+}
 
 // Как часто спектр на самом деле уходит в интерфейс.
 //
@@ -1447,24 +1526,8 @@ static int updateRate(const QString& which, int intervalMs, int rows)
     clearCheckpoints();
 
     RunConfig cfg;
-    if (!sweepCase(which, cfg)) {
-        // Не имя случая — значит путь к файлу с матрицей: так меряется
-        // конфигурация, на которой всё это и всплыло.
-        QFile file(which);
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            out << QStringLiteral("не открыть матрицу: ") << which << Qt::endl;
-            return 2;
-        }
-        cfg = RunConfig();
-        cfg.device    = ComputeDevice::GPU;
-        cfg.algorithm = Algorithm::SimpleXor;
-        const QStringList lines = QString::fromUtf8(file.readAll())
-                                      .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-        for (const QString& line : lines) {
-            const QString row = line.trimmed();
-            if (!row.isEmpty()) cfg.matrix.append(row);
-        }
-    }
+    if (!loadMatrixOrCase(which, cfg))
+        return 2;
     if (rows > 0) cfg.maxRows = rows;
 
     ComputationSettings settings = makeSettings(cfg);
@@ -1760,6 +1823,157 @@ static void benchmark()
     }
 }
 
+// Подрезка списка частот обновления по замеренному потолку.
+//
+// Потолок разнится в разы: спектр уходит только на границе чанка, а длина
+// чанка зависит от кода, сетки и пути расчёта. Замерено после кольца копий —
+// от 6,9 отправки в секунду на широком коде до 54,6 на матрице 336x96.
+// Пункты быстрее потолка в списке блокируются, и вся арифметика этого — здесь.
+static void testUpdateIntervals()
+{
+    out << Qt::endl << QStringLiteral("Достижимые интервалы обновления") << Qt::endl;
+
+    // Список из настроек, миллисекунды.
+    const QVector<int> list { 100, 250, 500, 1000, 5000, 10000, 30000, 60000 };
+
+    struct Case { int ms; double rate; bool want; const char* what; };
+    const Case cases[] = {
+        {  100, 10.0, true,  "интервал ровно на потолке достижим"     },
+        {  100,  9.9, false, "чуть быстрее потолка - уже нет"         },
+        {  100, 54.6, true,  "потолок с запасом"                      },
+        { 1000,  6.9, true,  "секунда достижима на худшем из замеров" },
+        {  100,  0.0, false, "замера нет - недостижимо ничего"        },
+        {  100, -1.0, false, "отрицательный потолок"                  },
+        {    0, 10.0, false, "нулевой интервал"                       },
+        {   -5, 10.0, false, "отрицательный интервал"                 },
+    };
+
+    bool ok = true;
+    for (const Case& c : cases) {
+        if (intervalReachable(c.ms, c.rate) != c.want) {
+            ok = false;
+            out << QStringLiteral("      %1: %2 мс при потолке %3")
+                       .arg(QString::fromUtf8(c.what)).arg(c.ms).arg(c.rate) << Qt::endl;
+        }
+    }
+    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("достижимость интервала") << Qt::endl; }
+    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   достижимость интервала") << Qt::endl; }
+
+    // Секунда обязана оставаться достижимой на любом замере, который вообще
+    // что-то поймал: на ней стоит заблокированный список.
+    ok = true;
+    for (double rate : { 1.0, 2.0, 6.9, 13.7, 54.6 }) {
+        if (!intervalReachable(1000, rate)) {
+            ok = false;
+            out << QStringLiteral("      потолок %1 не пускает секунду").arg(rate) << Qt::endl;
+        }
+    }
+    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("секунда достижима на любом пойманном замере") << Qt::endl; }
+    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   секунда недостижима") << Qt::endl; }
+
+    struct Pick { double rate; int want; const char* what; };
+    const Pick picks[] = {
+        { 54.6,  100, "быстрая конфигурация открывает весь список" },
+        {  6.9,  250, "широкий код: 0,1 с не проходит, 0,25 - да"  },
+        {  1.5, 1000, "полтора в секунду - только от секунды"      },
+        {  0.5, 5000, "полраза в секунду"                          },
+        {  0.0,    0, "замера нет - не подходит ничего"            },
+        { 1e-9,    0, "потолок ниже самого медленного пункта"      },
+    };
+
+    ok = true;
+    for (const Pick& p : picks) {
+        const int got = fastestAllowed(list, p.rate);
+        if (got != p.want) {
+            ok = false;
+            out << QStringLiteral("      %1: ожидалось %2, получено %3")
+                       .arg(QString::fromUtf8(p.what)).arg(p.want).arg(got) << Qt::endl;
+        }
+    }
+    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("выбор самого частого допустимого") << Qt::endl; }
+    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   выбор допустимого") << Qt::endl; }
+
+    // Что бы ни вернул fastestAllowed, это обязано быть достижимо: иначе
+    // подрезка сама поставила бы пункт, который не работает.
+    ok = true;
+    for (double rate : { 0.1, 0.9, 1.0, 3.3, 6.9, 20.0, 54.6, 1000.0 }) {
+        const int got = fastestAllowed(list, rate);
+        if (got != 0 && !intervalReachable(got, rate)) {
+            ok = false;
+            out << QStringLiteral("      потолок %1 -> %2 мс, а это недостижимо")
+                       .arg(rate).arg(got) << Qt::endl;
+        }
+    }
+    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("выбранный интервал всегда достижим") << Qt::endl; }
+    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   выбран недостижимый интервал") << Qt::endl; }
+}
+
+// Проба потолка не имеет права трогать состояние расчёта: она идёт по тем же
+// путям, что и настоящий расчёт, но с последнего слоя и без сохранений. Если
+// бы она писала автосохранение, спектр в нём был бы огрызком — только
+// последний слой, — и продолжение с него дало бы завышенный ответ.
+static void testProbeLeavesNoTrace()
+{
+    out << Qt::endl << QStringLiteral("Замер потолка обновления") << Qt::endl;
+    if (!g_gpuAvailable) {
+        out << QStringLiteral("  пропуск  GPU недоступен") << Qt::endl;
+        return;
+    }
+    RunConfig cfg;
+    cfg.device    = ComputeDevice::GPU;
+    cfg.matrix    = Reference::randomMatrix(40, 200, 7);
+    cfg.algorithm = Algorithm::SimpleXor;
+    cfg.maxRows   = 6;
+
+    // Как этот расчёт выглядит, когда пробы не было.
+    clearCheckpoints();
+    const Spectrum expected = runWorker(cfg);
+    clearCheckpoints();
+
+    Worker worker;
+    worker.setAutosaveRoot(autosaveRoot());
+    worker.setGridTuningThreshold(0.0);
+
+    int    spectraSent = 0;
+    double measured    = -1.0;
+    QObject::connect(&worker, &Worker::updateSpectrumPTE,
+                     [&spectraSent](const SpectrumText&) { ++spectraSent; });
+    QObject::connect(&worker, &Worker::updateRateMeasured,
+                     [&measured](double perSecond) { measured = perSecond; });
+    // В приложении пробу останавливает таймер интерфейса. Здесь цикла событий
+    // нет, поэтому обрываем её сразу по сигналу о старте: замер выйдет грубым,
+    // а проверяется тут не он, а следы.
+    QObject::connect(&worker, &Worker::updateRateProbeStarted,
+                     [&worker]() { worker.cancel(); });
+
+    worker.setSettings(makeSettings(cfg).toJson());
+    worker.measureUpdateRate();
+
+    if (measured >= 0.0) { ++g_passed; out << "  ok       " << QStringLiteral("замер отдал результат") << Qt::endl; }
+    else { ++g_failed; out << QStringLiteral("  ПРОВАЛ   сигнала с результатом не было") << Qt::endl; }
+
+    if (spectraSent == 0) { ++g_passed; out << "  ok       " << QStringLiteral("спектр в интерфейс не уходил") << Qt::endl; }
+    else { ++g_failed; out << QStringLiteral("  ПРОВАЛ   проба отправила спектров: %1").arg(spectraSent) << Qt::endl; }
+
+    AutosaveRecord record;
+    if (!testStore().load(cfg.matrix, cfg.algorithm, record)) {
+        ++g_passed; out << "  ok       " << QStringLiteral("автосохранение не тронуто") << Qt::endl;
+    } else {
+        ++g_failed; out << QStringLiteral("  ПРОВАЛ   проба записала автосохранение") << Qt::endl;
+    }
+
+    // И главное: после пробы обычный расчёт даёт тот же спектр, что и без неё.
+    // Сравнение идёт с прогоном на чистом месте, а не с эталонной формулой:
+    // проверяется здесь не правильность расчёта — на неё есть свои тесты, — а
+    // то, что проба ничего за собой не оставила.
+    const Spectrum after = runWorker(cfg);
+    if (!expected.isEmpty() && after == expected) {
+        ++g_passed; out << "  ok       " << QStringLiteral("расчёт после пробы даёт верный спектр") << Qt::endl;
+    } else {
+        ++g_failed; out << QStringLiteral("  ПРОВАЛ   спектр после пробы разошёлся с эталоном") << Qt::endl;
+    }
+}
+
 // -------------------------------------------------------------------- main
 
 int main(int argc, char* argv[])
@@ -1795,6 +2009,15 @@ int main(int argc, char* argv[])
     const int sweepAt = args.indexOf(QStringLiteral("--sweep"));
     if (sweepAt >= 0 && sweepAt + 1 < args.size()) {
         const int rc = sweepLaunchParams(args.at(sweepAt + 1));
+        out.flush();
+        return rc;
+    }
+
+    // --probe <случай|файл матрицы> [<строк>]
+    const int probeAt = args.indexOf(QStringLiteral("--probe"));
+    if (probeAt >= 0 && probeAt + 1 < args.size()) {
+        const int rows = probeAt + 2 < args.size() ? args.at(probeAt + 2).toInt() : 0;
+        const int rc = probeOnly(args.at(probeAt + 1), rows);
         out.flush();
         return rc;
     }
@@ -1856,6 +2079,8 @@ int main(int argc, char* argv[])
     testDualCode(QStringLiteral("Хэмминг (7,4)"), Reference::hamming7_4());
 
     testAxisLabelStep();
+    testUpdateIntervals();
+    testProbeLeavesNoTrace();
 
     testAutosaveStore();
     testCanResume();

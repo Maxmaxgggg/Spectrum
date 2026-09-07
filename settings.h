@@ -17,7 +17,6 @@ enum TimeInterval {
 // Секунда здесь слишком грубый шаг: ход расчёта виден рывками. Сохранение на
 // диск, наоборот, чаще десяти секунд не нужно, поэтому оно осталось в секундах.
 enum UpdateInterval {
-    ThirtyTimesASecond = 33,
     EveryTenthSecond   = 100,
     EveryQuarterSecond = 250,
     EveryHalfSecond    = 500,
@@ -185,6 +184,11 @@ struct ComputationSettings
         // шестьдесят раз в секунду вместо раза в минуту.
         if (obj["version"].toInt() < 2)
             s.timeIntSet.updateSpectrumInterval *= 1000;
+        // Пункт «33 мс» из списка убран. У тех, кто успел его выбрать, значение
+        // осталось в настройках, и без правки они остались бы на интервале,
+        // которого в списке нет.
+        if (s.timeIntSet.updateSpectrumInterval < EveryTenthSecond)
+            s.timeIntSet.updateSpectrumInterval = EveryTenthSecond;
         return s;
     }
     quint64 computeHash(quint64 seed = 0ULL) const

@@ -130,6 +130,8 @@ quint64 Worker::totalCombinations(quint64 k, quint64 maxComb) const
 // Отчёт об оценке оставшегося времени и средней скорости.
 void Worker::reportEstimate()
 {
+    if (probeMode)
+        return;
     progress.markEstimate();
     runState.elapsedSec = progress.elapsedSec();
     emit updateRemainingMinutes(int(progress.elapsedSec()),
@@ -141,6 +143,8 @@ void Worker::reportEstimate()
 
 void Worker::reportProgressBar()
 {
+    if (probeMode)
+        return;
     progress.markBar();
     emit updateInfoPBR(progress.percent());
 }
@@ -297,7 +301,8 @@ void Worker::computeSpectrumGpuGrayShort(const CodeGeometry& g)
 
     progress.begin(totalOps, runState.doneOps, runState.elapsedSec);
     // Обновление на случай, когда загружаем чекпоинт
-    emit updateInfoPBR(progress.percent());
+    if (!probeMode)
+        emit updateInfoPBR(progress.percent());
 
     for (quint64 chunkOffset = runState.chunkOffset; chunkOffset < totalOps; chunkOffset += chunkSize) {
         quint64 thisChunkSize = qMin(chunkSize, totalOps - chunkOffset);
@@ -1112,6 +1117,12 @@ void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
 {
     if (!spectrum)
         return;
+    // Проба меряет, как часто спектр успевает уйти, а не показывает его.
+    // Считать надо здесь: через это место проходят все пути, включая CPU.
+    if (probeMode) {
+        ++probeSends;
+        return;
+    }
     bool spectrumEmpty = true;
     QStringList spectrumCopyPTE;
     SpectrumFloat spectrumCopyPlot;
@@ -1132,6 +1143,10 @@ void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
 }
 void Worker::updateSpectrumDual(int numOfCols, int numOfRows)
 {
+    if (probeMode) {
+        ++probeSends;
+        return;
+    }
     if (!h_spectrum.get())
         return;
 
@@ -1202,6 +1217,64 @@ void Worker::computeSpectrum()
                                .arg(QString::fromUtf8(e.what())));
         emit finished(Constants::ERROR_OCCURED);
     }
+}
+
+void Worker::measureUpdateRate()
+{
+    probeMode  = true;
+    probeSends = 0;
+    cancelled.store(0);
+
+    const auto startedAt = steady_clock::now();
+    double seconds = 0.0;
+
+    try {
+        CodeGeometry g = describeTask();
+        initializeRunState(LoadMode::Reset);
+        runState.spectrum.resize(int(g.spectrumSize));
+
+        // Замер идёт на самом глубоком слое. Слои по числу складываемых строк
+        // перебираются по возрастанию, первые из них крошечные, и чанки в них
+        // обрезаны по границе слоя: замер по началу расчёта показал бы частоту,
+        // которой на деле не будет уже через минуту. У кода Грея слоёв нет, там
+        // rOffset ни на что не влияет.
+        if (g.maxRows > 0)
+            runState.rOffset = g.maxRows;
+
+        omp_set_num_threads(settings.compDevSet.threadsCpu);
+        prepareBuffers(g);
+        // Подбор сетки нужен и здесь: он выбирает сетку покрупнее, а от неё
+        // напрямую зависит длина чанка и, значит, потолок. Замер без подбора
+        // показал бы не ту частоту, с которой пользователь потом будет считать.
+        tuneGrid(g);
+
+        // Просить спектр как можно чаще, сохранений не делать: проба не имеет
+        // права трогать состояние расчёта.
+        progress.setIntervals(std::chrono::milliseconds{ 0 },
+                              std::chrono::hours{ 24 });
+        progress.setOpsCheckpoint(0);
+
+        emit updateRateProbeStarted();
+        dispatchComputation(g);
+        seconds = std::chrono::duration<double>(steady_clock::now() - startedAt).count();
+    }
+    catch (const CudaError& e) {
+        emit errorOccurred(e.message());
+    }
+    catch (const std::exception& e) {
+        emit errorOccurred(QStringLiteral("Ошибка замера: %1")
+                               .arg(QString::fromUtf8(e.what())));
+    }
+
+    const quint64 sends = probeSends;
+    probeMode  = false;
+    probeSends = 0;
+    releaseResources();
+    // Состояние расчёта после пробы — чужое: она стартовала с последнего слоя.
+    initializeRunState(LoadMode::Reset);
+    cancelled.store(0);
+
+    emit updateRateMeasured(seconds > 0.0 ? double(sends) / seconds : 0.0);
 }
 
 // Выводит из настроек и матрицы всё, что нужно для расчёта.

@@ -368,11 +368,6 @@
              <widget class="QComboBox" name="updateSpectrumIntervalCBX">
               <item>
                <property name="text">
-                <string>33 мс (30 Гц)</string>
-               </property>
-              </item>
-              <item>
-               <property name="text">
                 <string>0,1 с</string>
                </property>
               </item>
@@ -413,7 +408,27 @@
               </item>
              </widget>
             </item>
+            <item>
+             <widget class="QPushButton" name="measureRatePBN">
+              <property name="text">
+               <string>Замерить</string>
+              </property>
+              <property name="toolTip">
+               <string>Короткий пробный расчёт: покажет, как часто спектр успевает обновляться на этих настройках, и откроет подходящие варианты</string>
+              </property>
+             </widget>
+            </item>
            </layout>
+          </item>
+          <item>
+           <widget class="QLabel" name="updateRateHintLBL">
+            <property name="text">
+             <string>Список откроется после замера</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
           </item>
          </layout>
         </widget>

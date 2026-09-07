@@ -260,6 +260,16 @@ void MainWindow::setWorker()
     connect( workerPtr,       &Worker::finished,                       this,      &MainWindow::handleFinished,                       Qt::QueuedConnection );
     connect( workerPtr,       &Worker::showSaveLBL,                    this,      &MainWindow::showSaveLBL,                          Qt::QueuedConnection );
     connect( workerPtr,       &Worker::gridTuned,                      this,      &MainWindow::handleGridTuned,                      Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::updateRateMeasured,             settingsDialog, &SettingsDialog::applyMeasuredRate,            Qt::QueuedConnection );
+    // Проба останавливается тем же способом, которым пользователь останавливает
+    // расчёт. Отсчёт начинается по сигналу воркера, а не с самой просьбы: перед
+    // замером может пройти подбор сетки, и он занимает секунды.
+    connect( workerPtr, &Worker::updateRateProbeStarted, this, [this]() {
+        QTimer::singleShot(Constants::PROBE_DURATION_MS, this, [this]() {
+            if (workerPtr)
+                workerPtr->cancel();
+        });
+    }, Qt::QueuedConnection );
 
     connect( this, static_cast<void (MainWindow::*)(const QJsonObject&)>( &MainWindow::sendSettingsToWorker ), workerPtr, &Worker::setSettings, Qt::QueuedConnection);
 
@@ -280,6 +290,30 @@ void MainWindow::connectSettingsDialog()
     connect( this,     &MainWindow::applySettingsFromAutosave, settingsDialog, &SettingsDialog::applyFromAutosave       );
 
     // Записываем матрицу при получении
+    // Замер потолка обновления: короткий расчёт на настройках, которые сейчас
+    // выставлены в диалоге, — не на тех, что подтверждены кнопкой.
+    connect( settingsDialog, &SettingsDialog::measureUpdateRateRequested,
+        this, [this]( const QJsonObject& obj ) {
+            if (!workerPtr)
+                return;
+            // Без матрицы пробе не с чем работать, а описание задачи на пустой
+            // матрице лезет за её первую строку.
+            const QString error = matrixError();
+            if (!error.isEmpty()) {
+                QMessageBox::warning(this, UIStrings::ERROR_TITLE, error);
+                settingsDialog->applyMeasuredRate(0.0);
+                return;
+            }
+
+            ComputationSettings probe = ComputationSettings::fromJson(obj);
+            probe.matrix = ui->matrixPTE->toStringList();
+
+            workerThreadPtr->start();
+            QMetaObject::invokeMethod(workerPtr, "setSettings", Qt::QueuedConnection,
+                                      Q_ARG(QJsonObject, probe.toJson()));
+            QMetaObject::invokeMethod(workerPtr, "measureUpdateRate", Qt::QueuedConnection);
+        });
+
     connect( settingsDialog, &SettingsDialog::sendSettingsToWidget,
         this, [this]( const QJsonObject& obj ) {
             settings = ComputationSettings::fromJson(obj);

@@ -32,6 +32,14 @@ namespace Constants
     constexpr  int ERROR_OCCURED = -1;
 }
 
+namespace Constants
+{
+    // Сколько крутится проба потолка обновления. Полутора секунд хватает и
+    // самой медленной из замеренных конфигураций: широкий код 2000x50 отдаёт
+    // спектр 6,9 раза в секунду, то есть около десяти отправок за пробу.
+    constexpr int PROBE_DURATION_MS = 1500;
+}
+
 namespace SettingsKeys
 {
     constexpr const char WIDGET_GEOMETRY[]          = "geometry";
@@ -50,6 +58,11 @@ namespace SettingsKeys
     // Вписанное число строк для частичного перебора — по той же причине:
     // при полном там лежит число строк матрицы.
     constexpr const char XOR_MAX_ROWS[]             = "xorMaxRows";
+    // Замеренный потолок обновления спектра, отправок в секунду, и описание
+    // конфигурации, на которой он получен. Не совпало — замер не годится:
+    // потолок зависит от кода, вычислителя и сетки запуска.
+    constexpr const char UPDATE_RATE[]              = "updateRatePerSecond";
+    constexpr const char UPDATE_RATE_KEY[]          = "updateRateFor";
 }
 
 namespace DefaultValues

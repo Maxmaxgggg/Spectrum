@@ -1,6 +1,9 @@
 #include "settingsdialog.h"
 #include "ui_settingsdialog.h"
+#include "updateintervals.h"
+
 #include <QSettings>
+#include <QStandardItemModel>
 #include <QColorDialog>
 #include <qtimer.h>
 #include <omp.h>
@@ -36,15 +39,14 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     ui->saveSpectrumIntervalCBX->setItemData(3, FiveMinutes);
     ui->saveSpectrumIntervalCBX->setItemData(4, TenMinutes);
 
-    ui->updateSpectrumIntervalCBX->setItemData(0, ThirtyTimesASecond);
-    ui->updateSpectrumIntervalCBX->setItemData(1, EveryTenthSecond);
-    ui->updateSpectrumIntervalCBX->setItemData(2, EveryQuarterSecond);
-    ui->updateSpectrumIntervalCBX->setItemData(3, EveryHalfSecond);
-    ui->updateSpectrumIntervalCBX->setItemData(4, EverySecond);
-    ui->updateSpectrumIntervalCBX->setItemData(5, EveryFiveSeconds);
-    ui->updateSpectrumIntervalCBX->setItemData(6, EveryTenSeconds);
-    ui->updateSpectrumIntervalCBX->setItemData(7, EveryThirtySeconds);
-    ui->updateSpectrumIntervalCBX->setItemData(8, EveryMinute);
+    ui->updateSpectrumIntervalCBX->setItemData(0, EveryTenthSecond);
+    ui->updateSpectrumIntervalCBX->setItemData(1, EveryQuarterSecond);
+    ui->updateSpectrumIntervalCBX->setItemData(2, EveryHalfSecond);
+    ui->updateSpectrumIntervalCBX->setItemData(3, EverySecond);
+    ui->updateSpectrumIntervalCBX->setItemData(4, EveryFiveSeconds);
+    ui->updateSpectrumIntervalCBX->setItemData(5, EveryTenSeconds);
+    ui->updateSpectrumIntervalCBX->setItemData(6, EveryThirtySeconds);
+    ui->updateSpectrumIntervalCBX->setItemData(7, EveryMinute);
 
     loadSettings();
     checkGpuAvailable();
@@ -90,6 +92,24 @@ SettingsDialog::SettingsDialog(QWidget *parent)
         });
     connect(ui->autoTuneGridCHB, &QCheckBox::toggled,
         this, [this](bool) { updateDeviceControls(); });
+    // Потолок обновления зависит от кода, вычислителя, алгоритма и сетки.
+    // Меняется любое из них — прежний замер больше не про эту конфигурацию,
+    // и список снова закрывается.
+    connect(algorithmBGP,     &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
+    connect(computeDeviceBGP, &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
+    connect(ui->autoTuneGridCHB, &QCheckBox::toggled,   this, [this](bool) { applyUpdateRateLimit(); });
+    for (QSpinBox* box : { ui->blocksGpuSPB, ui->threadsGpuSPB, ui->threadsCpuSPB, ui->maxRowsSPB })
+        connect(box, QOverload<int>::of(&QSpinBox::valueChanged),
+                this, [this](int) { applyUpdateRateLimit(); });
+
+    connect(ui->measureRatePBN, &QPushButton::clicked, this, [this]() {
+        collectSettings();
+        ui->measureRatePBN->setEnabled(false);
+        ui->measureRatePBN->setText(tr("Замеряю…"));
+        ui->updateRateHintLBL->setText(tr("Идёт пробный расчёт…"));
+        emit measureUpdateRateRequested(settings.toJson());
+    });
+
     connect(ui->buttonBox, &QDialogButtonBox::accepted,
         this, [this]() {
             saveSettings();
@@ -108,12 +128,88 @@ SettingsDialog::SettingsDialog(QWidget *parent)
 
 
 
+    applyUpdateRateLimit();
+
     // Отключаем кнопку помощи
     setWindowFlags( windowFlags()  & ~Qt::WindowContextHelpButtonHint );
 }
 
 SettingsDialog::~SettingsDialog()
 {
+    saveSettings();
+}
+
+QString SettingsDialog::updateRateKey() const
+{
+    // Матрицы диалог не видит, только её размер. Этого достаточно: потолок
+    // определяется шириной строки и числом строк, а не тем, какие в матрице
+    // биты.
+    return QStringLiteral("%1|%2|%3x%4|%5|%6x%7|%8|%9")
+        .arg(computeDeviceBGP->checkedId())
+        .arg(algorithmBGP->checkedId())
+        .arg(matrixCols).arg(matrixRows)
+        .arg(ui->maxRowsSPB->value())
+        .arg(ui->blocksGpuSPB->value()).arg(ui->threadsGpuSPB->value())
+        .arg(ui->threadsCpuSPB->value())
+        .arg(ui->autoTuneGridCHB->isChecked() ? 1 : 0);
+}
+
+void SettingsDialog::applyUpdateRateLimit()
+{
+    QComboBox* const box   = ui->updateSpectrumIntervalCBX;
+    const bool       known = measuredRate > 0.0 && measuredFor == updateRateKey();
+
+    auto* const model = qobject_cast<QStandardItemModel*>(box->model());
+    for (int i = 0; i < box->count(); ++i) {
+        if (QStandardItem* item = model ? model->item(i) : nullptr)
+            item->setEnabled(!known || intervalReachable(box->itemData(i).toInt(), measuredRate));
+    }
+
+    box->setEnabled(known);
+
+    if (!known) {
+        // Замера нет — стоит секунда. Её выдаёт любая замеренная конфигурация:
+        // худшая из них, широкий код 2000x50, даёт 6,9 обновления в секунду.
+        const int index = box->findData(EverySecond);
+        if (index != -1)
+            box->setCurrentIndex(index);
+        ui->updateRateHintLBL->setText(
+            tr("Список откроется после замера: как часто спектр успевает "
+               "обновляться, зависит от кода, вычислителя и сетки"));
+        return;
+    }
+
+    // Выбранное значение могло стать недостижимым — например, после того как
+    // подбор сетки выбрал сетку покрупнее.
+    if (!intervalReachable(box->currentData().toInt(), measuredRate)) {
+        QVector<int> intervals;
+        for (int i = 0; i < box->count(); ++i)
+            intervals.append(box->itemData(i).toInt());
+
+        const int allowed = fastestAllowed(intervals, measuredRate);
+        const int index   = allowed > 0 ? box->findData(allowed) : box->count() - 1;
+        if (index != -1)
+            box->setCurrentIndex(index);
+    }
+
+    ui->updateRateHintLBL->setText(
+        tr("Замерено: быстрее %1 обн/с эта конфигурация не даёт")
+            .arg(measuredRate, 0, 'f', 1));
+}
+
+void SettingsDialog::applyMeasuredRate(double perSecond)
+{
+    measuredRate = perSecond;
+    measuredFor  = perSecond > 0.0 ? updateRateKey() : QString();
+
+    ui->measureRatePBN->setEnabled(true);
+    ui->measureRatePBN->setText(tr("Замерить"));
+    applyUpdateRateLimit();
+
+    if (perSecond <= 0.0)
+        ui->updateRateHintLBL->setText(
+            tr("Замер ничего не поймал: за пробу спектр не ушёл ни разу. "
+               "Список остаётся на секунде"));
     saveSettings();
 }
 
@@ -215,6 +311,8 @@ void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int maxRows)
 }
 
 void SettingsDialog::handleMatrixChanged(int rows, int cols) {
+    matrixRows = rows;
+    matrixCols = cols;
     // Если число строк порождающей матрицы больше 63
     if (rows > 63) {
         codeLength = Length::Long;
@@ -276,6 +374,8 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
     // Доступность полного перебора и сам алгоритм могли только что поменяться —
     // приводим группу в согласованный вид одним местом, а не в каждой ветке.
     updateEnumTypeControls();
+    // Сменилась матрица — прежний замер был про другой код.
+    applyUpdateRateLimit();
 
     // Отправляем новые настройки в виджет
     emit sendSettingsToWidget(settings.toJson());
@@ -355,6 +455,27 @@ void SettingsDialog::saveSettings() {
 
     s.beginGroup("lastSettings");  // ← ВАЖНО
 
+    collectSettings();
+
+    QJsonDocument doc(settings.toJson());
+    s.setValue(SettingsKeys::COMPUTATION_SETTINGS, doc.toJson());
+    // Отдельно от JSON: в settings.enumType при коде Грея лежит «Полный», и
+    // выбор пользователя для XOR там не сохранить.
+    s.setValue(SettingsKeys::XOR_ENUM_TYPE, int(xorEnumType));
+    s.setValue(SettingsKeys::XOR_MAX_ROWS,  xorMaxRows);
+    // Замер живёт рядом с настройками: он свойство конфигурации, а не сеанса,
+    // и переживать перезапуск обязан — иначе список закрывался бы каждый раз.
+    s.setValue(SettingsKeys::UPDATE_RATE,     measuredRate);
+    s.setValue(SettingsKeys::UPDATE_RATE_KEY, measuredFor);
+
+    s.endGroup(); // ← не забыть
+}
+
+// Переносит значения из полей в settings, ничего не записывая на диск.
+// Пробе нужны настройки, которые пользователь видит сейчас, а не те, что он
+// подтвердил кнопкой.
+void SettingsDialog::collectSettings()
+{
     settings.algorithmType = static_cast<Algorithm>(algorithmBGP->checkedId());
     settings.enumType = static_cast<EnumerationType>(enumeratorBGP->checkedId());
     settings.maxRows = ui->maxRowsSPB->value();
@@ -368,15 +489,6 @@ void SettingsDialog::saveSettings() {
 
     settings.timeIntSet.saveSpectrumInterval = ui->saveSpectrumIntervalCBX->currentData().toInt();
     settings.timeIntSet.updateSpectrumInterval = ui->updateSpectrumIntervalCBX->currentData().toInt();
-
-    QJsonDocument doc(settings.toJson());
-    s.setValue(SettingsKeys::COMPUTATION_SETTINGS, doc.toJson());
-    // Отдельно от JSON: в settings.enumType при коде Грея лежит «Полный», и
-    // выбор пользователя для XOR там не сохранить.
-    s.setValue(SettingsKeys::XOR_ENUM_TYPE, int(xorEnumType));
-    s.setValue(SettingsKeys::XOR_MAX_ROWS,  xorMaxRows);
-
-    s.endGroup(); // ← не забыть
 }
 void SettingsDialog::loadSettings() {
     QSettings s;
@@ -396,6 +508,9 @@ void SettingsDialog::loadSettings() {
     // Выбор для XOR хранится отдельно от settings: в самих настройках при
     // выбранном коде Грея лежит «Полный», иначе выбор терялся бы при каждом
     // перезапуске.
+    measuredRate = s.value(SettingsKeys::UPDATE_RATE, 0.0).toDouble();
+    measuredFor  = s.value(SettingsKeys::UPDATE_RATE_KEY).toString();
+
     xorEnumType = static_cast<EnumerationType>(
         s.value(SettingsKeys::XOR_ENUM_TYPE, int(settings.enumType)).toInt());
 

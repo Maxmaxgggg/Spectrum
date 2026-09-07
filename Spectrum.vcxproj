@@ -38,6 +38,7 @@
     <ClInclude Include="defines.h" />
     <ClInclude Include="storage\autosavestore.h" />
     <ClInclude Include="ui\axisticks.h" />
+    <ClInclude Include="ui\updateintervals.h" />
     <ClInclude Include="ui\format.h" />
     <ClInclude Include="ui\fonticons.h" />
     <ClInclude Include="ui\matrixlibrary.h" />
