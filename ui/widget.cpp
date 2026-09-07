@@ -203,6 +203,12 @@ void MainWindow::setupDocks()
     // добавить все три через addDockWidget, они складываются в одну область
     // стопкой, и последующее деление даёт не то, что нужно.
     addDockWidget(Qt::TopDockWidgetArea, matrixDock);
+    // Панель показали снова — догоняем всё, что накопилось, пока её не было.
+    connect(plotDock, &QDockWidget::visibilityChanged, this, [this](bool shown) {
+        if (shown)
+            spectrumPlot->refresh();
+    });
+
     splitDockWidget(matrixDock,   spectrumDock, Qt::Vertical);
     splitDockWidget(spectrumDock, plotDock,     Qt::Horizontal);
 

@@ -40,6 +40,13 @@ SpectrumPlot::SpectrumPlot(QCustomPlot* plot)
     overflowMessage->setFont(messageFont);
     overflowMessage->setVisible(false);
 
+    // Свой курсор обязателен. QMainWindow ставит курсор-разделитель на себя,
+    // когда мышь над границей доков, и дочерние виджеты его наследуют, если
+    // своего не задали. У текстовых полей курсор свой, а график донашивал
+    // чужой: над ним показывалась стрелка растягивания, которая ничего не
+    // делает.
+    plot->setCursor(Qt::ArrowCursor);
+
     plot->xAxis->setTickLabelRotation(0);
     plot->xAxis->setLabel(QObject::tr("Вес кодового слова, w"));
     plot->yAxis->setLabel(QObject::tr("Число кодовых слов, A(w)"));
@@ -90,6 +97,13 @@ void SpectrumPlot::setSpectrum(const SpectrumFloat& spectrum)
             maxValue = v;
     }
 
+    // Закрытую панель не рисуем: данные сохранены, картинка соберётся при
+    // показе. Иначе каждое обновление спектра тратилось бы на невидимое.
+    if (!plot->isVisible()) {
+        pendingData = true;
+        return;
+    }
+
     applyData();
     redrawGeometry();
 }
@@ -98,6 +112,11 @@ void SpectrumPlot::refresh()
 {
     if (yValues.isEmpty())
         return;
+
+    if (pendingData) {
+        pendingData = false;
+        applyData();
+    }
 
     // Только геометрия: при изменении размера спектр тот же, и перезаливать
     // точки незачем. Раньше здесь вызывался setData на каждое событие
@@ -162,18 +181,26 @@ void SpectrumPlot::applyData()
     const int last  = lastNonZero  < 0 ? yValues.size() - 1 : int(lastNonZero);
     const int span  = last - first + 1;
 
-    const int bins = (maxBars > 0 && span > maxBars) ? maxBars : span;
+    // Весов на столбец — целое число, и одно на все столбцы. Дробный шаг
+    // давал неравные корзины: при 162 весах и потолке 160 почти все корзины
+    // выходили по одному весу, а две — по два. Такая корзина складывала пару
+    // соседей и торчала пиком вдвое выше остальных. Сумма при этом сходилась,
+    // но глазом это читалось как всплеск в спектре, которого нет.
+    const int group = (maxBars > 0 && span > maxBars)
+                    ? (span + maxBars - 1) / maxBars
+                    : 1;
+    const int bins  = (span + group - 1) / group;
 
     barX.resize(bins);
     barY.resize(bins);
     barMax   = 0.0;
-    barWidth = double(span) / double(bins);
+    barWidth = group;
 
     for (int b = 0; b < bins; ++b) {
-        // Границы корзины в весах. Через умножение, а не накоплением шага:
-        // так последняя корзина заканчивается ровно на границе диапазона.
-        const int from = first + int(double(b)     * span / bins);
-        const int to   = first + int(double(b + 1) * span / bins);
+        // Последняя корзина может оказаться неполной: она приходится на хвост
+        // диапазона, где значения нулевые, и на картинке этого не видно.
+        const int from = first + b * group;
+        const int to   = qMin(from + group, last + 1);
 
         double sum = 0.0;
         for (int i = from; i < to; ++i)
@@ -193,6 +220,12 @@ void SpectrumPlot::applyData()
     bars->setData(barX, barY);
     bars->setBrush(QBrush(barColor));
     bars->setPen(QPen(Qt::black));
+
+    // Без сглаживания. Столбец занимает ровно свою корзину, но границы корзин
+    // попадают на дробные доли пикселя, и сглаживание рисовало на стыке
+    // полупрозрачную кромку — она и читалась как белый зазор между столбцами,
+    // которые на самом деле идут вплотную.
+    bars->setAntialiased(false);
 }
 
 void SpectrumPlot::setMaxBars(int limit)
