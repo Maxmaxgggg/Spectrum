@@ -191,6 +191,14 @@ void Worker::saveCpuCheckpoint(int numOfCols, quint64 rOffset, quint64 chunkOffs
 
 // Прерывание сразу после сохранения: состояние на диске согласовано, и
 // возобновление начнётся ровно с той точки, которую записал чекпоинт.
+void Worker::setLiveIntervals(int spectrumMs, int checkpointSeconds)
+{
+    if (spectrumMs <= 0 || checkpointSeconds <= 0)
+        return;
+    progress.setIntervals(std::chrono::milliseconds{ spectrumMs },
+                          std::chrono::seconds{ checkpointSeconds });
+}
+
 void Worker::stopIfOpsLimitReached()
 {
     if (stopAfterOps > 0 && progress.doneOps() >= stopAfterOps)

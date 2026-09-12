@@ -116,13 +116,14 @@ SettingsDialog::SettingsDialog(QWidget *parent)
             emit sendSettingsToWidget(settings.toJson());
             accept();
         });
-    connect(ui->buttonBox, &QDialogButtonBox::rejected,
-        this, [this]() {
-            loadSettings();
-            // На всякий случай
-            emit sendSettingsToWidget(settings.toJson());
-            reject();
-        });
+    // Через QDialog::rejected, а не через кнопку: иначе закрытие крестиком или
+    // клавишей Esc оставляло бы в полях изменения, которых нет в настройках, —
+    // и при следующем открытии диалог показывал бы не то, с чем идёт расчёт.
+    connect(ui->buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    connect(this, &QDialog::rejected, this, [this]() {
+        loadSettings();
+        emit sendSettingsToWidget(settings.toJson());
+    });
 
 
 
@@ -265,7 +266,15 @@ void SettingsDialog::setInterfaceEnabled( bool enabled )
     // выставлено на соседней.
     ui->computationTab->setEnabled(enabled);
     ui->deviceTab->setEnabled(enabled);
-    ui->savingTab->setEnabled(enabled);
+
+    // Вкладка «Спектр» гаснуть не должна: там частота показа, интервал
+    // автосохранения и число столбцов графика — они описывают показ, а не
+    // задачу, и меняются на ходу. Всё остальное задаёт сам расчёт: под него
+    // выделены буферы и посчитан объём работы, менять его на ходу — это
+    // просто перезапустить.
+    ui->savingTab->setEnabled(true);
+    // Пробе нужен свободный вычислитель, а он сейчас занят расчётом.
+    ui->measureRatePBN->setEnabled(enabled);
 
     if (enabled) {
         // Часть пунктов недоступна и в покое: код Грея не бывает длиннее

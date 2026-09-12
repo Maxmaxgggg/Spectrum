@@ -18,6 +18,9 @@ namespace FluentIcons {
 constexpr const char PLAY[]  = "E768";   // треугольник: старт и продолжение
 constexpr const char PAUSE[] = "E769";   // две полосы: пауза
 constexpr const char STOP[]  = "E71A";   // квадрат: отмена
+// Кнопка питания: выход из программы. Крестик тут не годится — рядом стоит
+// «Отмена», и два похожих значка у соседних кнопок только путали бы.
+constexpr const char EXIT[]  = "E7E8";
 
 // widget нужен только ради палитры — цвет берётся из неё.
 QIcon icon(const QWidget* widget, const char* code, int size = 18);

@@ -1,0 +1,50 @@
+#pragma once
+
+#include <QWidget>
+
+class QDockWidget;
+class QStyleOptionDockWidget;
+class QToolButton;
+
+// Полоса заголовка панели.
+//
+// Зачем своя. Пока панель пришвартована, заголовок рисует Qt: серая полоса,
+// название слева, две маленькие кнопки справа. Стоит вытащить панель в
+// отдельное окно — она становится обычным окном, и на Windows Qt отдаёт ей
+// оформление системы: светлая полоса и красный крестик. Вид скачет, хотя это
+// одна и та же панель.
+//
+// Отключается это ровно одним способом. Qt берёт системную рамку только когда
+// у дока нет своего заголовка — за это отвечает роль TitleBar в его раскладке
+// (см. QDockWidgetLayout::Role и nativeWindowDeco в qdockwidget_p.h). Как
+// только заголовок задан, рамка не запрашивается, и обе картинки рисуем мы.
+//
+// Размер плавающего окна при этом менять по-прежнему можно: без системной
+// рамки Qt тянет его сам, своим QWidgetResizeHandler.
+//
+// Рисуется всё штатным стилем, элементом CE_DockWidgetTitle, а не руками:
+// вид пришвартованной панели меняться не должен, а он и так уже правильный.
+class DockTitleBar : public QWidget
+{
+    Q_OBJECT
+
+public:
+    explicit DockTitleBar(QDockWidget* dock);
+
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+
+private:
+    void initStyleOption(QStyleOptionDockWidget* option) const;
+    // Кнопки следуют возможностям дока: непереносимой панели незачем кнопка
+    // «в отдельное окно», незакрываемой — крестик.
+    void updateButtons();
+    int  buttonExtent() const;
+
+    QDockWidget* dock  = nullptr;
+    QToolButton* floatButton = nullptr;
+    QToolButton* closeButton = nullptr;
+};

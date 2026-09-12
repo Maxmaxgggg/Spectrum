@@ -55,6 +55,13 @@ QString Format::remainingTime(int minutesTotal)
     if (minutesTotal <= 0)
         return QObject::tr("Меньше минуты");
 
+    // Дальше года оценка ничего не значит. Она построена на средней скорости
+    // с начала расчёта, а «8765 дн 23 ч» — это двадцать четыре года, поданные
+    // с точностью до часа: видимость знания там, где его нет.
+    constexpr int minutesInYear = 365 * 24 * 60;
+    if (minutesTotal >= minutesInYear)
+        return QObject::tr("Больше года");
+
     const int days    = minutesTotal / (60 * 24);
     const int hours   = (minutesTotal % (60 * 24)) / 60;
     const int minutes = minutesTotal % 60;

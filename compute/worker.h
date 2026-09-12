@@ -69,6 +69,14 @@ public:
     explicit Worker(QObject *parent = nullptr);
     ~Worker() override;
 
+    // Частота показа спектра и интервал автосохранения — единственные
+    // настройки, которые можно менять на ходу: остальные задают саму задачу и
+    // выбираются один раз, при старте.
+    //
+    // Не слот и вызывается из потока интерфейса напрямую, как cancel(): через
+    // очередь событий значение дошло бы только после конца расчёта.
+    void setLiveIntervals(int spectrumMs, int checkpointSeconds);
+
     void pause();
     void resume();
     void cancel();

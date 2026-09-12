@@ -12,6 +12,7 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonObject>
+#include <QSet>
 #include <QSettings>
 #include <QTextStream>
 
@@ -29,6 +30,7 @@
 #include "reference.h"
 #include "ui/axisticks.h"
 #include "ui/updateintervals.h"
+#include "bz.h"
 
 #ifdef Q_OS_WIN
     #define NOMINMAX
@@ -1974,6 +1976,159 @@ static void testProbeLeavesNoTrace()
     }
 }
 
+// ------------------------------------------------ Брауэр–Циммерман, прототип
+
+struct BZCase
+{
+    QString     name;
+    QStringList rows;
+    int         r;
+    int         sets;
+};
+
+static QVector<BZCase> bzCases()
+{
+    return {
+        { QStringLiteral("Голей [24,12], как есть"),       Reference::golay24_12(),                              4, 2 },
+        { QStringLiteral("случайный [40,16], перемешан"),  BZ::scramble(BZ::systematicRandom(16, 40, 7), 11),   4, 3 },
+        { QStringLiteral("случайный [60,20], перемешан"),  BZ::scramble(BZ::systematicRandom(20, 60, 3), 5),    4, 3 },
+        { QStringLiteral("случайный [96,24], перемешан"),  BZ::scramble(BZ::systematicRandom(24, 96, 9), 2),    5, 4 },
+    };
+}
+
+// Печатает низ спектра тремя способами: точный, по Брауэру–Циммерману и так,
+// как перебирает программа сейчас — комбинациями строк введённой матрицы.
+//
+// Запуск: SpectrumTests.exe --bz
+static void bzReport()
+{
+    for (const BZCase& c : bzCases()) {
+        const int k = c.rows.size();
+        const int n = c.rows.first().length();
+
+        const Reference::Spectrum exact = Reference::bruteForce(c.rows);
+        const BZ::Result          bz    = BZ::run(c.rows, c.r, c.sets);
+        const Reference::Spectrum naive = BZ::naivePartial(c.rows, c.r);
+
+        QStringList overlaps;
+        for (int o : bz.overlaps) overlaps << QString::number(o);
+
+        out << Qt::endl
+            << QStringLiteral("%1  —  [%2,%3], множеств %4 (перекрытия: %5), до %6 строк")
+                   .arg(c.name).arg(n).arg(k).arg(bz.sets).arg(overlaps.join(QStringLiteral(", "))).arg(c.r)
+            << Qt::endl
+            << QStringLiteral("перебрано %1 слов вместо %2; гарантия: все слова веса < %3")
+                   .arg(bz.enumerated).arg(1ULL << k).arg(bz.guaranteedBelow)
+            << Qt::endl
+            << QStringLiteral("   вес     точно        БЦ    как сейчас") << Qt::endl;
+
+        int shown = 0;
+        for (auto it = exact.cbegin(); it != exact.cend() && shown < bz.guaranteedBelow + 4; ++it, ++shown) {
+            const int w = it.key();
+            const quint64 e = it.value();
+            const quint64 b = bz.spectrum.value(w, 0);
+            const quint64 v = naive.value(w, 0);
+            QString mark;
+            if (w < bz.guaranteedBelow)
+                mark = b == e ? QStringLiteral("  ✓") : QStringLiteral("  ПРОВАЛ");
+            else
+                mark = QStringLiteral("  (вне гарантии)");
+            if (v != e)
+                mark += QStringLiteral("   ← сейчас %1").arg(v < e ? QStringLiteral("недобор") : QStringLiteral("ПЕРЕБОР"));
+            out << QStringLiteral("   %1  %2  %3  %4%5")
+                       .arg(w, 3).arg(e, 10).arg(b, 8).arg(v, 10).arg(mark) << Qt::endl;
+        }
+    }
+    out << Qt::endl;
+}
+
+// То же на матрице из файла, где точного спектра нет: сравниваются только
+// Брауэр–Циммерман и нынешний перебор, и печатается сертифицированный низ.
+//
+// Запуск: SpectrumTests.exe --bz-file <файл матрицы> <строк> [<множеств>]
+static int bzFile(const QString& path, int r, int maxSets)
+{
+    RunConfig cfg;
+    if (!loadMatrixOrCase(path, cfg))
+        return 2;
+    const int k = cfg.matrix.size();
+    const int n = cfg.matrix.first().length();
+
+    out << QStringLiteral("[%1,%2], до %3 строк, множеств до %4").arg(n).arg(k).arg(r).arg(maxSets) << Qt::endl;
+    out.flush();
+
+    auto t = std::chrono::steady_clock::now();
+    const BZ::Result bz = BZ::run(cfg.matrix, r, maxSets);
+    const double bzSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
+
+    t = std::chrono::steady_clock::now();
+    const Reference::Spectrum naive = BZ::naivePartial(cfg.matrix, r);
+    const double naiveSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
+
+    QStringList overlaps;
+    for (int o : bz.overlaps) overlaps << QString::number(o);
+
+    out << QStringLiteral("множеств %1 (перекрытия: %2), перебрано %3 слов за %4 с; как сейчас — за %5 с")
+               .arg(bz.sets).arg(overlaps.join(QStringLiteral(", "))).arg(bz.enumerated)
+               .arg(bzSec, 0, 'f', 1).arg(naiveSec, 0, 'f', 1) << Qt::endl
+        << QStringLiteral("гарантия: все слова веса < %1 найдены").arg(bz.guaranteedBelow) << Qt::endl;
+    if (bz.rejectedOverlap >= 0)
+        out << QStringLiteral("следующее множество перекрыло бы прежние на %1 столбцов — не взято")
+                   .arg(bz.rejectedOverlap) << Qt::endl;
+    out << QStringLiteral("   вес        БЦ    как сейчас") << Qt::endl;
+
+    int minBz = -1, minNaive = -1;
+    for (auto it = bz.spectrum.cbegin(); it != bz.spectrum.cend(); ++it)
+        if (it.key() > 0 && minBz < 0) minBz = it.key();
+    for (auto it = naive.cbegin(); it != naive.cend(); ++it)
+        if (it.key() > 0 && minNaive < 0) minNaive = it.key();
+
+    QSet<int> weights;
+    for (auto it = bz.spectrum.cbegin(); it != bz.spectrum.cend(); ++it) weights.insert(it.key());
+    for (auto it = naive.cbegin(); it != naive.cend(); ++it) weights.insert(it.key());
+    QList<int> sorted = weights.values();
+    std::sort(sorted.begin(), sorted.end());
+
+    int shown = 0;
+    for (int w : sorted) {
+        if (w >= bz.guaranteedBelow + 6 && shown > 12) break;
+        const QString mark = w < bz.guaranteedBelow ? QStringLiteral("  точно") : QStringLiteral("  (вне гарантии)");
+        out << QStringLiteral("   %1  %2  %3%4")
+                   .arg(w, 3).arg(bz.spectrum.value(w, 0), 8).arg(naive.value(w, 0), 10).arg(mark) << Qt::endl;
+        ++shown;
+    }
+    out << QStringLiteral("минимальный найденный вес: БЦ %1, как сейчас %2").arg(minBz).arg(minNaive) << Qt::endl;
+    return 0;
+}
+
+// Гарантия алгоритма: ниже границы совпадение с точным спектром обязано быть
+// побитовым, выше — БЦ не имеет права насчитать больше, чем есть.
+static void testBrouwerZimmermann()
+{
+    out << Qt::endl << QStringLiteral("Брауэр–Циммерман: низ спектра с гарантией") << Qt::endl;
+
+    for (const BZCase& c : bzCases()) {
+        const Reference::Spectrum exact = Reference::bruteForce(c.rows);
+        const BZ::Result          bz    = BZ::run(c.rows, c.r, c.sets);
+
+        bool ok = true;
+        for (auto it = exact.cbegin(); it != exact.cend(); ++it) {
+            const quint64 found = bz.spectrum.value(it.key(), 0);
+            if (it.key() < bz.guaranteedBelow ? found != it.value() : found > it.value()) {
+                ok = false;
+                out << QStringLiteral("      вес %1: точно %2, БЦ %3 (граница %4)")
+                           .arg(it.key()).arg(it.value()).arg(found).arg(bz.guaranteedBelow) << Qt::endl;
+            }
+        }
+        for (auto it = bz.spectrum.cbegin(); it != bz.spectrum.cend(); ++it)
+            if (!exact.contains(it.key())) { ok = false; out << QStringLiteral("      лишний вес %1").arg(it.key()) << Qt::endl; }
+
+        const QString what = QStringLiteral("%1: веса < %2 точны").arg(c.name).arg(bz.guaranteedBelow);
+        if (ok) { ++g_passed; out << "  ok       " << what << Qt::endl; }
+        else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl; }
+    }
+}
+
 // -------------------------------------------------------------------- main
 
 int main(int argc, char* argv[])
@@ -1999,6 +2154,20 @@ int main(int argc, char* argv[])
         << Qt::endl;
 
     const QStringList args = app.arguments();
+
+    const int bzAt = args.indexOf(QStringLiteral("--bz-file"));
+    if (bzAt >= 0 && bzAt + 2 < args.size()) {
+        const int sets = bzAt + 3 < args.size() ? args.at(bzAt + 3).toInt() : 8;
+        const int rc = bzFile(args.at(bzAt + 1), args.at(bzAt + 2).toInt(), sets > 0 ? sets : 8);
+        out.flush();
+        return rc;
+    }
+
+    if (args.contains(QStringLiteral("--bz"))) {
+        bzReport();
+        out.flush();
+        return 0;
+    }
 
     if (args.contains(QStringLiteral("--bench"))) {
         benchmark();
@@ -2081,6 +2250,7 @@ int main(int argc, char* argv[])
     testAxisLabelStep();
     testUpdateIntervals();
     testProbeLeavesNoTrace();
+    testBrouwerZimmermann();
 
     testAutosaveStore();
     testCanResume();

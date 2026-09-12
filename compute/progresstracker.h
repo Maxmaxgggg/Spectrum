@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <QtGlobal>
@@ -32,10 +33,17 @@ public:
         bool checkpoint = false;   // сохранить состояние
     };
 
+    // Интервалы разрешено менять на ходу, из потока интерфейса, пока расчёт
+    // идёт. Через очередь событий это не сделать: поток воркера весь расчёт
+    // сидит внутри computeSpectrum и до своего цикла событий не возвращается,
+    // а значит настройка пролежала бы там до конца. Поэтому числа атомарные —
+    // их запись безопасна из любого потока и ничего не ждёт.
+    //
+    // Ровно так же устроена отмена расчёта: она тоже пишет атомик напрямую.
     void setIntervals(millis spectrum, seconds checkpoint)
     {
-        m_spectrumInterval   = spectrum;
-        m_checkpointInterval = checkpoint;
+        m_spectrumMs        .store(int(spectrum.count()),   std::memory_order_relaxed);
+        m_checkpointSeconds .store(int(checkpoint.count()), std::memory_order_relaxed);
     }
 
     // Сохранять чекпоинт каждые everyOps операций вместо привязки к таймеру.
@@ -78,10 +86,12 @@ public:
         Due d;
         d.estimate   = (m_now - m_lastEstimate   >= seconds(1));
         d.bar        = (m_now - m_lastBar        >= m_barInterval);
-        d.spectrum   = (m_now - m_lastSpectrum   >= m_spectrumInterval);
+        d.spectrum   = (m_now - m_lastSpectrum
+                            >= millis(m_spectrumMs.load(std::memory_order_relaxed)));
         d.checkpoint = m_opsCheckpoint > 0
                            ? (m_doneOps >= m_nextCheckpointOps)
-                           : (m_now - m_lastCheckpoint >= m_checkpointInterval);
+                           : (m_now - m_lastCheckpoint
+                                  >= seconds(m_checkpointSeconds.load(std::memory_order_relaxed)));
         return d;
     }
 
@@ -138,7 +148,7 @@ private:
     clock::time_point m_lastSpectrum;
     clock::time_point m_lastCheckpoint;
 
-    millis  m_spectrumInterval   { 1000 };
-    seconds m_checkpointInterval { 10 };
+    std::atomic<int> m_spectrumMs        { 1000 };
+    std::atomic<int> m_checkpointSeconds { 10 };
     const seconds m_barInterval  { 1  };
 };

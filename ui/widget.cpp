@@ -1,4 +1,5 @@
 #include "widget.h"
+#include "docktitlebar.h"
 #include "fonticons.h"
 
 #include <QHeaderView>
@@ -10,6 +11,7 @@
 #include "format.h"
 #include "matrixmenu.h"
 #include "spectrumplot.h"
+#include "statspanel.h"
 #include "ui_widget.h"
 
 
@@ -108,6 +110,33 @@ void MainWindow::showAutosaveDialog()
 // спектр и прогресс. Дальше кнопка предлагает продолжить с этого места.
 void MainWindow::applyAutosave(const Matrix& matrix, const AutosaveRecord& record)
 {
+    // Пока идёт расчёт, чужое состояние поднимать нельзя. Воркер считает
+    // прежний код и продолжит слать свой спектр и свой прогресс поверх
+    // загруженных — на экране получится смесь двух расчётов: подпись от одной
+    // записи, цифры от другой. Поэтому сначала остановка, а подстановка —
+    // после неё, из handleFinished.
+    if (runState == RunState::Running || runState == RunState::Paused) {
+        const auto reply = QMessageBox::question(this,
+            tr("Идёт расчёт"),
+            tr("Чтобы загрузить сохранение, текущий расчёт придётся остановить.\n"
+               "Его состояние сохранится, и продолжить можно будет позже.\n\n"
+               "Остановить и загрузить?"),
+            QMessageBox::Yes | QMessageBox::No);
+        if (reply != QMessageBox::Yes)
+            return;
+
+        pendingMatrix   = matrix;
+        pendingRecord   = record;
+        pendingAutosave = true;
+        on_cancelPBN_clicked();
+        return;
+    }
+
+    applyAutosaveNow(matrix, record);
+}
+
+void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& record)
+{
     // handleMatrixChanged сбрасывает поднятое состояние — он для того и нужен,
     // чтобы ловить правку матрицы руками. Своя подстановка правкой не считается.
     applyingAutosave = true;
@@ -135,9 +164,8 @@ void MainWindow::applyAutosave(const Matrix& matrix, const AutosaveRecord& recor
     const double total = totalOperations(record, matrix.size());
     const int percent = total > 0.0 ? int(100.0 * double(record.state.doneOps) / total) : 0;
     ui->infoPBR->setValue(qBound(0, percent, 100));
-    ui->infoLBL->setText(tr("Загружено сохранение: перебрано %1 слов")
+    statsPanel->showState(tr("Загружено сохранение: перебрано %1 слов")
                              .arg(Format::count(record.state.doneOps)));
-    ui->infoLBL->show();
 
     runState = RunState::Loaded;
     updateExecuteButton();
@@ -189,6 +217,10 @@ void MainWindow::setupDocks()
         dock->setObjectName(QLatin1String(name));   // без имени Qt не сохранит раскладку
         dock->setWidget(content);
         dock->setToolTip(tip);
+        // Свой заголовок вместо системной рамки: без него вытащенная панель
+        // получает оформление Windows и красный крестик вместо привычной
+        // серой полосы. Подробности в docktitlebar.h.
+        dock->setTitleBarWidget(new DockTitleBar(dock));
         return dock;
     };
 
@@ -198,6 +230,10 @@ void MainWindow::setupDocks()
                             UIStrings::SPECTRUM_TOOLTIP, "spectrumDock");
     plotDock     = makeDock(ui->spectrumCPT, tr("График спектра"),
                             UIStrings::PLOT_TOOLTIP,     "plotDock");
+
+    statsPanel = new StatsPanel(this);
+    statsDock  = makeDock(statsPanel, tr("Ход расчёта"),
+                          UIStrings::STATS_TOOLTIP, "statsDock");
 
     // Швартуется только первый док; остальные добавляет splitDockWidget. Если
     // добавить все три через addDockWidget, они складываются в одну область
@@ -209,8 +245,19 @@ void MainWindow::setupDocks()
             spectrumPlot->refresh();
     });
 
+    // Порядок делений важен. Сначала окно делится по высоте, и только потом
+    // верхняя половина — по ширине: иначе панель хода отрезает себе колонку во
+    // всю высоту окна и встаёт не рядом с матрицей, а сбоку от всего сразу.
     splitDockWidget(matrixDock,   spectrumDock, Qt::Vertical);
+    splitDockWidget(matrixDock,   statsDock,    Qt::Horizontal);
     splitDockWidget(spectrumDock, plotDock,     Qt::Horizontal);
+
+    // Ширины задаются явно. Сам Qt делит место по sizeHint, а у графика он
+    // крошечный, у текстовых полей — во всю строку, и график получал узкую
+    // полоску у правого края. Числа относительные, Qt подгоняет их под окно;
+    // левая колонка шире — матрице и спектру нужна ширина под строки цифр.
+    resizeDocks({ matrixDock,   statsDock }, { 600, 400 }, Qt::Horizontal);
+    resizeDocks({ spectrumDock, plotDock  }, { 600, 400 }, Qt::Horizontal);
 
     // Fixed, а не Maximum: Maximum разрешает сжаться до нуля, и полоса с
     // кнопками исчезала, отдав всю высоту панелям.
@@ -222,6 +269,7 @@ void MainWindow::setupDocks()
     ui->viewMNU->addAction(matrixDock->toggleViewAction());
     ui->viewMNU->addAction(spectrumDock->toggleViewAction());
     ui->viewMNU->addAction(plotDock->toggleViewAction());
+    ui->viewMNU->addAction(statsDock->toggleViewAction());
     ui->viewMNU->addSeparator();
     ui->viewMNU->addAction(UIStrings::VIEW_RESET_TEXT, this, &MainWindow::resetLayout);
 }
@@ -242,6 +290,7 @@ void MainWindow::setToolTips() {
     ui->cancelPBN->setIcon(FluentIcons::icon(this, FluentIcons::STOP));
     updateExecuteButton();
     ui->exitPBN->setToolTip(UIStrings::EXIT_TOOLTIP);
+    ui->exitPBN->setIcon(FluentIcons::icon(this, FluentIcons::EXIT));
 }
 
 void MainWindow::setWorker()
@@ -320,6 +369,13 @@ void MainWindow::connectSettingsDialog()
             settings.matrix = ui->matrixPTE->toStringList();
             spectrumPlot->setMaxBars(settings.maxPlotBars);
             MainWindow::sendSettingsToWorker(settings.toJson());
+
+            // Идущему расчёту настройки через очередь не доходят: воркер до
+            // самого конца не возвращается в свой цикл событий. Живые интервалы
+            // передаются напрямую.
+            if (workerPtr && (runState == RunState::Running || runState == RunState::Paused))
+                workerPtr->setLiveIntervals(settings.timeIntSet.updateSpectrumInterval,
+                                            settings.timeIntSet.saveSpectrumInterval);
         });
 }
 
@@ -362,9 +418,6 @@ void MainWindow::startComputation()
 {
     const bool resuming = runState == RunState::Loaded;
 
-    // Прошлый подбор к новому расчёту отношения не имеет.
-    tunedGrid.clear();
-
     if (!workerPtr) {
         QMessageBox::warning(this, UIStrings::ERROR_TITLE, tr("Worker не подключён"));
         return;
@@ -383,8 +436,7 @@ void MainWindow::startComputation()
     ui->matrixPTE->setReadOnly(true);
     ui->cancelPBN->setEnabled(true);
     matrixMenu->setActionsEnabled(false);
-    ui->infoLBL->setText("");
-    ui->infoLBL->show();
+    statsPanel->showState(tr("Идёт расчёт"));
     ui->infoPBR->setValue(0);
 
     // Поток нужен уже сейчас: настройки уходят воркеру через очередь событий.
@@ -411,6 +463,10 @@ void MainWindow::startComputation()
     // воркер начинал бы с того состояния, что осталось от прошлого запуска.
     QMetaObject::invokeMethod(workerPtr, "initializeRunState", Qt::QueuedConnection,
                               Q_ARG(LoadMode, mode));
+
+    // Настройки к этому моменту уже пришли от диалога по requestSettings.
+    statsPanel->showTask(settings);
+    statsPanel->clearProgress();
 
     QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection);
 
@@ -509,8 +565,7 @@ void MainWindow::handleUpdateSpectrumPTE( const SpectrumText spectrum )
 // программа в итоге считает и почему время отличается от прошлого запуска.
 void MainWindow::handleGridTuned(int blocks, int threads)
 {
-    tunedGrid = tr("Сетка запуска:      %1 блоков x %2 нитей (подобрана)")
-                    .arg(blocks).arg(threads);
+    statsPanel->showGrid(blocks, threads);
 }
 
 void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed,
@@ -520,24 +575,12 @@ void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, d
 
     const QString elapsedStr = Format::duration(elapsedSec);
 
-    QString infoText =
-        tr("Прошло времени:     %1").arg(elapsedStr) + "\n" +
-        tr("Осталось времени:   %1").arg(Format::remainingTime(remainingMinutes)) + "\n" +
-        tr("Средняя скорость:   %1").arg(Format::speed(speed)) + "\n" +
-        // Проценты хороши для полоски, но масштаб задачи по ним не понять:
-        // "43 %" ничего не говорит, а "1.6 из 3.8 трлн слов" — говорит.
-        tr("Перебрано слов:     %1 из %2").arg(Format::count(doneOps), Format::count(totalOps));
-
-    if (!tunedGrid.isEmpty())
-        infoText += "\n" + tunedGrid;
-
-    ui->infoLBL->setText(infoText);
+    statsPanel->showProgress(elapsedSec, minutesLeft, speed, doneOps, totalOps);
 
     // Имя программы в заголовке остаётся: раньше он превращался просто в
     // "2 ч 15 мин", и в панели задач было непонятно, что это за окно.
     this->setWindowTitle(tr("%1 — осталось %2")
                              .arg(UIStrings::MAIN_TITLE, Format::remainingTime(remainingMinutes)));
-    ui->infoLBL->show();
 }
 void MainWindow::showSaveLBL()
 {
@@ -609,13 +652,25 @@ void MainWindow::handleFinished(int elapsedSec)
     this->setWindowTitle( UIStrings::MAIN_TITLE  );
     if ( workerPtr->isCancelled() ) {
         workerPtr->uncancel();
-        ui->infoLBL->setText( UIStrings::CANCEL_TEXT );
+        // Расчёт останавливали ради загрузки сохранения — вот теперь можно.
+        if (pendingAutosave) {
+            pendingAutosave = false;
+            applyAutosaveNow(pendingMatrix, pendingRecord);
+            return;
+        }
+        statsPanel->showState( UIStrings::CANCEL_TEXT );
         return;
     }
     // Меньше секунды — «0 с» выглядело бы как сбой замера.
     const QString elapsedStr = elapsedSec > 0 ? Format::duration(elapsedSec)
                                               : tr("< 1 с");
-    ui->infoLBL->setText( UIStrings::READY_TEXT + elapsedStr );
+    statsPanel->showState( UIStrings::READY_TEXT + elapsedStr );
+
+    // Расчёт успел добежать до конца, пока пользователь выбирал запись.
+    if (pendingAutosave) {
+        pendingAutosave = false;
+        applyAutosaveNow(pendingMatrix, pendingRecord);
+    }
 }
 
 

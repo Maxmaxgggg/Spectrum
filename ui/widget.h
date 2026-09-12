@@ -73,6 +73,8 @@ private:
     QDockWidget    *matrixDock       = nullptr;
     QDockWidget    *spectrumDock     = nullptr;
     QDockWidget    *plotDock         = nullptr;
+    QDockWidget    *statsDock        = nullptr;
+    class StatsPanel *statsPanel     = nullptr;
     // Снимок раскладки сразу после сборки — по нему работает «Раскладка по
     // умолчанию». Собирать её заново расстановкой доков ненадёжно: Qt не
     // обещает, что повторное добавление даст те же пропорции.
@@ -97,12 +99,18 @@ private:
     enum class RunState { Idle, Running, Paused, Loaded };
     RunState runState = RunState::Idle;
 
+    // Запись, поднятая во время расчёта: применить её можно только после того,
+    // как воркер остановится, иначе он затрёт её своими обновлениями.
+    bool           pendingAutosave = false;
+    Matrix         pendingMatrix;
+    AutosaveRecord pendingRecord;
+
     // График спектра. Создаётся в конструкторе, когда виджет из .ui готов.
     std::unique_ptr<SpectrumPlot> spectrumPlot;
 
     int remainingMinutes = -1;
     // Строка о подобранной сетке. Пустая, если подбор не проводился.
-    QString tunedGrid;
+
 
 
     QString matrixError() const;
@@ -129,6 +137,9 @@ private:
 
     void showAutosaveDialog();
     void applyAutosave(const Matrix& matrix, const AutosaveRecord& record);
+    // Собственно подстановка записи в окно. Отделена от applyAutosave, потому
+    // что во время расчёта её приходится откладывать до остановки воркера.
+    void applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& record);
     // Пока матрица подставляется из записи, правкой её считать нельзя.
     bool applyingAutosave = false;
     void setMatrixMenu();

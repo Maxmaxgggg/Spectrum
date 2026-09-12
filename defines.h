@@ -13,7 +13,7 @@ namespace Constants
 
     // Номер раскладки доков. Менять при добавлении или удалении панели:
     // сохранённая раскладка старого набора тогда просто не подхватится.
-    constexpr  int LAYOUT_VERSION = 1;
+    constexpr  int LAYOUT_VERSION = 3;   // 3: панель хода встала рядом с матрицей
 
     constexpr  int MAX_POSITIONS = 33;
     // Потолок кандидатов автоподбора: под столько нитей длинному пути надо
@@ -96,6 +96,7 @@ namespace UIStrings
     constexpr const char PLOT_TOOLTIP[]             = "Тот же спектр столбчатой диаграммой";
     constexpr const char VIEW_RESET_TEXT[]          = "Раскладка по умолчанию";
     constexpr const char MATRIX_TOOLTIP[]           = "Порождающая матрица кода";
+    constexpr const char STATS_TOOLTIP[]            = "Чем считаем, сколько идёт и сколько сделано";
 
 }
 

@@ -21,6 +21,8 @@
     <ClCompile Include="ui\settingsdialog.cpp" />
     <ClCompile Include="storage\autosavestore.cpp" />
     <ClCompile Include="ui\autosavedialog.cpp" />
+    <ClCompile Include="ui\docktitlebar.cpp" />
+    <ClCompile Include="ui\statspanel.cpp" />
     <ClCompile Include="ui\format.cpp" />
     <ClCompile Include="ui\cachingstyle.cpp" />
     <ClCompile Include="ui\fonticons.cpp" />
@@ -42,6 +44,8 @@
     <ClInclude Include="ui\format.h" />
     <ClInclude Include="ui\fonticons.h" />
     <ClInclude Include="ui\matrixlibrary.h" />
+    <QtMoc Include="ui\docktitlebar.h" />
+    <QtMoc Include="ui\statspanel.h" />
     <QtMoc Include="ui\cachingstyle.h" />
     <QtMoc Include="ui\autosavedialog.h" />
     <QtMoc Include="ui\matrixmenu.h" />
