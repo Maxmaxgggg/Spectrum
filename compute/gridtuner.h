@@ -1,5 +1,7 @@
 #pragma once
 
+#include "computeSpectrumKernel.cuh"
+
 #include <cuda_runtime.h>
 
 #include <cstdint>
@@ -52,6 +54,9 @@ struct GridTuneTask
 
     // Матрица в глобальной памяти; nullptr, если она уехала в разделяемую.
     const uint64_t* matrixGlobal = nullptr;
+    // Брауэр–Циммерман: замер идёт по первому множеству, но с настоящей
+    // проверкой единственности — она входит в стоимость слова.
+    MatrixSlot slot;
     // Стартовые позиции на устройстве, заполненные под measureMasksPerThread
     // масок на нить. Кандидат с T нитями берёт первые T слотов: слот i отвечает
     // рангу offset + i * measureMasksPerThread, то есть префикс массива — это

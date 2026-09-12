@@ -47,6 +47,9 @@ static QTextStream out(stdout);
 static int g_passed = 0;
 static int g_failed = 0;
 static bool g_gpuAvailable = false;
+// План последнего расчёта Брауэра–Циммермана: множеств, строк, точно до веса.
+// -1 — расчёт был не по Брауэру–Циммерману.
+static int g_planSets = -1, g_planRows = -1, g_planExactUpTo = -1;
 
 // ---------------------------------------------------------------- утилиты
 
@@ -92,6 +95,8 @@ struct RunConfig
     int         threadsGpu = 256;
     // Подбирать сетку замером вместо blocksGpu/threadsGpu.
     bool        autoTune   = false;
+    // Брауэр–Циммерман: до какого веса нужен точный спектр.
+    int         bzWeight   = 0;
 };
 
 static ComputationSettings makeSettings(const RunConfig& cfg)
@@ -101,6 +106,7 @@ static ComputationSettings makeSettings(const RunConfig& cfg)
     s.algorithmType = cfg.algorithm;
     s.enumType      = ComputationSettings::Full;
     s.maxRows       = cfg.maxRows > 0 ? cfg.maxRows : cfg.matrix.size();
+    s.bzWeight      = cfg.bzWeight > 0 ? cfg.bzWeight : 8;
     s.compDev       = cfg.device;
     s.compDevSet.threadsCpu = cfg.threadsCpu;
     s.compDevSet.blocksGpu  = cfg.blocksGpu;
@@ -146,6 +152,11 @@ static Spectrum runWorker(const RunConfig& cfg,
                      [&captured](const SpectrumText& s) { captured = parseSpectrumText(s); });
     QObject::connect(&worker, &Worker::errorOccurred,
                      [&](const QString& m) { errored = true; errorMessage = m; });
+    g_planSets = g_planRows = g_planExactUpTo = -1;
+    QObject::connect(&worker, &Worker::planReady,
+                     [](int sets, int rows, int exactUpTo) {
+                         g_planSets = sets; g_planRows = rows; g_planExactUpTo = exactUpTo;
+                     });
 
     worker.setSettings(makeSettings(cfg).toJson());
     worker.setCheckpointOpsPolicy(checkpointEveryOps, stopAfterOps);
@@ -174,14 +185,32 @@ static void clearCheckpoints()
 static quint64 expectedTotalOps(const RunConfig& cfg)
 {
     const quint64 k = quint64(cfg.matrix.size());
-    if (cfg.algorithm != Algorithm::SimpleXor)
+    if (cfg.algorithm == Algorithm::GrayCode || cfg.algorithm == Algorithm::DualCode)
         return 1ULL << k;                    // код Грея перебирает все маски подряд
 
-    const quint64 maxRows = cfg.maxRows > 0 ? quint64(cfg.maxRows) : k;
+    quint64 maxRows = cfg.maxRows > 0 ? quint64(cfg.maxRows) : k;
+    quint64 sets    = 1;
+    if (cfg.algorithm == Algorithm::BrouwerZimmermann) {
+        // Тот же план, что строит воркер: множества по матрице, их число и
+        // глубина — по весу.
+        int words = 0;
+        const std::vector<quint64> packed = InfoSets::packRows(cfg.matrix, words);
+        const int rows = cfg.matrix.size();
+        const int cols = cfg.matrix.first().length();
+        const int fit  = std::max(1, Constants::MAX_CONST_WORDS / std::max(1, rows * words));
+        std::vector<InfoSets::InfoSet> found =
+            InfoSets::find(packed.data(), rows, cols, words, std::min(Constants::MAX_INFO_SETS, fit));
+        std::vector<int> overlaps;
+        for (const InfoSets::InfoSet& set : found) overlaps.push_back(set.overlap);
+        const int weight = cfg.bzWeight > 0 ? cfg.bzWeight : 8;
+        sets = quint64(InfoSets::setsForWeight(overlaps, weight, rows, cols));
+        overlaps.resize(size_t(sets));
+        maxRows = quint64(InfoSets::rowsForWeight(overlaps, weight, rows, cols));
+    }
     quint64 total = 0;
     for (quint64 r = 0; r <= maxRows; ++r)
         total += Reference::binom(k, r);
-    return total;
+    return total * sets;
 }
 
 // Сколько операций записано в единственном сохранённом автосохранении.
@@ -2101,6 +2130,258 @@ static int bzFile(const QString& path, int r, int maxSets)
     return 0;
 }
 
+// Брауэр–Циммерман в самом расчёте: ниже гарантии спектр обязан совпасть с
+// точным побитово, выше — не превышать его. Заодно проверяется правило
+// единственности: при весе во всю длину кода перебирается всё, и каждое слово
+// должно быть засчитано ровно один раз — спектр совпадает с точным целиком.
+static Spectrum checkBzExact(const QString& name, const RunConfig& cfg, const Spectrum& exact)
+{
+    if (cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        return Spectrum();
+    }
+    clearCheckpoints();
+    const Spectrum actual = runWorker(cfg);
+    clearCheckpoints();
+
+    bool ok = g_planExactUpTo >= cfg.bzWeight && !actual.isEmpty();
+    QStringList problems;
+    if (g_planExactUpTo < cfg.bzWeight)
+        problems << QStringLiteral("план обещает точность до %1, просили %2")
+                        .arg(g_planExactUpTo).arg(cfg.bzWeight);
+    for (auto it = exact.cbegin(); it != exact.cend(); ++it) {
+        const quint64 found = actual.value(it.key(), 0);
+        if (it.key() <= g_planExactUpTo ? found != it.value() : found > it.value()) {
+            ok = false;
+            problems << QStringLiteral("вес %1: точно %2, получено %3")
+                            .arg(it.key()).arg(it.value()).arg(found);
+        }
+    }
+    for (auto it = actual.cbegin(); it != actual.cend(); ++it)
+        if (!exact.contains(it.key())) {
+            ok = false;
+            problems << QStringLiteral("лишний вес %1").arg(it.key());
+        }
+
+    const QString what = QStringLiteral("%1: множеств %2, до %3 строк, точно до веса %4")
+                             .arg(name).arg(g_planSets).arg(g_planRows).arg(g_planExactUpTo);
+    if (ok) { ++g_passed; out << "  ok       " << what << Qt::endl; }
+    else {
+        ++g_failed;
+        out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl;
+        for (const QString& line : problems)
+            out << QStringLiteral("      ") << line << Qt::endl;
+    }
+    return actual;
+}
+
+// Два расчёта по одним множествам обязаны совпасть целиком — и ниже гарантии,
+// и выше: найденное множество слов у них одно и то же.
+static void expectSame(const QString& name, const Spectrum& a, const Spectrum& b)
+{
+    if (a.isEmpty() || b.isEmpty())
+        return;   // один из расчётов пропущен или провалился — уже отмечено
+    if (a == b) { ++g_passed; out << "  ok       " << name << Qt::endl; return; }
+    ++g_failed;
+    out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl
+        << QStringLiteral("      CPU: ") << formatSpectrum(a) << Qt::endl
+        << QStringLiteral("      GPU: ") << formatSpectrum(b) << Qt::endl;
+}
+
+// Досчёт до большего веса: запись после расчёта до w1 — начало расчёта до w2.
+static void checkExtendBz(const QString& name, RunConfig cfg, int from, int to)
+{
+    if (cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        return;
+    }
+    RunConfig target = cfg;  target.bzWeight = to;
+    clearCheckpoints();
+    const Spectrum direct = runWorker(target);
+
+    clearCheckpoints();
+    RunConfig first = cfg;   first.bzWeight = from;
+    runWorker(first);
+
+    const qint64 saved = savedDoneOps();
+    if (saved <= 0) {
+        ++g_failed;
+        out << QStringLiteral("  ПРОВАЛ   ") << name
+            << QStringLiteral("  — после расчёта записи не осталось") << Qt::endl;
+        clearCheckpoints();
+        return;
+    }
+    const Spectrum extended = runWorker(target, LoadMode::FromCheckpoint);
+    clearCheckpoints();
+
+    if (extended == direct) {
+        ++g_passed;
+        out << "  ok       " << name
+            << QStringLiteral("  (досчитано с ") << saved << QStringLiteral(" оп.)") << Qt::endl;
+        return;
+    }
+    ++g_failed;
+    out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
+    out << QStringLiteral("      напрямую: ") << formatSpectrum(direct)   << Qt::endl;
+    out << QStringLiteral("      досчётом: ") << formatSpectrum(extended) << Qt::endl;
+}
+
+static void testBrouwerZimmermannWorker()
+{
+    out << Qt::endl << QStringLiteral("Брауэр–Циммерман в расчёте: CPU и GPU, короткий и длинный пути") << Qt::endl;
+
+    // Короткие коды с точным спектром: гарантия и полный перебор.
+    for (const BZCase& c : bzCases()) {
+        const Spectrum exact = Reference::bruteForce(c.rows);
+        RunConfig cfg;
+        cfg.matrix    = c.rows;
+        cfg.algorithm = Algorithm::BrouwerZimmermann;
+        cfg.bzWeight  = 6;
+
+        cfg.device = ComputeDevice::CPU;
+        const Spectrum cpu = checkBzExact(c.name + QStringLiteral(" CPU, вес 6"), cfg, exact);
+        cfg.device = ComputeDevice::GPU;
+        const Spectrum gpu = checkBzExact(c.name + QStringLiteral(" GPU, вес 6"), cfg, exact);
+        expectSame(c.name + QStringLiteral(": CPU и GPU совпадают"), cpu, gpu);
+
+        // Вес во всю длину: перебирается всё, спектр обязан совпасть целиком.
+        cfg.bzWeight = c.rows.first().length();
+        cfg.device   = ComputeDevice::CPU;
+        checkBzExact(c.name + QStringLiteral(" CPU, весь код"), cfg, exact);
+    }
+
+    // Длинный путь: k > 63. Точного спектра нет, поэтому CPU против GPU и
+    // против прототипа ниже общей гарантии.
+    {
+        const QStringList rows = BZ::scramble(BZ::systematicRandom(66, 140, 21), 4);
+        RunConfig cfg;
+        cfg.matrix    = rows;
+        cfg.algorithm = Algorithm::BrouwerZimmermann;
+        cfg.bzWeight  = 5;
+
+        cfg.device = ComputeDevice::CPU;
+        clearCheckpoints();
+        const Spectrum cpu = runWorker(cfg);
+        const int exactCpu = g_planExactUpTo, setsCpu = g_planSets, rowsCpu = g_planRows;
+        clearCheckpoints();
+
+        Spectrum gpu;
+        if (g_gpuAvailable) {
+            cfg.device = ComputeDevice::GPU;
+            gpu = runWorker(cfg);
+            clearCheckpoints();
+        }
+
+        const QString what = QStringLiteral("[140,66] длинный путь: множеств %1, до %2 строк, точно до веса %3")
+                                 .arg(setsCpu).arg(rowsCpu).arg(exactCpu);
+        if (exactCpu >= cfg.bzWeight && !cpu.isEmpty()) { ++g_passed; out << "  ok       " << what << Qt::endl; }
+        else { ++g_failed; out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl; }
+
+        if (g_gpuAvailable)
+            expectSame(QStringLiteral("[140,66]: CPU и GPU совпадают"), cpu, gpu);
+        else
+            out << QStringLiteral("  ПРОПУСК  [140,66] GPU  (GPU недоступен)") << Qt::endl;
+
+        // Прототип ищет множества сам, и выше гарантии его находки другие.
+        // Ниже — обязан совпасть.
+        const BZ::Result proto = BZ::run(rows, 2, 3);
+        const int common = std::min(proto.guaranteedBelow, exactCpu + 1);
+        bool ok = true;
+        for (int w = 0; w < common; ++w)
+            if (cpu.value(w, 0) != proto.spectrum.value(w, 0)) {
+                ok = false;
+                out << QStringLiteral("      вес %1: расчёт %2, прототип %3")
+                           .arg(w).arg(cpu.value(w, 0)).arg(proto.spectrum.value(w, 0)) << Qt::endl;
+            }
+        const QString vs = QStringLiteral("[140,66]: совпадает с прототипом ниже веса %1").arg(common);
+        if (ok) { ++g_passed; out << "  ok       " << vs << Qt::endl; }
+        else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   ") << vs << Qt::endl; }
+    }
+
+    // Возобновление и досчёт: слои с несколькими множествами и сквозной
+    // нумерацией внутри слоя.
+    out << Qt::endl << QStringLiteral("Брауэр–Циммерман: сохранение и досчёт") << Qt::endl;
+    {
+        // Слои маленькие — каждый слой каждого множества уходит одним чанком,
+        // и обрыв приходится ровно на границу множества: 903 операции, стоп
+        // после 300 — это середина слоя из двух строк.
+        RunConfig cfg;
+        cfg.matrix    = BZ::scramble(BZ::systematicRandom(24, 96, 9), 2);
+        cfg.algorithm = Algorithm::BrouwerZimmermann;
+        cfg.bzWeight  = 8;
+        cfg.device    = ComputeDevice::CPU;
+        checkResume(QStringLiteral("CPU [96,24], вес 8, обрыв на границе множества"), cfg, cfg, 100, 300);
+        RunConfig gpuCfg = cfg; gpuCfg.device = ComputeDevice::GPU;
+        checkResume(QStringLiteral("GPU [96,24], вес 8, обрыв на границе множества"), gpuCfg, gpuCfg, 100, 300);
+        checkResume(QStringLiteral("CPU -> GPU [96,24], перенос записи"), cfg, gpuCfg, 100, 300);
+        checkExtendBz(QStringLiteral("CPU [96,24]: вес 5, потом 8"), cfg, 5, 8);
+        checkExtendBz(QStringLiteral("GPU [96,24]: вес 5, потом 8"), gpuCfg, 5, 8);
+
+        // Слой из пяти строк на 48 — 1,7 млн комбинаций, больше чанка в
+        // миллион: обрыв попадает внутрь множества.
+        RunConfig mid;
+        mid.matrix    = BZ::scramble(BZ::systematicRandom(48, 96, 33), 6);
+        mid.algorithm = Algorithm::BrouwerZimmermann;
+        mid.bzWeight  = 11;
+        mid.device    = ComputeDevice::CPU;
+        RunConfig midGpu = mid; midGpu.device = ComputeDevice::GPU;
+        checkResume(QStringLiteral("CPU [96,48], вес 11, обрыв внутри множества"), mid, mid, 1000000, 2500000);
+        checkResume(QStringLiteral("GPU [96,48], вес 11, обрыв внутри множества"), midGpu, midGpu, 1000000, 2500000);
+
+        // Длинный путь: слой из пяти строк на 66 — 9,7 млн масок на множество,
+        // чанк GPU при 8x32 нитях — миллион.
+        RunConfig lng;
+        lng.matrix     = BZ::scramble(BZ::systematicRandom(66, 140, 21), 4);
+        lng.algorithm  = Algorithm::BrouwerZimmermann;
+        lng.bzWeight   = 9;
+        lng.device     = ComputeDevice::CPU;
+        lng.blocksGpu  = 8;
+        lng.threadsGpu = 32;
+        RunConfig lngGpu = lng; lngGpu.device = ComputeDevice::GPU;
+        checkResume(QStringLiteral("CPU [140,66] длинный, обрыв внутри множества"), lng, lng, 3000000, 8000000);
+        checkResume(QStringLiteral("GPU [140,66] длинный, обрыв внутри множества"), lngGpu, lngGpu, 3000000, 8000000);
+        lng.bzWeight = 5;
+        checkExtendBz(QStringLiteral("CPU [140,66] длинный: вес 4, потом 5"), lng, 4, 5);
+    }
+}
+
+// Расчёт по Брауэру–Циммерману на матрице из файла: план, время, спектр.
+//
+// Запуск: SpectrumTests.exe --bz-run <файл матрицы> <вес> [cpu|gpu]
+static int bzRun(const QString& path, int weight, const QString& device)
+{
+    RunConfig cfg;
+    if (!loadMatrixOrCase(path, cfg))
+        return 2;
+    cfg.algorithm = Algorithm::BrouwerZimmermann;
+    cfg.bzWeight  = weight;
+    cfg.device    = device == QStringLiteral("cpu") ? ComputeDevice::CPU : ComputeDevice::GPU;
+    cfg.threadsCpu = omp_get_num_procs();
+    cfg.autoTune   = cfg.device == ComputeDevice::GPU;
+
+    const int k = cfg.matrix.size();
+    const int n = cfg.matrix.first().length();
+    out << QStringLiteral("[%1,%2], точно до веса %3, %4")
+               .arg(n).arg(k).arg(weight)
+               .arg(cfg.device == ComputeDevice::CPU ? QStringLiteral("CPU") : QStringLiteral("GPU")) << Qt::endl;
+    out.flush();
+
+    clearCheckpoints();
+    const auto t = std::chrono::steady_clock::now();
+    const Spectrum spectrum = runWorker(cfg);
+    const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
+    clearCheckpoints();
+
+    out << QStringLiteral("множеств %1, до %2 строк, точно до веса %3; %4 с")
+               .arg(g_planSets).arg(g_planRows).arg(g_planExactUpTo).arg(sec, 0, 'f', 1) << Qt::endl;
+    int shown = 0;
+    for (auto it = spectrum.cbegin(); it != spectrum.cend() && shown < 16; ++it, ++shown)
+        out << QStringLiteral("   %1  %2%3").arg(it.key(), 3).arg(it.value(), 12)
+                   .arg(it.key() <= g_planExactUpTo ? QStringLiteral("  точно") : QStringLiteral("  (неполно)"))
+            << Qt::endl;
+    return 0;
+}
+
 // Гарантия алгоритма: ниже границы совпадение с точным спектром обязано быть
 // побитовым, выше — БЦ не имеет права насчитать больше, чем есть.
 static void testBrouwerZimmermann()
@@ -2167,6 +2448,14 @@ int main(int argc, char* argv[])
         bzReport();
         out.flush();
         return 0;
+    }
+
+    const int bzRunAt = args.indexOf(QStringLiteral("--bz-run"));
+    if (bzRunAt >= 0 && bzRunAt + 2 < args.size()) {
+        const QString device = bzRunAt + 3 < args.size() ? args.at(bzRunAt + 3).toLower() : QStringLiteral("gpu");
+        const int rc = bzRun(args.at(bzRunAt + 1), args.at(bzRunAt + 2).toInt(), device);
+        out.flush();
+        return rc;
     }
 
     if (args.contains(QStringLiteral("--bench"))) {
@@ -2251,6 +2540,7 @@ int main(int argc, char* argv[])
     testUpdateIntervals();
     testProbeLeavesNoTrace();
     testBrouwerZimmermann();
+    testBrouwerZimmermannWorker();
 
     testAutosaveStore();
     testCanResume();

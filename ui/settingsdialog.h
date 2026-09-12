@@ -33,7 +33,7 @@ public slots:
     void setInterfaceEnabled(bool enabled);
     // Ставит настройки расчёта из поднятого автосохранения: иначе кнопка
     // «Продолжить» искала бы запись другого алгоритма и не нашла бы её.
-    void applyFromAutosave(int algorithm, int enumType, int maxRows);
+    void applyFromAutosave(int algorithm, int enumType, int maxRows, int bzWeight = 0);
     // Результат пробы, отправок в секунду.
     void applyMeasuredRate(double perSecond);
 private slots:

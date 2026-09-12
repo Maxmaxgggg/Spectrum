@@ -1,4 +1,5 @@
 #include <string>
+#include <vector>
 #include <stdexcept>
 
 #include "computeSpectrumKernel.cuh"
@@ -7,6 +8,13 @@
 // Имя намеренно не d_matrix: так называется параметр ядра длинных кодов, и
 // раньше одно перекрывало другое.
 __constant__ quint64 c_matrix[Constants::MAX_CONST_WORDS];
+
+// Маски информационных множеств Брауэра–Циммермана, по MAX_BLOCKWORDS слов на
+// множество. Все нити варпа читают одно и то же слово одной и той же маски,
+// а это ровно тот доступ, под который константная память и сделана.
+__constant__ quint64 c_masks[Constants::MASKS_CONST_WORDS];
+static_assert(Constants::MASKS_CONST_WORDS == Constants::MAX_INFO_SETS * Constants::MAX_BLOCKWORDS,
+              "маски раскладываются с шагом MAX_BLOCKWORDS");
 
 // Строка матрицы из константной памяти. Короткие коды в неё помещаются всегда
 // (хост это проверяет), поэтому выбирать тут не из чего.
@@ -27,6 +35,29 @@ __device__ __forceinline__ quint64 readMatrixWord(const quint64* matrixGlobal, i
     return matrixGlobal ? matrixGlobal[(size_t)row * wordsPerRow + wordIdx]
                         : readConstMatrixWord(row, wordIdx, wordsPerRow);
 }
+// Правило единственности Брауэра–Циммермана. Слово собрано из r строк
+// матрицы множества slot.setIndex, значит на его столбцах у слова ровно r
+// единиц. Засчитывает слово то множество, на котором единиц меньше всего, а
+// при равенстве — первое по порядку: прежние множества обязаны видеть больше
+// r единиц, последующие — не меньше r. Иначе слово уже посчитано или будет
+// посчитано другим множеством.
+template <int WORDS>
+__device__ __forceinline__ bool bzKeep(const quint64* codeword, int words, int r, MatrixSlot slot)
+{
+    for (int i = 0; i < slot.setCount; ++i) {
+        if (i == slot.setIndex)
+            continue;
+        const quint64* mask = c_masks + i * Constants::MAX_BLOCKWORDS;
+        int ones = 0;
+        #pragma unroll
+        for (int w = 0; w < words; ++w)
+            ones += __popcll(codeword[w] & mask[w]);
+        if (i < slot.setIndex ? ones <= r : ones < r)
+            return false;
+    }
+    return true;
+}
+
 __device__ inline quint64 getBinome(const quint64* binomTable, int n, int k) {
     return binomTable[n * (Constants::MAX_SHORT_CODE_LENGTH + 1) + k];
 }
@@ -124,12 +155,28 @@ __device__ __forceinline__ void diffPositions(
         }
     }
 }
+__host__ cudaError_t copyMasksToConstant(const quint64* h_masks, int setCount, int wordsPerRow)
+{
+    if (setCount < 1 || setCount > Constants::MAX_INFO_SETS
+        || wordsPerRow < 1 || wordsPerRow > Constants::MAX_BLOCKWORDS)
+        throw std::invalid_argument("маски множеств не помещаются в константную память");
+
+    // Раскладка с шагом MAX_BLOCKWORDS; хвост каждой маски нулевой, чтобы ядро
+    // с округлённым вверх числом слов читало нули, а не соседнюю маску.
+    std::vector<quint64> packed(size_t(Constants::MASKS_CONST_WORDS), 0ULL);
+    for (int i = 0; i < setCount; ++i)
+        for (int w = 0; w < wordsPerRow; ++w)
+            packed[size_t(i) * Constants::MAX_BLOCKWORDS + w] = h_masks[size_t(i) * wordsPerRow + w];
+    return cudaMemcpyToSymbol(c_masks, packed.data(), packed.size() * sizeof(quint64), 0,
+                              cudaMemcpyHostToDevice);
+}
+
 // Функция для копирования матрицы с хоста в константную память
 __host__ cudaError_t copyMatrixToConstant( const quint64* h_matrix, size_t matrixSizeInWords ) {
     // Определяем число байт для копирования
     size_t bytes = matrixSizeInWords * Constants::WORD_SIZE;
-    // Проверяем, что не вышли за пределы константной памяти
-    if (bytes > Constants::CONST_MEM_SIZE ) {
+    // Проверяем, что не вышли за пределы отведённой матрице константной памяти
+    if (matrixSizeInWords > size_t(Constants::MAX_CONST_WORDS)) {
         // Раньше здесь бросался голый const char*, который никто не ловил.
         throw std::invalid_argument(
             "матрица не помещается в константную память видеокарты");
@@ -228,7 +275,7 @@ template <int WORDS>
 __global__ void computeSpectrumKernelShortT(
     quint64* d_spectrum, const quint64* d_binomTable,
     int n, int k, int blockCount,
-    quint64 chunkOffset, quint64 chunkSize, quint64 r);
+    quint64 chunkOffset, quint64 chunkSize, quint64 r, MatrixSlot slot);
 
 template <int WORDS>
 __global__ void computeSpectrumKernelGrayShortT(
@@ -246,7 +293,8 @@ __host__ void launchSpectrumKernelShort(
     int blockCount,
     quint64 chunkOffset,
     quint64 chunkSize,
-    quint64 r)
+    quint64 r,
+    MatrixSlot slot)
 {
     validateLaunchParams(blockCount, n);
 
@@ -264,7 +312,7 @@ __host__ void launchSpectrumKernelShort(
 
     // Одной строкой намеренно: перенос со слэшем внутри define читается хуже,
     // чем длинная строка.
-    #define LAUNCH_SHORT(W) computeSpectrumKernelShortT<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(d_spectrum, d_binomTable, n, k, blockCount, chunkOffset, chunkSize, r)
+    #define LAUNCH_SHORT(W) computeSpectrumKernelShortT<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(d_spectrum, d_binomTable, n, k, blockCount, chunkOffset, chunkSize, r, slot)
 
     switch (words) {
         case  1: LAUNCH_SHORT( 1); break;   case  2: LAUNCH_SHORT( 2); break;
@@ -305,7 +353,8 @@ __global__ void computeSpectrumKernelShortT(
     int blockCount,
     quint64 chunkOffset,
     quint64 chunkSize,
-    quint64 r)
+    quint64 r,
+    MatrixSlot slot)
 {
     const int words = WORDS > 0 ? WORDS : blockCount;
 
@@ -331,7 +380,7 @@ __global__ void computeSpectrumKernelShortT(
     for (int i = tid; i < k * words; i += blockDim.x) {
         const int row = i / words;
         const int w   = i % words;
-        s_matrix[i] = (w < blockCount) ? readConstMatrixWord(row, w, blockCount) : 0ULL;
+        s_matrix[i] = (w < blockCount) ? readConstMatrixWord(slot.rowBase + row, w, blockCount) : 0ULL;
     }
     __syncthreads();
 
@@ -388,9 +437,14 @@ __global__ void computeSpectrumKernelShortT(
         // ровно r — весь блок бил атомарными операциями в одну ячейку общей
         // памяти, и железо их сериализовало. Замерено: снятие конкуренции
         // ускоряло такой расчёт втрое, до уровня случайной матрицы.
+        // Вес -1 означает «не засчитывать»: слово уже учтено или будет учтено
+        // другим множеством Брауэра–Циммермана. В обычном расчёте множество
+        // одно, и проверка не вызывается.
         int     runWeight = 0;
         #pragma unroll
             for (int w = 0; w < words; ++w) runWeight += __popcll(codeword[w]);
+        if (slot.setCount > 1 && !bzKeep<WORDS>(codeword, words, int(r), slot))
+            runWeight = -1;
         quint64 runLength = 1;
 
         // При r = 0 и r = k комбинация всего одна, и цикл не выполняется —
@@ -410,18 +464,22 @@ __global__ void computeSpectrumKernelShortT(
             int weight = 0;
             #pragma unroll
             for (int w = 0; w < words; ++w) weight += __popcll(codeword[w]);
+            if (slot.setCount > 1 && !bzKeep<WORDS>(codeword, words, int(r), slot))
+                weight = -1;
 
             if (weight == runWeight) {
                 ++runLength;
             } else {
-                atomicAdd(&s_spectrum[runWeight], runLength);
+                if (runWeight >= 0)
+                    atomicAdd(&s_spectrum[runWeight], runLength);
                 runWeight = weight;
                 runLength = 1;
             }
 
             revMask = nextRev;
         }
-        atomicAdd(&s_spectrum[runWeight], runLength);
+        if (runWeight >= 0)
+            atomicAdd(&s_spectrum[runWeight], runLength);
     }
 
     __syncthreads();
@@ -440,7 +498,7 @@ __global__ void computeSpectrumKernelLongT(
     int numCols, int numRows, int wordsPerRow, uint64_t chunkSize,
     int16_t* d_startPositions, uint64_t masksPerThread,
     uint64_t numStartMasks, uint64_t numOfOnes,
-    uint64_t* d_maskCounter, bool stageMatrix);
+    uint64_t* d_maskCounter, bool stageMatrix, MatrixSlot slot);
 
 __host__ void launchSpectrumKernelLong(
     int numBlocks,
@@ -456,7 +514,8 @@ __host__ void launchSpectrumKernelLong(
     uint64_t masksPerThread,
     uint64_t numStartMasks,
     uint64_t numOfOnes,
-    uint64_t* d_maskCounter
+    uint64_t* d_maskCounter,
+    MatrixSlot slot
 ) {
     validateLaunchParams(wordsPerRow, numCols);
     if (numOfOnes > Constants::MAX_POSITIONS)
@@ -480,7 +539,7 @@ __host__ void launchSpectrumKernelLong(
     const bool   stageMatrix = (histogramBytes + matrixBytes) <= Constants::MAX_SHARED_BYTES;
     const size_t sharedBytes = histogramBytes + (stageMatrix ? matrixBytes : 0);
 
-    #define LAUNCH_LONG(W) computeSpectrumKernelLongT<W><<<numBlocks, threadsPerBlock, sharedBytes, stream>>>(d_spectrum, matrixGlobal, numCols, numRows, wordsPerRow, chunkSize, d_startPositions, masksPerThread, numStartMasks, numOfOnes, d_maskCounter, stageMatrix)
+    #define LAUNCH_LONG(W) computeSpectrumKernelLongT<W><<<numBlocks, threadsPerBlock, sharedBytes, stream>>>(d_spectrum, matrixGlobal, numCols, numRows, wordsPerRow, chunkSize, d_startPositions, masksPerThread, numStartMasks, numOfOnes, d_maskCounter, stageMatrix, slot)
 
     switch (words) {
         case  1: LAUNCH_LONG( 1); break;   case  2: LAUNCH_LONG( 2); break;
@@ -517,7 +576,8 @@ __global__ void computeSpectrumKernelLongT(
     uint64_t        numStartMasks,
     uint64_t        numOfOnes,
     uint64_t*       d_maskCounter,
-    bool            stageMatrix
+    bool            stageMatrix,
+    MatrixSlot      matrixSlot
 )
 {
     const int words = WORDS > 0 ? WORDS : wordsPerRow;
@@ -543,7 +603,7 @@ __global__ void computeSpectrumKernelLongT(
             const int row = i / words;
             const int w   = i % words;
             s_matrix[i] = (w < wordsPerRow)
-                        ? readMatrixWord(matrixGlobal, row, w, wordsPerRow) : 0ULL;
+                        ? readMatrixWord(matrixGlobal, matrixSlot.rowBase + row, w, wordsPerRow) : 0ULL;
         }
     }
 
@@ -584,7 +644,7 @@ __global__ void computeSpectrumKernelLongT(
                 xorRowFromShared<WORDS>(codeword, &matrixSrc[(size_t)row * words], words);
             else
                 for (int w = 0; w < wordsPerRow; ++w)   // именно wordsPerRow
-                    codeword[w] ^= readMatrixWord(matrixGlobal, row, w, wordsPerRow);
+                    codeword[w] ^= readMatrixWord(matrixGlobal, matrixSlot.rowBase + row, w, wordsPerRow);
         }
 
         int weight = 0;
@@ -592,7 +652,8 @@ __global__ void computeSpectrumKernelLongT(
         for (int w = 0; w < words; ++w)
             weight += __popcll(codeword[w]);
 
-        atomicAdd(&s_spectrum[weight], 1ULL);
+        if (matrixSlot.setCount <= 1 || bzKeep<WORDS>(codeword, words, int(numOfOnes), matrixSlot))
+            atomicAdd(&s_spectrum[weight], 1ULL);
         #ifdef _DEBUG
         atomicAdd(d_maskCounter, 1ULL);
         #endif
@@ -626,7 +687,7 @@ __global__ void computeSpectrumKernelLongT(
                         xorRowFromShared<WORDS>(codeword, &matrixSrc[(size_t)row * words], words);
                     else
                         for (int w = 0; w < wordsPerRow; ++w)   // именно wordsPerRow
-                            codeword[w] ^= readMatrixWord(matrixGlobal, row, w, wordsPerRow);
+                            codeword[w] ^= readMatrixWord(matrixGlobal, matrixSlot.rowBase + row, w, wordsPerRow);
                 }
             }
             else {
@@ -636,7 +697,7 @@ __global__ void computeSpectrumKernelLongT(
                         xorRowFromShared<WORDS>(codeword, &matrixSrc[(size_t)row * words], words);
                     else
                         for (int w = 0; w < wordsPerRow; ++w)   // именно wordsPerRow
-                            codeword[w] ^= readMatrixWord(matrixGlobal, row, w, wordsPerRow);
+                            codeword[w] ^= readMatrixWord(matrixGlobal, matrixSlot.rowBase + row, w, wordsPerRow);
                 }
             }
 
@@ -645,7 +706,8 @@ __global__ void computeSpectrumKernelLongT(
         for (int w = 0; w < words; ++w)
                 weight += __popcll(codeword[w]);
 
-            atomicAdd(&s_spectrum[weight], 1ULL);
+            if (matrixSlot.setCount <= 1 || bzKeep<WORDS>(codeword, words, int(numOfOnes), matrixSlot))
+                atomicAdd(&s_spectrum[weight], 1ULL);
             #ifdef _DEBUG
             atomicAdd(d_maskCounter, 1ULL);
             #endif

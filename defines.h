@@ -5,7 +5,13 @@ namespace Constants
 {
     constexpr  int CONST_MEM_SIZE = 1 << 16;							// Размер константной памяти видеокарты
     constexpr  int WORD_SIZE = 8;								// Размер слова (под словом понимается тип данных quint64)
-    constexpr  int MAX_CONST_WORDS = CONST_MEM_SIZE / WORD_SIZE;		// Максимальный размер массива в константной памяти видеокарты
+    // Потолок числа информационных множеств у Брауэра–Циммермана. Больше
+    // непересекающихся множеств, чем n/k, не бывает, а маски всех множеств
+    // лежат в константной памяти видеокарты: 16 x 32 слова — четыре килобайта.
+    constexpr  int MAX_INFO_SETS = 16;
+    constexpr  int MASKS_CONST_WORDS = MAX_INFO_SETS * 32;			// Слова константной памяти под маски множеств
+    // Максимальный размер матрицы в константной памяти: вся память минус маски
+    constexpr  int MAX_CONST_WORDS = CONST_MEM_SIZE / WORD_SIZE - MASKS_CONST_WORDS;
     // Через сколько после последнего изменения размера перерисовывать график.
     // Меньше — рисуется прямо во время перетаскивания панели; заметно больше —
     // виден пустой прямоугольник после того, как отпустили.
@@ -73,6 +79,9 @@ namespace DefaultValues
 
 namespace UIStrings
 {
+    // Пометка строки спектра за пределами гарантии Брауэра–Циммермана.
+    constexpr const char INCOMPLETE_SUFFIX[] = "   (неполно)";
+
     constexpr const char PAUSE_TEXT[]               = "Пауза";
     constexpr const char CONTINUE_TEXT[]            = "Продолжить";
     constexpr const char START_TEXT[]               = "Старт";

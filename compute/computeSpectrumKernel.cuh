@@ -19,6 +19,21 @@ typedef uint64_t quint64;
 
 __host__ cudaError_t copyMatrixToConstant(const quint64* h_matrix, size_t wordsNeeded);
 
+// Какая из матриц перебирается. В обычном расчёте матрица одна. У
+// Брауэра–Циммермана их несколько, они лежат в памяти подряд, и слово
+// засчитывается, только если его не засчитало другое множество: то, на
+// котором у слова меньше единиц, а при равенстве — первое по порядку.
+// Маски множеств уезжают в константную память отдельно, copyMasksToConstant.
+struct MatrixSlot
+{
+    int rowBase  = 0;   // первая строка этой матрицы в общем массиве
+    int setIndex = 0;   // номер множества
+    int setCount = 1;   // всего множеств; 1 — обычный перебор без проверки
+};
+
+// Маски информационных множеств: setCount масок по wordsPerRow слов подряд.
+__host__ cudaError_t copyMasksToConstant(const quint64* h_masks, int setCount, int wordsPerRow);
+
 
 // Ядро коротких кодов шаблонное и объявлено в .cu — снаружи нужна
 // только обёртка запуска, она и выбирает вариант по числу слов.
@@ -33,7 +48,8 @@ __host__ void launchSpectrumKernelShort(
     int blockCount,
     quint64 chunkOffset,
     quint64 chunkSize,
-    quint64 r
+    quint64 r,
+    MatrixSlot slot = MatrixSlot()
 );
 
 // Ядра шаблонные по числу слов в строке и объявлены в .cu — снаружи
@@ -53,7 +69,8 @@ __host__ void launchSpectrumKernelLong(
     uint64_t         masksPerThread,
     uint64_t         numStartMasks,
     uint64_t         numOfOnes,
-    uint64_t*        d_maskCounter
+    uint64_t*        d_maskCounter,
+    MatrixSlot       slot = MatrixSlot()
 );
 __global__ void computeSpectrumKernelGrayShort(
     quint64* d_spectrum,

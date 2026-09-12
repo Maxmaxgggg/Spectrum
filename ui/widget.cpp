@@ -1,4 +1,5 @@
 #include "widget.h"
+#include "infosets.h"
 #include "docktitlebar.h"
 #include "fonticons.h"
 
@@ -146,7 +147,20 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
     // Настройки берутся из записи. Без этого «Продолжить» искал бы сохранение
     // другого алгоритма, не нашёл и молча начал бы с нуля.
     emit applySettingsFromAutosave(int(record.algorithm), int(record.enumType),
-                                   record.maxRows);
+                                   record.maxRows, record.bzWeight);
+
+    // Гарантия поднятой записи: слои до rOffset пройдены целиком (начатый
+    // слой не в счёт), и по ним видно, до какого веса спектр уже точен.
+    exactUpToWeight = -1;
+    if (record.algorithm == ComputationSettings::BrouwerZimmermann && !record.infoSets.isEmpty()) {
+        const int rows = matrix.size();
+        const int cols = matrix.first().length();
+        const int done = int(record.state.rOffset) - 1;
+        const std::vector<int> overlaps = InfoSets::overlapsOf(record.infoSets);
+        exactUpToWeight = done < 0 ? -1
+                        : InfoSets::guaranteedBelow(overlaps, done, rows, cols) - 1;
+        statsPanel->showPlan(record.infoSets.size(), record.maxRows, qMax(0, exactUpToWeight));
+    }
 
     // Спектр показывается сырым — ровно так же, как во время расчёта: у
     // дуального кода преобразование Мак-Вильямс делается только в конце.
@@ -196,6 +210,10 @@ void MainWindow::updateExecuteButton()
 }
 
 // Спектр выводится так же, как его присылает воркер: строками «вес - число».
+//
+// У Брауэра–Циммермана к строкам тяжелее гарантированного веса дописывается
+// «неполно»: слова там найдены, но не все, и число — только нижняя оценка.
+// Без пометки такой спектр читался бы как готовый.
 void MainWindow::setSpectrumRows(const SpectrumText& lines)
 {
     lastSpectrum = lines;
@@ -205,7 +223,16 @@ void MainWindow::setSpectrumRows(const SpectrumText& lines)
     QScrollBar* const bar = ui->spectrumPTE->verticalScrollBar();
     const int scroll = bar->value();
 
-    ui->spectrumPTE->setPlainText(lines.join(QLatin1Char('\n')));
+    SpectrumText shown = lines;
+    if (exactUpToWeight >= 0) {
+        for (QString& line : shown) {
+            const int weight = line.section(QStringLiteral(" - "), 0, 0).toInt();
+            if (weight > exactUpToWeight)
+                line += UIStrings::INCOMPLETE_SUFFIX;
+        }
+    }
+
+    ui->spectrumPTE->setPlainText(shown.join(QLatin1Char('\n')));
     bar->setValue(scroll);
 }
 
@@ -309,6 +336,7 @@ void MainWindow::setWorker()
     connect( workerPtr,       &Worker::finished,                       this,      &MainWindow::handleFinished,                       Qt::QueuedConnection );
     connect( workerPtr,       &Worker::showSaveLBL,                    this,      &MainWindow::showSaveLBL,                          Qt::QueuedConnection );
     connect( workerPtr,       &Worker::gridTuned,                      this,      &MainWindow::handleGridTuned,                      Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::planReady,                      this,      &MainWindow::handlePlanReady,                      Qt::QueuedConnection );
     connect( workerPtr,       &Worker::updateRateMeasured,             settingsDialog, &SettingsDialog::applyMeasuredRate,            Qt::QueuedConnection );
     // Проба останавливается тем же способом, которым пользователь останавливает
     // расчёт. Отсчёт начинается по сигналу воркера, а не с самой просьбы: перед
@@ -467,6 +495,10 @@ void MainWindow::startComputation()
     // Настройки к этому моменту уже пришли от диалога по requestSettings.
     statsPanel->showTask(settings);
     statsPanel->clearProgress();
+    // Гарантия придёт от воркера вместе с планом; до неё спектр без пометок.
+    // При продолжении записи прежняя гарантия остаётся: слои уже пройдены.
+    if (!resuming)
+        exactUpToWeight = -1;
 
     QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection);
 
@@ -566,6 +598,14 @@ void MainWindow::handleUpdateSpectrumPTE( const SpectrumText spectrum )
 void MainWindow::handleGridTuned(int blocks, int threads)
 {
     statsPanel->showGrid(blocks, threads);
+}
+
+void MainWindow::handlePlanReady(int sets, int rows, int exactUpToWeight)
+{
+    this->exactUpToWeight = exactUpToWeight;
+    statsPanel->showPlan(sets, rows, exactUpToWeight);
+    // Пометки в спектре зависят от гарантии — перерисовать то, что уже есть.
+    setSpectrumRows(lastSpectrum);
 }
 
 void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed,

@@ -13,6 +13,7 @@
   <ItemGroup>
     <ClCompile Include="compute\dualcode.cpp" />
     <ClCompile Include="compute\gridtuner.cpp" />
+    <ClCompile Include="compute\infosets.cpp" />
     <ClCompile Include="compute\worker.cpp" />
     <ClCompile Include="helpers\workwithmatrix.cpp" />
     <ClCompile Include="main.cpp" />
@@ -36,6 +37,7 @@
     <ClInclude Include="compute\computeSpectrumKernel.cuh" />
     <ClInclude Include="compute\dualcode.h" />
     <ClInclude Include="compute\gridtuner.h" />
+    <ClInclude Include="compute\infosets.h" />
     <ClInclude Include="compute\spectrumring.h" />
     <ClInclude Include="defines.h" />
     <ClInclude Include="storage\autosavestore.h" />

@@ -1,10 +1,12 @@
 #include "autosavestore.h"
 
 #include "defines.h"
+#include "infosets.h"
 
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
@@ -43,6 +45,17 @@ QJsonObject AutosaveRecord::toJson() const
     obj["finished"]  = finished;
     obj["savedAt"]   = savedAt.toString(Qt::ISODate);
     obj["state"]     = state.toJson();
+    if (algorithm == ComputationSettings::BrouwerZimmermann) {
+        obj["bzWeight"] = bzWeight;
+        QJsonArray sets;
+        for (const QVector<int>& set : infoSets) {
+            QJsonArray columns;
+            for (int c : set)
+                columns.append(c);
+            sets.append(columns);
+        }
+        obj["infoSets"] = sets;
+    }
     return obj;
 }
 
@@ -55,15 +68,38 @@ AutosaveRecord AutosaveRecord::fromJson(const QJsonObject& obj)
     r.finished  = obj["finished"].toBool();
     r.savedAt   = QDateTime::fromString(obj["savedAt"].toString(), Qt::ISODate);
     r.state     = RunState::fromJson(obj["state"].toObject());
+    r.bzWeight  = obj["bzWeight"].toInt();
+    for (const QJsonValue& set : obj["infoSets"].toArray()) {
+        QVector<int> columns;
+        for (const QJsonValue& c : set.toArray())
+            columns.append(c.toInt());
+        r.infoSets.append(columns);
+    }
     return r;
+}
+
+int resumeRows(const AutosaveRecord& record, int weight, int rows, int cols)
+{
+    if (record.infoSets.isEmpty())
+        return 0;
+    return InfoSets::rowsForWeight(InfoSets::overlapsOf(record.infoSets), weight, rows, cols);
 }
 
 bool canResume(const AutosaveRecord& record, const ComputationSettings& settings)
 {
-    if (settings.algorithmType != ComputationSettings::SimpleXor)
+    if (!settings.layered())
         return true;
 
-    const quint64 maxRows = quint64(settings.maxRows);
+    quint64 maxRows = quint64(settings.maxRows);
+    if (settings.algorithmType == ComputationSettings::BrouwerZimmermann) {
+        // Без множеств запись не продолжить: неизвестно, по каким матрицам
+        // шёл перебор и какое множество засчитывало какое слово.
+        if (record.infoSets.isEmpty() || settings.matrix.isEmpty())
+            return false;
+        maxRows = quint64(resumeRows(record, settings.bzWeight,
+                                     settings.matrix.size(),
+                                     settings.matrix.first().length()));
+    }
 
     // Слой rOffset пройден частично: его вклад уже лежит в спектре, поэтому
     // расчёт обязан этот слой досчитать, а не остановиться раньше. Иначе
@@ -81,7 +117,8 @@ double totalOperations(const AutosaveRecord& record, int rows)
     if (rows <= 0)
         return 0.0;
 
-    if (record.algorithm != ComputationSettings::SimpleXor)
+    if (record.algorithm != ComputationSettings::SimpleXor
+        && record.algorithm != ComputationSettings::BrouwerZimmermann)
         return std::pow(2.0, double(rows));
 
     const int maxRows = record.maxRows > 0 ? qMin(record.maxRows, rows) : rows;
@@ -92,6 +129,9 @@ double totalOperations(const AutosaveRecord& record, int rows)
         total += term;
         term = term * double(rows - r) / double(r + 1);
     }
+    // У Брауэра–Циммермана каждый слой перебирается по всем множествам.
+    if (record.algorithm == ComputationSettings::BrouwerZimmermann)
+        total *= double(qMax(1, record.infoSets.size()));
     return total;
 }
 
@@ -128,8 +168,9 @@ QString AutosaveStore::folderPath(const Matrix& matrix) const
 QString AutosaveStore::fileNameFor(ComputationSettings::Algorithm algorithm)
 {
     switch (algorithm) {
-        case ComputationSettings::GrayCode: return QStringLiteral("gray.json");
-        case ComputationSettings::DualCode: return QStringLiteral("dual.json");
+        case ComputationSettings::GrayCode:          return QStringLiteral("gray.json");
+        case ComputationSettings::DualCode:          return QStringLiteral("dual.json");
+        case ComputationSettings::BrouwerZimmermann: return QStringLiteral("bz.json");
         default:                            return QStringLiteral("xor.json");
     }
 }

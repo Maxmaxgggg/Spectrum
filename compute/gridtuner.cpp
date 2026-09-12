@@ -95,7 +95,7 @@ double timeChunk(const GridTuneTask& task, const LaunchGrid& grid,
                     chunk,
                     const_cast<int16_t*>(task.startPositions),
                     task.measureMasksPerThread, startMasks, task.numOfOnes,
-                    nullptr);
+                    nullptr, task.slot);
             }
             else if (task.kernel == GridTuneTask::Kernel::GrayShort) {
                 launchSpectrumKernelGrayShort(
@@ -109,7 +109,7 @@ double timeChunk(const GridTuneTask& task, const LaunchGrid& grid,
                     task.scratchSpectrum, task.binomTable,
                     grid.blocks, grid.threads, stream,
                     task.numOfCols, task.numOfRows, task.wordsPerRow,
-                    offset, chunk, task.numOfOnes);
+                    offset, chunk, task.numOfOnes, task.slot);
             }
         }
 

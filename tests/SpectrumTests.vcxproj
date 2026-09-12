@@ -16,6 +16,7 @@
     <ClCompile Include="..\compute\dualcode.cpp" />
     <ClCompile Include="..\storage\autosavestore.cpp" />
     <ClCompile Include="..\compute\gridtuner.cpp" />
+    <ClCompile Include="..\compute\infosets.cpp" />
     <ClCompile Include="..\helpers\workwithmatrix.cpp" />
   </ItemGroup>
   <ItemGroup>

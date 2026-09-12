@@ -31,8 +31,9 @@ struct ComputationSettings
 {
     // Порождающая матрица кода
     QStringList matrix;
-    // Тип используемого алгоритма (Простой XOR, Код Грея, Дуальный код)
-    enum Algorithm { SimpleXor = 0, GrayCode = 1, DualCode = 2 };
+    // Тип используемого алгоритма (Простой XOR, Код Грея, Дуальный код,
+    // Брауэр–Циммерман)
+    enum Algorithm { SimpleXor = 0, GrayCode = 1, DualCode = 2, BrouwerZimmermann = 3 };
     // Тип перебора (Полный, Частичный)
     enum EnumerationType { Full = 0, Partial = 1 };
     // Тип вычислителя (ЦП, ГП)
@@ -43,6 +44,16 @@ struct ComputationSettings
     ComputeDevice   compDev = CPU;
     // Максимальное число перебираемых строк
     int             maxRows = 0;
+    // Брауэр–Циммерман: до какого веса спектр нужен точно. Число строк
+    // перебора программа выводит из него сама — по найденным множествам.
+    int             bzWeight = 8;
+
+    // Перебор идёт слоями по числу складываемых строк: простой XOR и
+    // Брауэр–Циммерман. Код Грея и дуальный расчёт идут по маскам сплошь.
+    bool layered() const
+    {
+        return algorithmType == SimpleXor || algorithmType == BrouwerZimmermann;
+    }
 
     // Подбирать число блоков и нитей замером перед расчётом вместо того,
     // чтобы брать их из настроек. Имеет смысл только для видеокарты.
@@ -76,6 +87,7 @@ struct ComputationSettings
         : algorithmType(other.algorithmType)
         , enumType(other.enumType)
         , maxRows(other.maxRows)
+        , bzWeight(other.bzWeight)
         , compDev(other.compDev)
         , autoTuneGrid(other.autoTuneGrid)
         , maxPlotBars(other.maxPlotBars)
@@ -90,6 +102,7 @@ struct ComputationSettings
         algorithmType = other.algorithmType;
         enumType = other.enumType;
         maxRows = other.maxRows;
+        bzWeight = other.bzWeight;
         compDev = other.compDev;
         autoTuneGrid = other.autoTuneGrid;
         maxPlotBars = other.maxPlotBars;
@@ -104,6 +117,7 @@ struct ComputationSettings
             algorithmType == other.algorithmType &&
             enumType == other.enumType &&
             maxRows == other.maxRows &&
+            bzWeight == other.bzWeight &&
             compDev == other.compDev &&
             autoTuneGrid == other.autoTuneGrid &&
             compDevSet.threadsCpu == other.compDevSet.threadsCpu &&
@@ -123,6 +137,7 @@ struct ComputationSettings
         obj["algorithmType"] = static_cast<int>(algorithmType);
         obj["enumType"] = static_cast<int>(enumType);
         obj["maxRows"] = maxRows;
+        obj["bzWeight"] = bzWeight;
         obj["compDev"] = static_cast<int>(compDev);
         obj["maxPlotBars"] = maxPlotBars;
         obj["autoTuneGrid"] = autoTuneGrid;
@@ -165,6 +180,9 @@ struct ComputationSettings
         s.algorithmType = static_cast<Algorithm>(obj["algorithmType"].toInt());
         s.enumType = static_cast<EnumerationType>(obj["enumType"].toInt());
         s.maxRows = obj["maxRows"].toInt();
+        // Ноль означает «ключа не было» — остаётся значение по умолчанию.
+        if (obj["bzWeight"].toInt() > 0)
+            s.bzWeight = obj["bzWeight"].toInt();
         s.compDev = static_cast<ComputeDevice>(obj["compDev"].toInt());
         // Ноль означает «ключа не было» — остаётся значение по умолчанию.
         if (obj["maxPlotBars"].toInt() > 0)
@@ -199,6 +217,7 @@ struct ComputationSettings
 
         // Подумать, как реализовать, чтобы можно было сначала перебрать для maxRows = n, а потом для n+1
         seed = qHash(maxRows, seed);
+        seed = qHash(bzWeight, seed);
         seed = qHash(static_cast<int>(compDev), seed);
 
         // autoTuneGrid в ключ не входит намеренно: спектр от сетки не зависит,

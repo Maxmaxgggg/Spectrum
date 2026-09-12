@@ -17,9 +17,10 @@ const QString kDash = QStringLiteral("—");
 QString algorithmName(ComputationSettings::Algorithm algorithm)
 {
     switch (algorithm) {
-    case ComputationSettings::GrayCode: return QObject::tr("код Грея");
-    case ComputationSettings::DualCode: return QObject::tr("дуальный код");
-    default:                            return QObject::tr("простой XOR");
+    case ComputationSettings::GrayCode:          return QObject::tr("код Грея");
+    case ComputationSettings::DualCode:          return QObject::tr("дуальный код");
+    case ComputationSettings::BrouwerZimmermann: return QObject::tr("Брауэр–Циммерман");
+    default:                                     return QObject::tr("простой XOR");
     }
 }
 
@@ -43,6 +44,7 @@ StatsPanel::StatsPanel(QWidget* parent)
     separator();
     deviceValue    = addRow(form, tr("Устройство:"));
     algorithmValue = addRow(form, tr("Алгоритм:"));
+    planValue      = addRow(form, tr("Гарантия:"));
     separator();
     elapsedValue   = addRow(form, tr("Прошло:"));
     remainingValue = addRow(form, tr("Осталось:"));
@@ -54,6 +56,7 @@ StatsPanel::StatsPanel(QWidget* parent)
     clearProgress();
     deviceValue->setText(kDash);
     algorithmValue->setText(kDash);
+    planValue->setText(kDash);
 }
 
 QLabel* StatsPanel::addRow(QFormLayout* form, const QString& caption)
@@ -83,8 +86,18 @@ void StatsPanel::showTask(const ComputationSettings& settings)
     QString enumeration = settings.enumType == ComputationSettings::Full
                               ? tr("полный перебор")
                               : tr("частичный, до %1 строк").arg(settings.maxRows);
+    if (settings.algorithmType == ComputationSettings::BrouwerZimmermann)
+        enumeration = tr("точно до веса %1").arg(settings.bzWeight);
     algorithmValue->setText(algorithmName(settings.algorithmType)
                             + QStringLiteral(", ") + enumeration);
+    // План приходит позже, отдельным сигналом; до него — прочерк.
+    planValue->setText(kDash);
+}
+
+void StatsPanel::showPlan(int sets, int rows, int exactUpToWeight)
+{
+    planValue->setText(tr("веса до %1 точно; множеств %2, до %3 строк")
+                           .arg(exactUpToWeight).arg(sets).arg(rows));
 }
 
 void StatsPanel::showGrid(int blocks, int threads)

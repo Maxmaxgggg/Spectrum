@@ -23,6 +23,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     algorithmBGP->addButton( ui->simpleXorRB, Algorithm::SimpleXor );
     algorithmBGP->addButton( ui->grayCodeRB,  Algorithm::GrayCode  );
     algorithmBGP->addButton( ui->dualCodeRB,  Algorithm::DualCode  );
+    algorithmBGP->addButton( ui->brouwerZimmermannRB, Algorithm::BrouwerZimmermann );
 
     enumeratorBGP = new QButtonGroup(this);
     enumeratorBGP->addButton( ui->fullEnumRB,    EnumerationType::Full    );
@@ -98,7 +99,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     connect(algorithmBGP,     &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
     connect(computeDeviceBGP, &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
     connect(ui->autoTuneGridCHB, &QCheckBox::toggled,   this, [this](bool) { applyUpdateRateLimit(); });
-    for (QSpinBox* box : { ui->blocksGpuSPB, ui->threadsGpuSPB, ui->threadsCpuSPB, ui->maxRowsSPB })
+    for (QSpinBox* box : { ui->blocksGpuSPB, ui->threadsGpuSPB, ui->threadsCpuSPB, ui->maxRowsSPB, ui->bzWeightSPB })
         connect(box, QOverload<int>::of(&QSpinBox::valueChanged),
                 this, [this](int) { applyUpdateRateLimit(); });
 
@@ -149,7 +150,8 @@ QString SettingsDialog::updateRateKey() const
         .arg(computeDeviceBGP->checkedId())
         .arg(algorithmBGP->checkedId())
         .arg(matrixCols).arg(matrixRows)
-        .arg(ui->maxRowsSPB->value())
+        .arg(algorithmBGP->checkedId() == Algorithm::BrouwerZimmermann
+                 ? ui->bzWeightSPB->value() : ui->maxRowsSPB->value())
         .arg(ui->blocksGpuSPB->value()).arg(ui->threadsGpuSPB->value())
         .arg(ui->threadsCpuSPB->value())
         .arg(ui->autoTuneGridCHB->isChecked() ? 1 : 0);
@@ -230,6 +232,8 @@ void SettingsDialog::updateEnumTypeControls()
     const bool forXor = algorithmBGP->checkedId() == Algorithm::SimpleXor;
 
     ui->enumTypeGBX->setEnabled(forXor);
+    // Своя группа у Брауэра–Циммермана: там задаётся вес, а не число строк.
+    ui->bzGBX->setEnabled(algorithmBGP->checkedId() == Algorithm::BrouwerZimmermann);
 
     EnumerationType shown = EnumerationType::Full;
     if (forXor) {
@@ -300,7 +304,7 @@ void SettingsDialog::setInterfaceEnabled( bool enabled )
     }
 }
 
-void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int maxRows)
+void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int maxRows, int bzWeight)
 {
     if (QAbstractButton* button = algorithmBGP->button(algorithm))
         button->setChecked(true);
@@ -309,12 +313,15 @@ void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int maxRows)
         xorEnumType = static_cast<EnumerationType>(enumType);
     if (maxRows > 0)
         xorMaxRows = maxRows;
+    if (algorithm == Algorithm::BrouwerZimmermann && bzWeight > 0)
+        ui->bzWeightSPB->setValue(bzWeight);
 
     updateEnumTypeControls();
 
     settings.algorithmType = static_cast<Algorithm>(algorithm);
     settings.enumType      = static_cast<EnumerationType>(enumeratorBGP->checkedId());
     settings.maxRows       = ui->maxRowsSPB->value();
+    settings.bzWeight      = ui->bzWeightSPB->value();
 
     emit sendSettingsToWidget(settings.toJson());
 }
@@ -380,6 +387,11 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
         dualCodeLength = Length::Short;
         ui->dualCodeRB->setEnabled(true);
     }
+    // Слов тяжелее длины кода не бывает.
+    ui->bzWeightSPB->setMaximum(qMax(1, cols));
+    if (settings.bzWeight > ui->bzWeightSPB->maximum())
+        settings.bzWeight = ui->bzWeightSPB->value();
+
     // Доступность полного перебора и сам алгоритм могли только что поменяться —
     // приводим группу в согласованный вид одним местом, а не в каждой ветке.
     updateEnumTypeControls();
@@ -488,6 +500,7 @@ void SettingsDialog::collectSettings()
     settings.algorithmType = static_cast<Algorithm>(algorithmBGP->checkedId());
     settings.enumType = static_cast<EnumerationType>(enumeratorBGP->checkedId());
     settings.maxRows = ui->maxRowsSPB->value();
+    settings.bzWeight = ui->bzWeightSPB->value();
     settings.compDev = static_cast<ComputeDevice>(computeDeviceBGP->checkedId());
 
     settings.compDevSet.threadsCpu = ui->threadsCpuSPB->value();
@@ -525,6 +538,7 @@ void SettingsDialog::loadSettings() {
 
     ui->maxRowsSPB->setValue(settings.maxRows);
     xorMaxRows = s.value(SettingsKeys::XOR_MAX_ROWS, settings.maxRows).toInt();
+    ui->bzWeightSPB->setValue(settings.bzWeight);
 
     updateEnumTypeControls();
 

@@ -15,6 +15,7 @@
 #include "settings.h"
 #include "progresstracker.h"
 #include "binomtable.h"
+#include "infosets.h"
 // Переопределяет CUDA_CALL из .cuh: там макрос звал abort(), здесь бросает.
 #include "cudabuffers.h"
 #include "spectrumring.h"
@@ -59,6 +60,18 @@ struct CodeGeometry
     bool isLongCode = false;
     // Матрица не влезла в константную память и лежит в глобальной
     bool matrixInGlobalMem = false;
+
+    // Брауэр–Циммерман. Перебор идёт не по введённой матрице, а по
+    // нескольким систематическим, лежащим в памяти подряд; слово засчитывает
+    // одно из множеств (см. infosets.h). В обычном расчёте множество одно —
+    // введённая матрица, и все поля ниже пустые.
+    int                   setCount        = 1;
+    std::vector<int>      setOverlaps;
+    std::vector<quint64>  setMasks;         // setCount x wordsPerRow
+    std::vector<quint64>  setRows;          // setCount x numOfRows x wordsPerRow
+    QVector<QVector<int>> setColumns;       // опорные столбцы — в автосохранение
+    // Все слова веса меньше этого найдены. Ноль — не Брауэр–Циммерман.
+    int                   guaranteedBelow = 0;
 };
 
 Q_DECLARE_METATYPE(LoadMode)
@@ -143,14 +156,24 @@ signals:
     // пройти подбор сетки — секунды, — и отсчёт длительности пробы должен
     // начинаться не с просьбы, а отсюда.
     void updateRateProbeStarted();
+    // План Брауэра–Циммермана: сколько множеств нашлось, до скольких строк
+    // пойдёт перебор и до какого веса спектр будет точным. Пользователь
+    // задавал только вес, остальное выведено из матрицы — ему это надо видеть.
+    void planReady( int sets, int rows, int exactUpToWeight );
 private:
     /* Функции для работы с биноминальными коэффициентами */
     quint64   totalCombinations(quint64 k, quint64 maxComb) const;
+    // Полное число операций расчёта: комбинации до maxRows по каждому из
+    // множеств. В обычном расчёте множество одно.
+    quint64   totalLayerOps(const CodeGeometry& g) const;
 
 
     /* Подготовка расчёта */
     // Выводит размеры и режимы из настроек и матрицы.
     CodeGeometry describeTask() const;
+    // Брауэр–Циммерман: находит информационные множества (или поднимает их
+    // из сохранения), выводит глубину перебора из заданного веса.
+    void planInfoSets(CodeGeometry& g) const;
     // Упаковывает матрицу из строк QStringList в биты и раскладывает буферы
     // по памяти хоста и устройства.
     void prepareBuffers(const CodeGeometry& g);
@@ -207,6 +230,13 @@ private:
     ComputationSettings         settings;
     RunState                    runState;
     ProgressTracker             progress;
+
+    // Множества из поднятого сохранения: продолжать расчёт можно только по
+    // ним. Пусто — искать заново.
+    QVector<QVector<int>>       resumedInfoSets;
+    // Множества и глубина идущего расчёта — для записи в автосохранение.
+    QVector<QVector<int>>       activeInfoSets;
+    int                         activeMaxRows = 0;
 
     bool                        exportSpectrum = false;
     // 0 — обычный режим; см. setCheckpointOpsPolicy

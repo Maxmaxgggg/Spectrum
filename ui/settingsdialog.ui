@@ -64,6 +64,16 @@
             </property>
            </widget>
           </item>
+          <item>
+           <widget class="QRadioButton" name="brouwerZimmermannRB">
+            <property name="toolTip">
+             <string>Низ спектра с гарантией: все слова до заданного веса — точно, за время, которое зависит от веса, а не от размера кода</string>
+            </property>
+            <property name="text">
+             <string>Брауэр–Циммерман</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>
@@ -127,6 +137,62 @@
              </widget>
             </item>
            </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="bzGBX">
+         <property name="title">
+          <string>Брауэр–Циммерман:</string>
+         </property>
+         <layout class="QVBoxLayout" name="bzLayout">
+          <item>
+           <layout class="QHBoxLayout" name="bzWeightLayout">
+            <item>
+             <widget class="QLabel" name="bzWeightLBL">
+              <property name="text">
+               <string>Точно до веса: </string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="bzWeightSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="bzWeightSPB">
+              <property name="minimum">
+               <number>1</number>
+              </property>
+              <property name="maximum">
+               <number>2048</number>
+              </property>
+              <property name="value">
+               <number>8</number>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="QLabel" name="bzHintLBL">
+            <property name="text">
+             <string>Все слова не тяжелее этого веса будут найдены и посчитаны точно; более тяжёлые — не все. Сколько строк перебирать, программа выведет сама по информационным множествам матрицы. Цена растёт с весом быстро.</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
           </item>
          </layout>
         </widget>

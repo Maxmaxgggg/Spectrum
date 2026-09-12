@@ -91,9 +91,10 @@ AutosaveDialog::AutosaveDialog(AutosaveStore* store, QWidget* parent)
 QString AutosaveDialog::describeAlgorithm(const AutosaveRecord& record)
 {
     switch (record.algorithm) {
-        case ComputationSettings::GrayCode: return tr("код Грея");
-        case ComputationSettings::DualCode: return tr("дуальный код");
-        default:                            return tr("простой XOR");
+        case ComputationSettings::GrayCode:          return tr("код Грея");
+        case ComputationSettings::DualCode:          return tr("дуальный код");
+        case ComputationSettings::BrouwerZimmermann: return tr("Брауэр–Циммерман, до веса %1").arg(record.bzWeight);
+        default:                                     return tr("простой XOR");
     }
 }
 
@@ -103,7 +104,8 @@ QString AutosaveDialog::describeProgress(const AutosaveEntry& entry)
 
     if (record.finished) {
         // У кода Грея слоёв нет, число строк в описании было бы бессмысленно.
-        if (record.algorithm != ComputationSettings::SimpleXor)
+        if (record.algorithm == ComputationSettings::GrayCode
+            || record.algorithm == ComputationSettings::DualCode)
             return tr("готово");
         return tr("готово до %1 строк").arg(record.maxRows);
     }

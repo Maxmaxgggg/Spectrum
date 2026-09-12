@@ -43,7 +43,7 @@ public: signals:
     void sendSettingsToWorker( const QJsonObject& );
     void requestSettings();
     // Настройки расчёта из поднятого автосохранения.
-    void applySettingsFromAutosave(int algorithm, int enumType, int maxRows);
+    void applySettingsFromAutosave(int algorithm, int enumType, int maxRows, int bzWeight);
 
 private slots:
 
@@ -61,6 +61,9 @@ private slots:
                                       quint64 doneOps, quint64 totalOps);
     void showSaveLBL();
     void handleGridTuned(int blocks, int threads);
+    // План Брауэра–Циммермана: показать в панели и пометить в спектре веса,
+    // которые перебор не гарантирует.
+    void handlePlanReady(int sets, int rows, int exactUpToWeight);
     void handleMatrixChanged();
 
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -134,6 +137,9 @@ private:
 
     // Последний показанный спектр — его же и сохраняем между запусками.
     SpectrumText lastSpectrum;
+    // До какого веса показанный спектр точен. -1 — весь спектр на равных
+    // (обычный перебор); иначе строки тяжелее помечаются как неполные.
+    int exactUpToWeight = -1;
 
     void showAutosaveDialog();
     void applyAutosave(const Matrix& matrix, const AutosaveRecord& record);
