@@ -32,8 +32,9 @@ struct ComputationSettings
     // Порождающая матрица кода
     QStringList matrix;
     // Тип используемого алгоритма (Простой XOR, Код Грея, Дуальный код,
-    // Брауэр–Циммерман)
-    enum Algorithm { SimpleXor = 0, GrayCode = 1, DualCode = 2, BrouwerZimmermann = 3 };
+    // Брауэр–Циммерман, случайный поиск по информационным множествам)
+    enum Algorithm { SimpleXor = 0, GrayCode = 1, DualCode = 2, BrouwerZimmermann = 3,
+                     RandomInfoSets = 4 };
     // Тип перебора (Полный, Частичный)
     enum EnumerationType { Full = 0, Partial = 1 };
     // Тип вычислителя (ЦП, ГП)
@@ -47,6 +48,18 @@ struct ComputationSettings
     // Брауэр–Циммерман: до какого веса спектр нужен точно. Число строк
     // перебора программа выводит из него сама — по найденным множествам.
     int             bzWeight = 8;
+    // Случайный поиск: до какого веса собирать слова и с какой вероятностью
+    // пропуска смириться — 10 в минус этой степени. Глубину перебора и число
+    // попыток программа выводит сама.
+    int             leonWeight       = 24;
+    int             leonMissExponent = 9;
+
+    double leonMissProbability() const
+    {
+        double miss = 1.0;
+        for (int i = 0; i < leonMissExponent; ++i) miss /= 10.0;
+        return miss;
+    }
 
     // Перебор идёт слоями по числу складываемых строк: простой XOR и
     // Брауэр–Циммерман. Код Грея и дуальный расчёт идут по маскам сплошь.
@@ -88,6 +101,8 @@ struct ComputationSettings
         , enumType(other.enumType)
         , maxRows(other.maxRows)
         , bzWeight(other.bzWeight)
+        , leonWeight(other.leonWeight)
+        , leonMissExponent(other.leonMissExponent)
         , compDev(other.compDev)
         , autoTuneGrid(other.autoTuneGrid)
         , maxPlotBars(other.maxPlotBars)
@@ -103,6 +118,8 @@ struct ComputationSettings
         enumType = other.enumType;
         maxRows = other.maxRows;
         bzWeight = other.bzWeight;
+        leonWeight = other.leonWeight;
+        leonMissExponent = other.leonMissExponent;
         compDev = other.compDev;
         autoTuneGrid = other.autoTuneGrid;
         maxPlotBars = other.maxPlotBars;
@@ -118,6 +135,8 @@ struct ComputationSettings
             enumType == other.enumType &&
             maxRows == other.maxRows &&
             bzWeight == other.bzWeight &&
+            leonWeight == other.leonWeight &&
+            leonMissExponent == other.leonMissExponent &&
             compDev == other.compDev &&
             autoTuneGrid == other.autoTuneGrid &&
             compDevSet.threadsCpu == other.compDevSet.threadsCpu &&
@@ -138,6 +157,8 @@ struct ComputationSettings
         obj["enumType"] = static_cast<int>(enumType);
         obj["maxRows"] = maxRows;
         obj["bzWeight"] = bzWeight;
+        obj["leonWeight"] = leonWeight;
+        obj["leonMissExponent"] = leonMissExponent;
         obj["compDev"] = static_cast<int>(compDev);
         obj["maxPlotBars"] = maxPlotBars;
         obj["autoTuneGrid"] = autoTuneGrid;
@@ -183,6 +204,10 @@ struct ComputationSettings
         // Ноль означает «ключа не было» — остаётся значение по умолчанию.
         if (obj["bzWeight"].toInt() > 0)
             s.bzWeight = obj["bzWeight"].toInt();
+        if (obj["leonWeight"].toInt() > 0)
+            s.leonWeight = obj["leonWeight"].toInt();
+        if (obj["leonMissExponent"].toInt() > 0)
+            s.leonMissExponent = obj["leonMissExponent"].toInt();
         s.compDev = static_cast<ComputeDevice>(obj["compDev"].toInt());
         // Ноль означает «ключа не было» — остаётся значение по умолчанию.
         if (obj["maxPlotBars"].toInt() > 0)
@@ -218,6 +243,8 @@ struct ComputationSettings
         // Подумать, как реализовать, чтобы можно было сначала перебрать для maxRows = n, а потом для n+1
         seed = qHash(maxRows, seed);
         seed = qHash(bzWeight, seed);
+        seed = qHash(leonWeight, seed);
+        seed = qHash(leonMissExponent, seed);
         seed = qHash(static_cast<int>(compDev), seed);
 
         // autoTuneGrid в ключ не входит намеренно: спектр от сетки не зависит,

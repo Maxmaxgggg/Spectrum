@@ -74,6 +74,16 @@
             </property>
            </widget>
           </item>
+          <item>
+           <widget class="QRadioButton" name="randomInfoSetsRB">
+            <property name="toolTip">
+             <string>Низ спектра без гарантии, но глубже и быстрее: тысячи случайных информационных множеств с мелким перебором в каждом. Пропуск слова — событие заданной малой вероятности</string>
+            </property>
+            <property name="text">
+             <string>Случайный поиск (Леон)</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>
@@ -188,6 +198,110 @@
            <widget class="QLabel" name="bzHintLBL">
             <property name="text">
              <string>Все слова не тяжелее этого веса будут найдены и посчитаны точно; более тяжёлые — не все. Сколько строк перебирать, программа выведет сама по информационным множествам матрицы. Цена растёт с весом быстро.</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="leonGBX">
+         <property name="title">
+          <string>Случайный поиск:</string>
+         </property>
+         <layout class="QVBoxLayout" name="leonLayout">
+          <item>
+           <layout class="QHBoxLayout" name="leonWeightLayout">
+            <item>
+             <widget class="QLabel" name="leonWeightLBL">
+              <property name="text">
+               <string>Все слова до веса: </string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="leonWeightSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="leonWeightSPB">
+              <property name="minimum">
+               <number>1</number>
+              </property>
+              <property name="maximum">
+               <number>2048</number>
+              </property>
+              <property name="value">
+               <number>24</number>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="leonMissLayout">
+            <item>
+             <widget class="QLabel" name="leonMissLBL">
+              <property name="text">
+               <string>Вероятность пропуска: </string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="leonMissSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QComboBox" name="leonMissCBX">
+              <item>
+               <property name="text">
+                <string>10⁻³</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>10⁻⁶</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>10⁻⁹</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>10⁻¹²</string>
+               </property>
+              </item>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="QLabel" name="leonHintLBL">
+            <property name="text">
+             <string>Слова до этого веса будут найдены все, если не случится события такой вероятности; тяжелее — не собираются. Гарантии нет, зато на порядки глубже и быстрее Брауэра–Циммермана. Предел — память под найденные слова.</string>
             </property>
             <property name="wordWrap">
              <bool>true</bool>

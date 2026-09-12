@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <numeric>
 #include <thread>
 
@@ -50,6 +51,11 @@ static bool g_gpuAvailable = false;
 // План последнего расчёта Брауэра–Циммермана: множеств, строк, точно до веса.
 // -1 — расчёт был не по Брауэру–Циммерману.
 static int g_planSets = -1, g_planRows = -1, g_planExactUpTo = -1;
+// Последняя оценка случайного поиска: попыток сделано/всего, вероятность
+// пропуска, оценка ненайденного по весам.
+static quint64 g_searchDone = 0, g_searchTotal = 0;
+static double  g_searchMiss = -1.0;
+static SpectrumFloat g_searchUnseen;
 
 // ---------------------------------------------------------------- утилиты
 
@@ -97,6 +103,9 @@ struct RunConfig
     bool        autoTune   = false;
     // Брауэр–Циммерман: до какого веса нужен точный спектр.
     int         bzWeight   = 0;
+    // Случайный поиск: до какого веса и с какой степенью пропуска.
+    int         leonWeight = 0;
+    int         leonMissExponent = 12;
 };
 
 static ComputationSettings makeSettings(const RunConfig& cfg)
@@ -107,6 +116,8 @@ static ComputationSettings makeSettings(const RunConfig& cfg)
     s.enumType      = ComputationSettings::Full;
     s.maxRows       = cfg.maxRows > 0 ? cfg.maxRows : cfg.matrix.size();
     s.bzWeight      = cfg.bzWeight > 0 ? cfg.bzWeight : 8;
+    s.leonWeight    = cfg.leonWeight > 0 ? cfg.leonWeight : 24;
+    s.leonMissExponent = cfg.leonMissExponent;
     s.compDev       = cfg.device;
     s.compDevSet.threadsCpu = cfg.threadsCpu;
     s.compDevSet.blocksGpu  = cfg.blocksGpu;
@@ -156,6 +167,12 @@ static Spectrum runWorker(const RunConfig& cfg,
     QObject::connect(&worker, &Worker::planReady,
                      [](int sets, int rows, int exactUpTo) {
                          g_planSets = sets; g_planRows = rows; g_planExactUpTo = exactUpTo;
+                     });
+    g_searchDone = g_searchTotal = 0; g_searchMiss = -1.0; g_searchUnseen.clear();
+    QObject::connect(&worker, &Worker::searchEstimate,
+                     [](int, quint64 done, quint64 total, double miss, SpectrumFloat unseen) {
+                         g_searchDone = done; g_searchTotal = total;
+                         g_searchMiss = miss; g_searchUnseen = unseen;
                      });
 
     worker.setSettings(makeSettings(cfg).toJson());
@@ -2382,6 +2399,187 @@ static int bzRun(const QString& path, int weight, const QString& device)
     return 0;
 }
 
+// ------------------------------------------------ случайный поиск (Леон)
+
+static void expectLeon(const QString& name, bool ok, const QString& detail = QString())
+{
+    if (ok) { ++g_passed; out << "  ok       " << name << Qt::endl; }
+    else {
+        ++g_failed;
+        out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
+        if (!detail.isEmpty()) out << QStringLiteral("      ") << detail << Qt::endl;
+    }
+}
+
+// Модель поимки: вероятности в пределах, монотонны по глубине и по весу,
+// план выбирает глубину от одной до четырёх строк.
+static void testLeonModel()
+{
+    out << Qt::endl << QStringLiteral("Случайный поиск: модель поимки") << Qt::endl;
+
+    const int n = 336, k = 96;
+    bool inRange = true, byRows = true, byWeight = true;
+    for (int w = 1; w <= n; w += 5) {
+        double prev = 0.0;
+        for (int r = 1; r <= 4; ++r) {
+            const double p = Leon::catchProbability(n, k, w, r);
+            if (p < 0.0 || p > 1.0) inRange = false;
+            if (p + 1e-12 < prev) byRows = false;
+            prev = p;
+        }
+    }
+    for (int w = 12; w < n; w += 3)
+        if (Leon::catchProbability(n, k, w + 3, 3) > Leon::catchProbability(n, k, w, 3) + 1e-12)
+            byWeight = false;
+    expectLeon(QStringLiteral("вероятности в [0, 1]"), inRange);
+    expectLeon(QStringLiteral("глубже перебор — выше поимка"), byRows);
+    expectLeon(QStringLiteral("тяжелее слово — ниже поимка"), byWeight);
+
+    // Слово веса 24 на [336,96]: около 5 % на трёх строках — как в таблице.
+    const double p24 = Leon::catchProbability(n, k, 24, 3);
+    expectLeon(QStringLiteral("вес 24, три строки: %1").arg(p24, 0, 'f', 4),
+               p24 > 0.045 && p24 < 0.056);
+
+    const Leon::Plan plan = Leon::plan(n, k, 42, 1e-9);
+    // С учётом цены Гаусса выгодны две строки: одна — слишком много попыток,
+    // три — слишком дорогая каждая.
+    expectLeon(QStringLiteral("план для веса 42: %1 строк, %2 попыток")
+                   .arg(plan.rows).arg(plan.trials),
+               plan.rows == 2 && plan.trials > 100000 && plan.trials < 1000000);
+
+    // Таблица: слово помнится один раз, поимки считаются, оценка Чао по f1/f2.
+    Leon::WordTable table(1, 8);
+    const quint64 a = 0x0FULL, b = 0xF0ULL, c = 0x33ULL;
+    bool fresh = table.add(&a, 4) && table.add(&b, 4) && table.add(&c, 4);
+    bool repeat = !table.add(&a, 4) && !table.add(&b, 4) && !table.add(&b, 4);
+    const std::vector<double> unseen = table.unseenByWeight();
+    // a поймано дважды, b трижды, c один раз: f1 = 1, f2 = 1 -> 0.5
+    expectLeon(QStringLiteral("таблица слов: %1 слов, Чао %2").arg(table.size()).arg(unseen[4]),
+               fresh && repeat && table.size() == 3 && std::abs(unseen[4] - 0.5) < 1e-9);
+}
+
+// Поиск на кодах с известным спектром: до заданного веса он обязан совпасть
+// с точным. Вероятность несовпадения задана степенью 10^-12 — тест
+// детерминирован по затравке, так что либо проходит всегда, либо никогда.
+static void testLeonWorker()
+{
+    out << Qt::endl << QStringLiteral("Случайный поиск в расчёте") << Qt::endl;
+
+    struct Case { QString name; QStringList rows; int weight; };
+    const QVector<Case> cases = {
+        { QStringLiteral("Голей [24,12]"),           Reference::golay24_12(),                             12 },
+        { QStringLiteral("случайный [40,16]"),       BZ::scramble(BZ::systematicRandom(16, 40, 7), 11),  12 },
+        { QStringLiteral("случайный [60,20]"),       BZ::scramble(BZ::systematicRandom(20, 60, 3), 5),   15 },
+        { QStringLiteral("случайный [96,24]"),       BZ::scramble(BZ::systematicRandom(24, 96, 9), 2),   20 },
+    };
+    for (const Case& c : cases) {
+        const Spectrum exact = Reference::bruteForce(c.rows);
+        RunConfig cfg;
+        cfg.matrix     = c.rows;
+        cfg.algorithm  = Algorithm::RandomInfoSets;
+        cfg.leonWeight = c.weight;
+        cfg.device     = ComputeDevice::CPU;
+        clearCheckpoints();
+        const Spectrum found = runWorker(cfg);
+        const quint64 trials = g_searchTotal, done = g_searchDone;
+        const Spectrum again = runWorker(cfg);
+        clearCheckpoints();
+
+        bool ok = !found.isEmpty() && done == trials;
+        QStringList problems;
+        for (auto it = exact.cbegin(); it != exact.cend(); ++it) {
+            if (it.key() > c.weight) {
+                if (found.contains(it.key())) { ok = false; problems << QStringLiteral("вес %1 тяжелее предела, но найден").arg(it.key()); }
+                continue;
+            }
+            if (found.value(it.key(), 0) != it.value()) {
+                ok = false;
+                problems << QStringLiteral("вес %1: точно %2, найдено %3").arg(it.key()).arg(it.value()).arg(found.value(it.key(), 0));
+            }
+        }
+        for (auto it = found.cbegin(); it != found.cend(); ++it)
+            if (found.value(it.key()) > exact.value(it.key(), 0)) { ok = false; problems << QStringLiteral("вес %1: лишние слова").arg(it.key()); }
+        if (again != found) { ok = false; problems << QStringLiteral("повтор дал другой спектр"); }
+
+        expectLeon(QStringLiteral("%1, до веса %2: попыток %3, пропуск ~%4")
+                       .arg(c.name).arg(c.weight).arg(trials).arg(g_searchMiss, 0, 'g', 2),
+                   ok, problems.join(QStringLiteral("; ")));
+    }
+
+    // Длинный код: точного спектра нет, сверяемся с Брауэром–Циммерманом,
+    // который до веса 9 точен.
+    {
+        const QStringList rows = BZ::scramble(BZ::systematicRandom(66, 140, 21), 4);
+        RunConfig bz;
+        bz.matrix    = rows;
+        bz.algorithm = Algorithm::BrouwerZimmermann;
+        bz.bzWeight  = 8;
+        bz.device    = ComputeDevice::CPU;
+        clearCheckpoints();
+        const Spectrum exact = runWorker(bz);
+        const int exactUpTo = g_planExactUpTo;
+
+        RunConfig leon;
+        leon.matrix     = rows;
+        leon.algorithm  = Algorithm::RandomInfoSets;
+        leon.leonWeight = 8;
+        leon.device     = ComputeDevice::CPU;
+        clearCheckpoints();
+        const Spectrum found = runWorker(leon);
+        clearCheckpoints();
+
+        bool ok = exactUpTo >= 8 && !found.isEmpty();
+        QStringList problems;
+        for (int w = 1; w <= 8; ++w)
+            if (found.value(w, 0) != exact.value(w, 0)) {
+                ok = false;
+                problems << QStringLiteral("вес %1: БЦ %2, поиск %3").arg(w).arg(exact.value(w, 0)).arg(found.value(w, 0));
+            }
+        const Leon::Plan plan = Leon::plan(140, 66, 8, 1e-12);
+        expectLeon(QStringLiteral("[140,66] длинный, до веса 8: попыток %1, %2 строк за попытку")
+                       .arg(g_searchTotal).arg(plan.rows), ok, problems.join(QStringLiteral("; ")));
+    }
+}
+
+// Случайный поиск на матрице из файла.
+//
+// Запуск: SpectrumTests.exe --leon-run <файл матрицы> <вес> [<степень пропуска>]
+static int leonRun(const QString& path, int weight, int missExponent)
+{
+    RunConfig cfg;
+    if (!loadMatrixOrCase(path, cfg))
+        return 2;
+    cfg.algorithm        = Algorithm::RandomInfoSets;
+    cfg.leonWeight       = weight;
+    cfg.leonMissExponent = missExponent;
+    cfg.device           = ComputeDevice::CPU;
+    cfg.threadsCpu       = omp_get_num_procs();
+
+    const int k = cfg.matrix.size();
+    const int n = cfg.matrix.first().length();
+    const Leon::Plan plan = Leon::plan(n, k, weight, std::pow(10.0, -missExponent));
+    out << QStringLiteral("[%1,%2], все слова до веса %3, пропуск 10^-%4: %5 строк за попытку, попыток %6, слов %7")
+               .arg(n).arg(k).arg(weight).arg(missExponent)
+               .arg(plan.rows).arg(plan.trials).arg(double(plan.trials) * plan.wordsPerTrial, 0, 'g', 3) << Qt::endl;
+    out.flush();
+
+    clearCheckpoints();
+    const auto t = std::chrono::steady_clock::now();
+    const Spectrum spectrum = runWorker(cfg);
+    const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
+    clearCheckpoints();
+
+    out << QStringLiteral("попыток %1 из %2, %3 с; вероятность пропуска по модели ~%4")
+               .arg(g_searchDone).arg(g_searchTotal).arg(sec, 0, 'f', 1).arg(g_searchMiss, 0, 'g', 2) << Qt::endl;
+    for (auto it = spectrum.cbegin(); it != spectrum.cend(); ++it) {
+        const float unseen = it.key() < g_searchUnseen.size() ? g_searchUnseen.at(it.key()) : 0.0f;
+        out << QStringLiteral("   %1  %2%3").arg(it.key(), 3).arg(it.value(), 12)
+                   .arg(unseen >= 0.5f ? QStringLiteral("  (ещё ~%1 не найдено)").arg(qRound64(double(unseen))) : QString())
+            << Qt::endl;
+    }
+    return 0;
+}
+
 // Гарантия алгоритма: ниже границы совпадение с точным спектром обязано быть
 // побитовым, выше — БЦ не имеет права насчитать больше, чем есть.
 static void testBrouwerZimmermann()
@@ -2448,6 +2646,14 @@ int main(int argc, char* argv[])
         bzReport();
         out.flush();
         return 0;
+    }
+
+    const int leonAt = args.indexOf(QStringLiteral("--leon-run"));
+    if (leonAt >= 0 && leonAt + 2 < args.size()) {
+        const int missExp = leonAt + 3 < args.size() ? args.at(leonAt + 3).toInt() : 9;
+        const int rc = leonRun(args.at(leonAt + 1), args.at(leonAt + 2).toInt(), missExp > 0 ? missExp : 9);
+        out.flush();
+        return rc;
     }
 
     const int bzRunAt = args.indexOf(QStringLiteral("--bz-run"));
@@ -2541,6 +2747,8 @@ int main(int argc, char* argv[])
     testProbeLeavesNoTrace();
     testBrouwerZimmermann();
     testBrouwerZimmermannWorker();
+    testLeonModel();
+    testLeonWorker();
 
     testAutosaveStore();
     testCanResume();

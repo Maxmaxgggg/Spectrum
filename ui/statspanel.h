@@ -31,6 +31,8 @@ public:
     // План Брауэра–Циммермана: до какого веса спектр точен, сколько множеств
     // и до скольких строк перебор. Приходит от воркера уже после старта.
     void showPlan(int sets, int rows, int exactUpToWeight);
+    // Ход случайного поиска: попытки и вероятность пропуска.
+    void showSearch(int weight, quint64 trialsDone, quint64 trialsTotal, double missProbability);
     void showProgress(int elapsedSec, int minutesLeft, double speed,
                       quint64 doneOps, quint64 totalOps);
     // Расчёта нет: прочерки вместо цифр прошлого запуска.

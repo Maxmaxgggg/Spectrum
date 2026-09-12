@@ -49,6 +49,14 @@ struct AutosaveRecord
     int                    bzWeight = 0;
     QVector<QVector<int>>  infoSets;
 
+    // Случайный поиск: до какого веса собирали, сколько сделано попыток и с
+    // какой вероятностью пропуска (степень десятки). Такая запись хранит
+    // только итог — продолжать поиск не с чего, найденные слова в неё не
+    // входят.
+    int     leonWeight       = 0;
+    int     leonMissExponent = 0;
+    quint64 leonTrials       = 0;
+
     QDateTime savedAt;
     RunState  state;
 

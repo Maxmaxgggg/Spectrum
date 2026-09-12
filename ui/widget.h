@@ -64,6 +64,9 @@ private slots:
     // План Брауэра–Циммермана: показать в панели и пометить в спектре веса,
     // которые перебор не гарантирует.
     void handlePlanReady(int sets, int rows, int exactUpToWeight);
+    // Ход случайного поиска: панель и пометки «ещё не найдено» в спектре.
+    void handleSearchEstimate(int weight, quint64 trialsDone, quint64 trialsTotal,
+                              double missProbability, SpectrumFloat unseenByWeight);
     void handleMatrixChanged();
 
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -140,6 +143,9 @@ private:
     // До какого веса показанный спектр точен. -1 — весь спектр на равных
     // (обычный перебор); иначе строки тяжелее помечаются как неполные.
     int exactUpToWeight = -1;
+    // Случайный поиск: сколько слов каждого веса, по оценке, ещё не найдено.
+    // Пусто — пометок нет.
+    SpectrumFloat unseenByWeight;
 
     void showAutosaveDialog();
     void applyAutosave(const Matrix& matrix, const AutosaveRecord& record);

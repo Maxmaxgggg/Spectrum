@@ -76,6 +76,9 @@ public:
 
     void    addOps(quint64 n)     { m_doneOps += n; }
     void    setDoneOps(quint64 n) { m_doneOps  = n; }
+    // Объём работы бывает известен не сразу: случайный поиск уточняет число
+    // попыток по ходу, по количеству уже найденных слов.
+    void    setTotalOps(quint64 n) { m_totalOps = n; }
     quint64 doneOps() const       { return m_doneOps; }
     quint64 totalOps() const      { return m_totalOps; }
 

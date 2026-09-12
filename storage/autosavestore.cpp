@@ -56,6 +56,11 @@ QJsonObject AutosaveRecord::toJson() const
         }
         obj["infoSets"] = sets;
     }
+    if (algorithm == ComputationSettings::RandomInfoSets) {
+        obj["leonWeight"]       = leonWeight;
+        obj["leonMissExponent"] = leonMissExponent;
+        obj["leonTrials"]       = qint64(leonTrials);
+    }
     return obj;
 }
 
@@ -75,6 +80,9 @@ AutosaveRecord AutosaveRecord::fromJson(const QJsonObject& obj)
             columns.append(c.toInt());
         r.infoSets.append(columns);
     }
+    r.leonWeight       = obj["leonWeight"].toInt();
+    r.leonMissExponent = obj["leonMissExponent"].toInt();
+    r.leonTrials       = quint64(obj["leonTrials"].toVariant().toLongLong());
     return r;
 }
 
@@ -87,6 +95,10 @@ int resumeRows(const AutosaveRecord& record, int weight, int rows, int cols)
 
 bool canResume(const AutosaveRecord& record, const ComputationSettings& settings)
 {
+    // Запись случайного поиска — только итог: найденные слова в ней не
+    // хранятся, а без них продолжать нечего.
+    if (settings.algorithmType == ComputationSettings::RandomInfoSets)
+        return false;
     if (!settings.layered())
         return true;
 
@@ -171,6 +183,7 @@ QString AutosaveStore::fileNameFor(ComputationSettings::Algorithm algorithm)
         case ComputationSettings::GrayCode:          return QStringLiteral("gray.json");
         case ComputationSettings::DualCode:          return QStringLiteral("dual.json");
         case ComputationSettings::BrouwerZimmermann: return QStringLiteral("bz.json");
+        case ComputationSettings::RandomInfoSets:    return QStringLiteral("leon.json");
         default:                            return QStringLiteral("xor.json");
     }
 }

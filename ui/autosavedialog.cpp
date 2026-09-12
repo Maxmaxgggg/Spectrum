@@ -94,6 +94,8 @@ QString AutosaveDialog::describeAlgorithm(const AutosaveRecord& record)
         case ComputationSettings::GrayCode:          return tr("код Грея");
         case ComputationSettings::DualCode:          return tr("дуальный код");
         case ComputationSettings::BrouwerZimmermann: return tr("Брауэр–Циммерман, до веса %1").arg(record.bzWeight);
+        case ComputationSettings::RandomInfoSets:    return tr("случайный поиск, до веса %1, пропуск 10^-%2")
+                                                                .arg(record.leonWeight).arg(record.leonMissExponent);
         default:                                     return tr("простой XOR");
     }
 }
@@ -107,6 +109,8 @@ QString AutosaveDialog::describeProgress(const AutosaveEntry& entry)
         if (record.algorithm == ComputationSettings::GrayCode
             || record.algorithm == ComputationSettings::DualCode)
             return tr("готово");
+        if (record.algorithm == ComputationSettings::RandomInfoSets)
+            return tr("готово, попыток %1").arg(Format::count(record.leonTrials));
         return tr("готово до %1 строк").arg(record.maxRows);
     }
 

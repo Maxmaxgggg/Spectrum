@@ -2,6 +2,7 @@
 #include "gridtuner.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 Worker::Worker(QObject *parent)
@@ -1203,6 +1204,130 @@ void Worker::computeSpectrumCpuNoGrayShort(const CodeGeometry& g)
     }
     updateSpectrum(numOfCols);
 }
+// Случайный поиск по информационным множествам — см. leonsearch.h.
+//
+// Попытки независимы, поэтому раздаются потокам OpenMP пачками; найденные
+// слова складываются в общую таблицу под замком. Замок не мешает: слов веса
+// не выше заданного — доли процента от перебранных, остальные отсеиваются
+// по весу ещё до него.
+//
+// Чекпоинтов по ходу нет: пришлось бы писать на диск всю таблицу, а поиск по
+// самой своей природе короткий — его предел ставит память под слова.
+void Worker::computeSpectrumCpuLeon(const CodeGeometry& g)
+{
+    const int rows  = int(g.numOfRows);
+    const int cols  = int(g.numOfCols);
+    const int words = int(g.wordsPerRow);
+    const int depth = int(g.maxRows);
+    const int maxWeight = settings.leonWeight;
+
+    // Больше гигабайта под слова не берём: дальше уже не поиск, а полный
+    // перебор, и для него есть другие алгоритмы.
+    constexpr quint64 kTableLimitBytes = 1ULL << 30;
+
+    Leon::WordTable table(words, maxWeight);
+
+    // Прогресс считается в словах, как везде: скорость тогда сравнима.
+    // Число попыток растёт по ходу: чем больше слов какого-то веса нашлось,
+    // тем больше попыток нужно, чтобы ни одно из них не оказалось пропущено
+    // с заданной вероятностью. План даёт нижнюю границу — на одно слово.
+    quint64 target = g.leonTrials;
+    auto opsFor = [&](quint64 trials) {
+        const double words = double(trials) * g.leonWordsPerTrial;
+        return words >= 1.8e19 ? std::numeric_limits<quint64>::max() : quint64(words);
+    };
+    progress.begin(opsFor(target), 0, 0);
+
+    auto publish = [&](quint64 done, bool force) {
+        const std::vector<quint64>& found = table.countByWeight();
+        h_spectrum.fillZero();
+        h_spectrum[0] = 1;
+        for (size_t w = 1; w < found.size() && w < g.spectrumSize; ++w)
+            h_spectrum[w] = found[w];
+
+        const ProgressTracker::Due due = progress.due();
+        if (due.estimate)
+            reportEstimate();
+        if (due.bar)
+            reportProgressBar();
+        if (due.spectrum || force) {
+            progress.markSpectrum();
+            updateSpectrum(cols);
+
+            // Вероятность пропустить хотя бы одно слово: по модели, для
+            // каждого веса — найденные слова умножить на шанс пропуска
+            // одного слова, поделённый на шанс поимки. Сумма по весам.
+            double missTotal = 0.0;
+            SpectrumFloat unseen(cols + 1, 0.0f);
+            const std::vector<double> chao = table.unseenByWeight();
+            for (int w = 1; w <= maxWeight && w <= cols; ++w) {
+                const double p = Leon::catchProbability(cols, rows, w, depth);
+                const double q = std::exp(double(done) * std::log1p(-p));   // (1-p)^done
+                if (found[size_t(w)] > 0)
+                    missTotal += double(found[size_t(w)]) * q / std::max(1.0 - q, 1e-300);
+                unseen[w] = float(chao[size_t(w)]);
+            }
+            emit searchEstimate(maxWeight, done, target,
+                                std::min(1.0, missTotal), unseen);
+        }
+    };
+
+    // Пачка попыток на один проход: достаточно мелкая, чтобы отмена и пауза
+    // отзывались быстро, и достаточно крупная, чтобы потоки не простаивали.
+    const quint64 batch = quint64(std::max(1, omp_get_max_threads())) * 16;
+    bool rankError = false;
+    quint64 done = 0;
+
+    while (done < target) {
+        if (!waitWhilePaused())
+            break;
+        const quint64 count = std::min(batch, target - done);
+
+        #pragma omp parallel for schedule(dynamic)
+        for (long long t = 0; t < (long long)count; ++t) {
+            const bool ok = Leon::trial(h_matrix.get(), rows, cols, words, depth, maxWeight,
+                                        done + quint64(t),
+                                        [&](const quint64* word, int weight) {
+                                            #pragma omp critical(leonTable)
+                                            table.add(word, weight);
+                                        });
+            if (!ok) {
+                #pragma omp critical(leonTable)
+                rankError = true;
+            }
+        }
+        if (rankError)
+            throw std::invalid_argument(
+                "строки матрицы зависимы: случайному поиску нужна матрица полного ранга");
+
+        done += count;
+        activeTrials = done;
+        progress.addOps(quint64(double(count) * g.leonWordsPerTrial));
+        runState.doneOps = progress.doneOps();
+
+        // Пересчёт объёма по найденному: цель только растёт.
+        const quint64 needed = Leon::trialsForAll(cols, rows, maxWeight, depth,
+                                                  settings.leonMissProbability(),
+                                                  table.countByWeight());
+        if (needed > target) {
+            target = needed;
+            progress.setTotalOps(opsFor(target));
+        }
+
+        if (table.bytes() > kTableLimitBytes) {
+            publish(done, true);
+            throw std::runtime_error(
+                "слишком много слов до заданного веса: таблица не помещается в память, "
+                "уменьшите вес");
+        }
+        publish(done, false);
+        if (cancelled.load())
+            break;
+    }
+
+    publish(done, true);
+}
+
 void Worker::updateSpectrum(int numOfCols)
 {
     updateSpectrumFrom(h_spectrum.get(), numOfCols);
@@ -1284,6 +1409,12 @@ void Worker::makeCheckpoint(int numOfCols, bool finished)
         record.maxRows  = activeMaxRows;
         record.bzWeight = settings.bzWeight;
         record.infoSets = activeInfoSets;
+    }
+    if (settings.algorithmType == ComputationSettings::RandomInfoSets) {
+        record.maxRows          = activeMaxRows;
+        record.leonWeight       = settings.leonWeight;
+        record.leonMissExponent = settings.leonMissExponent;
+        record.leonTrials       = activeTrials;
     }
     record.savedAt   = QDateTime::currentDateTime();
     record.state     = runState;
@@ -1404,6 +1535,16 @@ CodeGeometry Worker::describeTask() const
 
     if (settings.algorithmType == ComputationSettings::BrouwerZimmermann)
         planInfoSets(g);
+
+    if (settings.algorithmType == ComputationSettings::RandomInfoSets) {
+        // Пока только на CPU: таблица найденных слов живёт на хосте.
+        g.useGpu = false;
+        const Leon::Plan plan = Leon::plan(int(g.numOfCols), int(g.numOfRows),
+                                           settings.leonWeight, settings.leonMissProbability());
+        g.maxRows           = quint64(plan.rows);
+        g.leonTrials        = plan.trials;
+        g.leonWordsPerTrial = plan.costPerTrial;
+    }
 
     g.matrixInGlobalMem =
         g.useGpu && (g.matrixWords > quint64(Constants::MAX_CONST_WORDS));
@@ -1656,7 +1797,8 @@ void Worker::tuneGrid(CodeGeometry& g)
 void Worker::dispatchComputation(const CodeGeometry& g)
 {
     // Дуальный код считается по проверочной матрице тем же кодом Грея
-    const bool gray = !settings.layered();
+    const bool gray = !settings.layered()
+                   && settings.algorithmType != ComputationSettings::RandomInfoSets;
 
     // Код Грея перебирает 2^k масок в одном 64-битном слове, поэтому длиннее
     // 63 строк не бывает. Раньше это проверял только диалог настроек, а прямой
@@ -1665,7 +1807,9 @@ void Worker::dispatchComputation(const CodeGeometry& g)
         throw std::invalid_argument(
             "код Грея неприменим: больше 63 строк не помещается в маску");
 
-    if (gray)
+    if (settings.algorithmType == ComputationSettings::RandomInfoSets)
+        computeSpectrumCpuLeon(g);
+    else if (gray)
         g.useGpu ? computeSpectrumGpuGrayShort(g)
                  : computeSpectrumCpuGrayShort(g);
     else if (g.isLongCode)
@@ -1703,6 +1847,11 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
         runState.rOffset     = g.maxRows + 1;
         runState.chunkOffset = 0;
     }
+    else if (settings.algorithmType == ComputationSettings::RandomInfoSets) {
+        // Запись случайного поиска не продолжается — хранится только итог.
+        runState.rOffset     = 0;
+        runState.chunkOffset = 0;
+    }
     else {
         // У кода Грея слоёв нет: пройденным считается весь диапазон масок.
         runState.rOffset     = 0;
@@ -1738,6 +1887,7 @@ void Worker::computeSpectrumImpl()
     // перебора и множества он не задавал, они выведены из веса и матрицы.
     activeInfoSets = g.setColumns;
     activeMaxRows  = int(g.maxRows);
+    activeTrials   = 0;
     if (g.guaranteedBelow > 0)
         emit planReady(g.setCount, int(g.maxRows), g.guaranteedBelow - 1);
 

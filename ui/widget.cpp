@@ -152,6 +152,9 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
     // Гарантия поднятой записи: слои до rOffset пройдены целиком (начатый
     // слой не в счёт), и по ним видно, до какого веса спектр уже точен.
     exactUpToWeight = -1;
+    unseenByWeight.clear();
+    if (record.algorithm == ComputationSettings::RandomInfoSets)
+        statsPanel->showSearch(record.leonWeight, record.leonTrials, record.leonTrials, 0.0);
     if (record.algorithm == ComputationSettings::BrouwerZimmermann && !record.infoSets.isEmpty()) {
         const int rows = matrix.size();
         const int cols = matrix.first().length();
@@ -229,6 +232,17 @@ void MainWindow::setSpectrumRows(const SpectrumText& lines)
             const int weight = line.section(QStringLiteral(" - "), 0, 0).toInt();
             if (weight > exactUpToWeight)
                 line += UIStrings::INCOMPLETE_SUFFIX;
+        }
+    }
+    // Случайный поиск: у весов, где по словам, пойманным по одному разу,
+    // видно недобор, дописывается оценка — сколько ещё не найдено.
+    if (!unseenByWeight.isEmpty()) {
+        for (QString& line : shown) {
+            const int weight = line.section(QStringLiteral(" - "), 0, 0).toInt();
+            if (weight >= 0 && weight < unseenByWeight.size()
+                && unseenByWeight.at(weight) >= 0.5f)
+                line += tr("   (ещё ≈%1 не найдено)")
+                            .arg(qRound64(double(unseenByWeight.at(weight))));
         }
     }
 
@@ -337,6 +351,7 @@ void MainWindow::setWorker()
     connect( workerPtr,       &Worker::showSaveLBL,                    this,      &MainWindow::showSaveLBL,                          Qt::QueuedConnection );
     connect( workerPtr,       &Worker::gridTuned,                      this,      &MainWindow::handleGridTuned,                      Qt::QueuedConnection );
     connect( workerPtr,       &Worker::planReady,                      this,      &MainWindow::handlePlanReady,                      Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::searchEstimate,                 this,      &MainWindow::handleSearchEstimate,                 Qt::QueuedConnection );
     connect( workerPtr,       &Worker::updateRateMeasured,             settingsDialog, &SettingsDialog::applyMeasuredRate,            Qt::QueuedConnection );
     // Проба останавливается тем же способом, которым пользователь останавливает
     // расчёт. Отсчёт начинается по сигналу воркера, а не с самой просьбы: перед
@@ -499,6 +514,7 @@ void MainWindow::startComputation()
     // При продолжении записи прежняя гарантия остаётся: слои уже пройдены.
     if (!resuming)
         exactUpToWeight = -1;
+    unseenByWeight.clear();
 
     QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection);
 
@@ -605,6 +621,14 @@ void MainWindow::handlePlanReady(int sets, int rows, int exactUpToWeight)
     this->exactUpToWeight = exactUpToWeight;
     statsPanel->showPlan(sets, rows, exactUpToWeight);
     // Пометки в спектре зависят от гарантии — перерисовать то, что уже есть.
+    setSpectrumRows(lastSpectrum);
+}
+
+void MainWindow::handleSearchEstimate(int weight, quint64 trialsDone, quint64 trialsTotal,
+                                      double missProbability, SpectrumFloat unseenByWeight)
+{
+    statsPanel->showSearch(weight, trialsDone, trialsTotal, missProbability);
+    this->unseenByWeight = unseenByWeight;
     setSpectrumRows(lastSpectrum);
 }
 

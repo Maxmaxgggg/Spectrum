@@ -24,6 +24,13 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     algorithmBGP->addButton( ui->grayCodeRB,  Algorithm::GrayCode  );
     algorithmBGP->addButton( ui->dualCodeRB,  Algorithm::DualCode  );
     algorithmBGP->addButton( ui->brouwerZimmermannRB, Algorithm::BrouwerZimmermann );
+    algorithmBGP->addButton( ui->randomInfoSetsRB,    Algorithm::RandomInfoSets    );
+
+    // Степень десятки в данных пункта: так же, как интервалы.
+    ui->leonMissCBX->setItemData(0, 3);
+    ui->leonMissCBX->setItemData(1, 6);
+    ui->leonMissCBX->setItemData(2, 9);
+    ui->leonMissCBX->setItemData(3, 12);
 
     enumeratorBGP = new QButtonGroup(this);
     enumeratorBGP->addButton( ui->fullEnumRB,    EnumerationType::Full    );
@@ -99,7 +106,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     connect(algorithmBGP,     &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
     connect(computeDeviceBGP, &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
     connect(ui->autoTuneGridCHB, &QCheckBox::toggled,   this, [this](bool) { applyUpdateRateLimit(); });
-    for (QSpinBox* box : { ui->blocksGpuSPB, ui->threadsGpuSPB, ui->threadsCpuSPB, ui->maxRowsSPB, ui->bzWeightSPB })
+    for (QSpinBox* box : { ui->blocksGpuSPB, ui->threadsGpuSPB, ui->threadsCpuSPB, ui->maxRowsSPB, ui->bzWeightSPB, ui->leonWeightSPB })
         connect(box, QOverload<int>::of(&QSpinBox::valueChanged),
                 this, [this](int) { applyUpdateRateLimit(); });
 
@@ -150,8 +157,9 @@ QString SettingsDialog::updateRateKey() const
         .arg(computeDeviceBGP->checkedId())
         .arg(algorithmBGP->checkedId())
         .arg(matrixCols).arg(matrixRows)
-        .arg(algorithmBGP->checkedId() == Algorithm::BrouwerZimmermann
-                 ? ui->bzWeightSPB->value() : ui->maxRowsSPB->value())
+        .arg(algorithmBGP->checkedId() == Algorithm::BrouwerZimmermann ? ui->bzWeightSPB->value()
+           : algorithmBGP->checkedId() == Algorithm::RandomInfoSets    ? ui->leonWeightSPB->value()
+                                                                       : ui->maxRowsSPB->value())
         .arg(ui->blocksGpuSPB->value()).arg(ui->threadsGpuSPB->value())
         .arg(ui->threadsCpuSPB->value())
         .arg(ui->autoTuneGridCHB->isChecked() ? 1 : 0);
@@ -234,6 +242,7 @@ void SettingsDialog::updateEnumTypeControls()
     ui->enumTypeGBX->setEnabled(forXor);
     // Своя группа у Брауэра–Циммермана: там задаётся вес, а не число строк.
     ui->bzGBX->setEnabled(algorithmBGP->checkedId() == Algorithm::BrouwerZimmermann);
+    ui->leonGBX->setEnabled(algorithmBGP->checkedId() == Algorithm::RandomInfoSets);
 
     EnumerationType shown = EnumerationType::Full;
     if (forXor) {
@@ -315,6 +324,8 @@ void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int maxRows,
         xorMaxRows = maxRows;
     if (algorithm == Algorithm::BrouwerZimmermann && bzWeight > 0)
         ui->bzWeightSPB->setValue(bzWeight);
+    if (algorithm == Algorithm::RandomInfoSets && bzWeight > 0)
+        ui->leonWeightSPB->setValue(bzWeight);
 
     updateEnumTypeControls();
 
@@ -322,6 +333,7 @@ void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int maxRows,
     settings.enumType      = static_cast<EnumerationType>(enumeratorBGP->checkedId());
     settings.maxRows       = ui->maxRowsSPB->value();
     settings.bzWeight      = ui->bzWeightSPB->value();
+    settings.leonWeight    = ui->leonWeightSPB->value();
 
     emit sendSettingsToWidget(settings.toJson());
 }
@@ -391,6 +403,9 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
     ui->bzWeightSPB->setMaximum(qMax(1, cols));
     if (settings.bzWeight > ui->bzWeightSPB->maximum())
         settings.bzWeight = ui->bzWeightSPB->value();
+    ui->leonWeightSPB->setMaximum(qMax(1, cols));
+    if (settings.leonWeight > ui->leonWeightSPB->maximum())
+        settings.leonWeight = ui->leonWeightSPB->value();
 
     // Доступность полного перебора и сам алгоритм могли только что поменяться —
     // приводим группу в согласованный вид одним местом, а не в каждой ветке.
@@ -501,6 +516,8 @@ void SettingsDialog::collectSettings()
     settings.enumType = static_cast<EnumerationType>(enumeratorBGP->checkedId());
     settings.maxRows = ui->maxRowsSPB->value();
     settings.bzWeight = ui->bzWeightSPB->value();
+    settings.leonWeight = ui->leonWeightSPB->value();
+    settings.leonMissExponent = ui->leonMissCBX->currentData().toInt();
     settings.compDev = static_cast<ComputeDevice>(computeDeviceBGP->checkedId());
 
     settings.compDevSet.threadsCpu = ui->threadsCpuSPB->value();
@@ -539,6 +556,11 @@ void SettingsDialog::loadSettings() {
     ui->maxRowsSPB->setValue(settings.maxRows);
     xorMaxRows = s.value(SettingsKeys::XOR_MAX_ROWS, settings.maxRows).toInt();
     ui->bzWeightSPB->setValue(settings.bzWeight);
+    ui->leonWeightSPB->setValue(settings.leonWeight);
+    {
+        const int at = ui->leonMissCBX->findData(settings.leonMissExponent);
+        ui->leonMissCBX->setCurrentIndex(at >= 0 ? at : 2);
+    }
 
     updateEnumTypeControls();
 

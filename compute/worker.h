@@ -16,6 +16,7 @@
 #include "progresstracker.h"
 #include "binomtable.h"
 #include "infosets.h"
+#include "leonsearch.h"
 // Переопределяет CUDA_CALL из .cuh: там макрос звал abort(), здесь бросает.
 #include "cudabuffers.h"
 #include "spectrumring.h"
@@ -72,6 +73,11 @@ struct CodeGeometry
     QVector<QVector<int>> setColumns;       // опорные столбцы — в автосохранение
     // Все слова веса меньше этого найдены. Ноль — не Брауэр–Циммерман.
     int                   guaranteedBelow = 0;
+
+    // Случайный поиск: сколько попыток и сколько слов в каждой; глубина
+    // перебора в попытке лежит в maxRows.
+    quint64               leonTrials        = 0;
+    double                leonWordsPerTrial = 0.0;
 };
 
 Q_DECLARE_METATYPE(LoadMode)
@@ -160,6 +166,11 @@ signals:
     // пойдёт перебор и до какого веса спектр будет точным. Пользователь
     // задавал только вес, остальное выведено из матрицы — ему это надо видеть.
     void planReady( int sets, int rows, int exactUpToWeight );
+    // Ход случайного поиска: до какого веса собираются слова, сколько попыток
+    // сделано из скольких, вероятность пропустить хотя бы одно слово по
+    // модели и по весам — сколько слов, по оценке Чао, ещё не найдено.
+    void searchEstimate( int weight, quint64 trialsDone, quint64 trialsTotal,
+                         double missProbability, SpectrumFloat unseenByWeight );
 private:
     /* Функции для работы с биноминальными коэффициентами */
     quint64   totalCombinations(quint64 k, quint64 maxComb) const;
@@ -192,6 +203,8 @@ private:
     void computeSpectrumCpuGrayShort  (const CodeGeometry& g);
     void computeSpectrumCpuNoGrayShort(const CodeGeometry& g);
     void computeSpectrumCpuNoGrayLong (const CodeGeometry& g);
+    // Случайный поиск по информационным множествам. Пока только на CPU.
+    void computeSpectrumCpuLeon       (const CodeGeometry& g);
 
     /* Функции, посылающие сигнал для обновления интерфейса */
     void updateSpectrum(int numOfCols);
@@ -237,6 +250,8 @@ private:
     // Множества и глубина идущего расчёта — для записи в автосохранение.
     QVector<QVector<int>>       activeInfoSets;
     int                         activeMaxRows = 0;
+    // Сделано попыток случайного поиска — тоже в запись.
+    quint64                     activeTrials  = 0;
 
     bool                        exportSpectrum = false;
     // 0 — обычный режим; см. setCheckpointOpsPolicy

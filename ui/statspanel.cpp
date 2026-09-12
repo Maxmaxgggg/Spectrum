@@ -3,6 +3,8 @@
 #include "format.h"
 
 #include <QDateTime>
+
+#include <cmath>
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QFrame>
@@ -20,6 +22,7 @@ QString algorithmName(ComputationSettings::Algorithm algorithm)
     case ComputationSettings::GrayCode:          return QObject::tr("код Грея");
     case ComputationSettings::DualCode:          return QObject::tr("дуальный код");
     case ComputationSettings::BrouwerZimmermann: return QObject::tr("Брауэр–Циммерман");
+    case ComputationSettings::RandomInfoSets:    return QObject::tr("случайный поиск");
     default:                                     return QObject::tr("простой XOR");
     }
 }
@@ -74,12 +77,17 @@ void StatsPanel::showTask(const ComputationSettings& settings)
 {
     grid.clear();
 
-    if (settings.compDev == ComputationSettings::GPU) {
+    if (settings.compDev == ComputationSettings::GPU
+        && settings.algorithmType != ComputationSettings::RandomInfoSets) {
         deviceText = tr("GPU, сетка %1 x %2")
                          .arg(settings.compDevSet.blocksGpu)
                          .arg(settings.compDevSet.threadsGpu);
     } else {
         deviceText = tr("CPU, потоков: %1").arg(settings.compDevSet.threadsCpu);
+        // Случайный поиск пока только на процессоре, что бы ни стояло в
+        // настройках, — и здесь это должно быть видно.
+        if (settings.compDev == ComputationSettings::GPU)
+            deviceText += tr(" (поиск только на CPU)");
     }
     deviceValue->setText(deviceText);
 
@@ -88,6 +96,9 @@ void StatsPanel::showTask(const ComputationSettings& settings)
                               : tr("частичный, до %1 строк").arg(settings.maxRows);
     if (settings.algorithmType == ComputationSettings::BrouwerZimmermann)
         enumeration = tr("точно до веса %1").arg(settings.bzWeight);
+    if (settings.algorithmType == ComputationSettings::RandomInfoSets)
+        enumeration = tr("до веса %1, пропуск 10^-%2")
+                          .arg(settings.leonWeight).arg(settings.leonMissExponent);
     algorithmValue->setText(algorithmName(settings.algorithmType)
                             + QStringLiteral(", ") + enumeration);
     // План приходит позже, отдельным сигналом; до него — прочерк.
@@ -98,6 +109,22 @@ void StatsPanel::showPlan(int sets, int rows, int exactUpToWeight)
 {
     planValue->setText(tr("веса до %1 точно; множеств %2, до %3 строк")
                            .arg(exactUpToWeight).arg(sets).arg(rows));
+}
+
+void StatsPanel::showSearch(int weight, quint64 trialsDone, quint64 trialsTotal,
+                            double missProbability)
+{
+    // Вероятность в виде «10^-N», а не «1e-9»: так же, как задавалась.
+    QString miss;
+    if (missProbability >= 0.5)
+        miss = tr("ещё далеко");
+    else if (missProbability <= 0.0)
+        miss = tr("пропуск ~0");
+    else
+        miss = tr("пропуск ~10^%1").arg(std::floor(std::log10(missProbability)), 0, 'f', 0);
+    planValue->setText(tr("до веса %1: %2; попыток %3 из %4")
+                           .arg(weight).arg(miss)
+                           .arg(Format::count(trialsDone)).arg(Format::count(trialsTotal)));
 }
 
 void StatsPanel::showGrid(int blocks, int threads)
