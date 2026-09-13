@@ -92,6 +92,9 @@ public:
     // сырьё для оценки Чао, когда таблица разбита на части.
     void hitCounts(std::vector<quint64>& f1, std::vector<quint64>& f2) const;
 
+    // Все слова подряд (по wordsPerRow слов) и их веса — дописываются в конец.
+    void appendWords(std::vector<quint64>& words, std::vector<int>& weights) const;
+
 private:
     bool    equalAt(uint32_t index, const quint64* word) const;
     void    grow();
@@ -134,6 +137,9 @@ public:
     quint64 bytes() const;
     std::vector<quint64> countByWeight()  const;
     std::vector<double>  unseenByWeight() const;
+    // Все найденные слова и их веса — для тех, кому нужны сами слова, а не
+    // только счёт: код произведения строит из них наборы.
+    void exportWords(std::vector<quint64>& words, std::vector<int>& weights) const;
 
 private:
     int shardOf(const quint64* word) const;

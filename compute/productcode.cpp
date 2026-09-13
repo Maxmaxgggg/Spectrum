@@ -235,6 +235,79 @@ std::vector<int> unpackProfile(const ProfileKey& key, int cellCount)
     return cells;
 }
 
+namespace {
+
+// Обход наборов одним потоком: своя карта профилей, свои буферы. Потоки
+// делят между собой первое слово набора, остальное — рекурсия.
+struct ProfileWalker
+{
+    const Component&            c;
+    const std::vector<size_t>&  candidates;
+    const std::vector<std::vector<int>>& perms;
+    int r; int unionLimit; int words;
+    quint64 workLimit;
+    std::atomic<quint64>& work;
+    std::atomic<bool>&    over;
+    const std::function<bool()>& cancelled;
+
+    ProfileMap map;
+    quint64    localWork = 0;
+    std::vector<const quint64*> tuple, permuted;
+    std::vector<int> cells;
+
+    // Счётчик работы общий, но пополняется пачками: атомарный инкремент на
+    // каждого кандидата съел бы весь выигрыш от потоков.
+    bool tick()
+    {
+        if (++localWork < 4096)
+            return true;
+        const quint64 total = work.fetch_add(localWork) + localWork;
+        localWork = 0;
+        if (total > workLimit || (cancelled && cancelled())) {
+            over.store(true);
+            return false;
+        }
+        return true;
+    }
+
+    void go(size_t from, int depth, const std::vector<quint64>& unionSoFar)
+    {
+        if (over.load(std::memory_order_relaxed))
+            return;
+        if (depth == r) {
+            if (!independent(tuple, words))
+                return;
+            for (const std::vector<int>& p : perms) {
+                for (int i = 0; i < r; ++i)
+                    permuted[size_t(i)] = tuple[size_t(p[size_t(i)])];
+                cellsOf(permuted, words, cells);
+                ++map[packProfile(cells)];
+            }
+            return;
+        }
+        std::vector<quint64> u(static_cast<size_t>(words));
+        for (size_t ci = from; ci < candidates.size(); ++ci) {
+            if (!tick())
+                return;
+            const quint64* a = c.word(candidates[ci]);
+            int size = 0;
+            for (int w = 0; w < words; ++w) {
+                u[size_t(w)] = unionSoFar[size_t(w)] | a[w];
+                size += popcount64(u[size_t(w)]);
+            }
+            if (size > unionLimit)
+                continue;
+            tuple.push_back(a);
+            go(ci + 1, depth + 1, u);
+            tuple.pop_back();
+            if (over.load(std::memory_order_relaxed))
+                return;
+        }
+    }
+};
+
+} // namespace
+
 bool profiles(const Component& c, int r, int unionLimit, quint64 workLimit,
               ProfileMap& out, bool ordered, const std::function<bool()>& cancelled)
 {
@@ -262,55 +335,45 @@ bool profiles(const Component& c, int r, int unionLimit, quint64 workLimit,
         perms.push_back(perm);
     }
 
-    quint64 work = 0;
-    bool    over = false;
-    std::vector<const quint64*> tuple;
-    std::vector<const quint64*> permuted(static_cast<size_t>(r));
-    std::vector<int> cells;
+    std::atomic<quint64> work{ 0 };
+    std::atomic<bool>    over{ false };
+    const int threads = std::max(1, omp_get_max_threads());
+    std::vector<ProfileMap> maps(static_cast<size_t>(threads));
 
-    // Рекурсия по глубине с отсечкой по объединению носителей.
-    std::function<void(size_t, int, const std::vector<quint64>&)> go =
-        [&](size_t from, int depth, const std::vector<quint64>& unionSoFar) {
-            if (over)
-                return;
-            if (depth == r) {
-                if (!independent(tuple, words))
-                    return;
-                for (const std::vector<int>& p : perms) {
-                    for (int i = 0; i < r; ++i)
-                        permuted[size_t(i)] = tuple[size_t(p[size_t(i)])];
-                    cellsOf(permuted, words, cells);
-                    ++out[packProfile(cells)];
-                }
-                return;
+    #pragma omp parallel num_threads(threads)
+    {
+        ProfileWalker walker{ c, candidates, perms, r, unionLimit, words, workLimit,
+                              work, over, cancelled, ProfileMap(), 0, {}, {}, {} };
+        walker.permuted.resize(static_cast<size_t>(r));
+        std::vector<quint64> empty(static_cast<size_t>(words), 0ULL);
+        std::vector<quint64> u(static_cast<size_t>(words));
+
+        // Первое слово набора раздаётся потокам; длинные хвосты у первых
+        // слов, поэтому раздача динамическая.
+        #pragma omp for schedule(dynamic, 1)
+        for (long long ci = 0; ci < (long long)candidates.size(); ++ci) {
+            if (over.load(std::memory_order_relaxed) || !walker.tick())
+                continue;
+            const quint64* a = c.word(candidates[size_t(ci)]);
+            int size = 0;
+            for (int w = 0; w < words; ++w) {
+                u[size_t(w)] = a[w];
+                size += popcount64(u[size_t(w)]);
             }
-            for (size_t ci = from; ci < candidates.size(); ++ci) {
-                if (++work > workLimit || (cancelled && (work & 0xFFFF) == 0 && cancelled())) {
-                    over = true;
-                    return;
-                }
-                const quint64* a = c.word(candidates[ci]);
-                std::vector<quint64> u(static_cast<size_t>(words));
-                int size = 0;
-                for (int w = 0; w < words; ++w) {
-                    u[size_t(w)] = unionSoFar[size_t(w)] | a[w];
-                    size += popcount64(u[size_t(w)]);
-                }
-                if (size > unionLimit)
-                    continue;
-                tuple.push_back(a);
-                go(ci + 1, depth + 1, u);
-                tuple.pop_back();
-                if (over)
-                    return;
-            }
-        };
-    std::vector<quint64> empty(static_cast<size_t>(words), 0ULL);
-    go(0, 0, empty);
-    if (over) {
+            if (size > unionLimit)
+                continue;
+            walker.tuple.assign(1, a);
+            walker.go(size_t(ci) + 1, 1, u);
+        }
+        maps[size_t(omp_get_thread_num())] = std::move(walker.map);
+    }
+    if (over.load()) {
         out.clear();
         return false;
     }
+    for (ProfileMap& m : maps)
+        for (const auto& entry : m)
+            out[entry.first] += entry.second;
     return true;
 }
 

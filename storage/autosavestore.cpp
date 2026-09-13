@@ -66,6 +66,7 @@ QJsonObject AutosaveRecord::toJson() const
         obj["productRank"]      = productRank;
         obj["productRows1"]     = productRows1;
         obj["productExactUpTo"] = productExactUpTo;
+        obj["productMissExponent"] = productMissExponent;
     }
     return obj;
 }
@@ -93,6 +94,7 @@ AutosaveRecord AutosaveRecord::fromJson(const QJsonObject& obj)
     r.productRank      = obj["productRank"].toInt();
     r.productRows1     = obj["productRows1"].toInt();
     r.productExactUpTo = obj.contains("productExactUpTo") ? obj["productExactUpTo"].toInt() : -1;
+    r.productMissExponent = obj["productMissExponent"].toInt();
     return r;
 }
 

@@ -2875,7 +2875,7 @@ static void testProductCode()
         cfg.matrix      = Reference::golay24_12();
         cfg.matrix2     = Reference::hamming7_4();
         cfg.algorithm   = Algorithm::ProductCode;
-        cfg.productRank = 3;
+        cfg.productRank = 1;
         cfg.device      = ComputeDevice::CPU;
         clearCheckpoints();
         const Spectrum got = runWorker(cfg);
@@ -2897,6 +2897,40 @@ static void testProductCode()
                    !got.isEmpty() && got == expected && g_productExactUpTo == tolhuizen,
                    QStringLiteral("ожидалось до %1: %2; получено: %3")
                        .arg(tolhuizen).arg(formatSpectrum(expected), formatSpectrum(got)));
+    }
+
+    // Большие компоненты при ранге >= 2 — списки слов случайным поиском.
+    // Голей x Хэмминг: у одной компоненты слова собраны Леоном, у другой —
+    // перебором (порог 6: Хэмминг с k = 4 ниже, Голей с k = 12 выше);
+    // итог обязан совпасть с расчётом по перебранным целиком компонентам.
+    {
+        RunConfig cfg;
+        cfg.matrix      = Reference::golay24_12();
+        cfg.matrix2     = Reference::hamming7_4();
+        cfg.algorithm   = Algorithm::ProductCode;
+        cfg.productRank = 2;
+        cfg.device      = ComputeDevice::CPU;
+        clearCheckpoints();
+        const Spectrum exact = runWorker(cfg);
+        const int exactUpTo = g_productExactUpTo;
+
+        const int savedLimit = Product::bruteForceMaxK;
+        Product::bruteForceMaxK = 6;
+        clearCheckpoints();
+        const Spectrum viaLeon = runWorker(cfg);
+        const QVector<AutosaveEntry> entries = testStore().list();
+        clearCheckpoints();
+        Product::bruteForceMaxK = savedLimit;
+
+        // Записей несколько: вложенный поиск пишет и свою, по компоненте.
+        int recordedMiss = -1;
+        for (const AutosaveEntry& e : entries)
+            if (e.record.algorithm == ComputationSettings::ProductCode)
+                recordedMiss = e.record.productMissExponent;
+        expectLeon(QStringLiteral("Worker: Голей (Леон) x Хэмминг, ранги до 2 — %1").arg(g_productText),
+                   !exact.isEmpty() && viaLeon == exact && g_productExactUpTo == exactUpTo
+                       && recordedMiss == 12,
+                   QStringLiteral("перебором: %1\n      Леоном: %2").arg(formatSpectrum(exact), formatSpectrum(viaLeon)));
     }
 
     // Граница Толхёйзена для ранга 2 и порядок GL.

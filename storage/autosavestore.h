@@ -63,6 +63,9 @@ struct AutosaveRecord
     int productRank      = 0;
     int productRows1     = 0;
     int productExactUpTo = -1;
+    // Ноль — все компоненты сертифицированы; иначе хотя бы одна собрана
+    // случайным поиском с вероятностью пропуска 10 в минус этой степени.
+    int productMissExponent = 0;
 
     QDateTime savedAt;
     RunState  state;

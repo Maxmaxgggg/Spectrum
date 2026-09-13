@@ -49,6 +49,11 @@ struct Component
     int exactUpTo = -1;
     std::vector<quint64> spectrum;     // индекс — вес, размер n + 1
 
+    // Спектр и список получены случайным поиском: полны с вероятностью
+    // пропуска не больше missProbability, а не по сертификату.
+    bool                 probabilistic   = false;
+    double               missProbability = 0.0;
+
     bool                 hasWords  = false;
     int                  wordsUpTo = -1;
     std::vector<quint64> words;        // подряд, по wordsPerRow слов

@@ -119,6 +119,12 @@ public:
     const QVector<quint64>& finalSpectrum() const { return m_finalSpectrum; }
     int finalExactUpTo() const { return m_finalExactUpTo; }
 
+    // Случайный поиск может отдать не только счёт, но и сами слова — коду
+    // произведения нужны они. По умолчанию слова после расчёта не хранятся.
+    void setKeepFoundWords(bool keep) { keepFoundWords = keep; }
+    const std::vector<quint64>& foundWords()   const { return m_foundWords; }
+    const std::vector<int>&     foundWeights() const { return m_foundWeights; }
+
     // Порог, ниже которого подбор сетки не окупается и не проводится.
     // Тесты ставят ноль, чтобы гонять подбор на маленьких матрицах.
     void setGridTuningThreshold(double seconds);
@@ -216,10 +222,12 @@ private:
     void computeSpectrumLeon          (const CodeGeometry& g);
     // Код произведения: низ спектра по компонентам.
     void computeSpectrumProduct       (const CodeGeometry& g);
-    // Компонента произведения: спектр до weightUpTo (и слова, если k мал).
-    // Большую компоненту считает вложенный Worker Брауэром–Циммерманом.
+    // Компонента произведения: спектр до weightUpTo и слова до него же.
+    // Маленькую перебирает целиком; большую считает вложенный Worker —
+    // Брауэром–Циммерманом, если слова не нужны (сертификат, только счёт),
+    // или случайным поиском, если нужны (список слов, но без гарантии).
     Product::Component analyzeComponent(const QStringList& rows, int weightUpTo,
-                                        const QString& label);
+                                        const QString& label, bool wantWords);
     // Матрица-ключ автосохранения: у произведения обе компоненты подряд.
     QStringList autosaveKeyMatrix() const;
 
@@ -279,6 +287,12 @@ private:
     // Вложенный расчёт, которому надо передать отмену и паузу.
     std::atomic<Worker*>        activeSub { nullptr };
     QString                     autosaveRootDir;
+    bool                        keepFoundWords = false;
+    std::vector<quint64>        m_foundWords;
+    std::vector<int>            m_foundWeights;
+    // Код произведения: степень пропуска, если компоненты собраны случайным
+    // поиском; ноль — всё сертифицировано.
+    int                         productMissExponent = 0;
 
     bool                        exportSpectrum = false;
     // 0 — обычный режим; см. setCheckpointOpsPolicy

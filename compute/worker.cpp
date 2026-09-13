@@ -1348,6 +1348,10 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
                 break;
         }
         publish(true);
+        m_foundWords.clear();
+        m_foundWeights.clear();
+        if (keepFoundWords && !cancelled.load())
+            table.exportWords(m_foundWords, m_foundWeights);
         return;
     }
 
@@ -1554,6 +1558,10 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
     activeTrials = collected;
     publish(true);
+    m_foundWords.clear();
+    m_foundWeights.clear();
+    if (keepFoundWords && !cancelled.load())
+        table.exportWords(m_foundWords, m_foundWeights);
 }
 
 // Компонента произведения: точный спектр до weightUpTo и — если размерность
@@ -1561,7 +1569,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
 // (код Грея), большая — Брауэром–Циммерманом во вложенном Worker: он
 // сертифицирует спектр до нужного веса и отдаёт итог через finalSpectrum().
 Product::Component Worker::analyzeComponent(const QStringList& rows, int weightUpTo,
-                                            const QString& label)
+                                            const QString& label, bool wantWords)
 {
     const int k = rows.size();
     const int n = rows.first().length();
@@ -1575,17 +1583,24 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
         return c;
     }
 
-    emit productPlan(tr("%1: Брауэр–Циммерман до веса %2…").arg(label).arg(weightUpTo), -1);
+    if (wantWords)
+        emit productPlan(tr("%1: случайный поиск до веса %2, пропуск 10^-%3…")
+                             .arg(label).arg(weightUpTo).arg(settings.leonMissExponent), -1);
+    else
+        emit productPlan(tr("%1: Брауэр–Циммерман до веса %2…").arg(label).arg(weightUpTo), -1);
 
     Worker sub;
     sub.setAutosaveRoot(autosaveRootDir);
     sub.setGridTuningThreshold(tuneThresholdSec);
+    sub.setKeepFoundWords(wantWords);
 
     ComputationSettings cs = settings;
     cs.matrix        = rows;
     cs.matrix2.clear();
-    cs.algorithmType = ComputationSettings::BrouwerZimmermann;
+    cs.algorithmType = wantWords ? ComputationSettings::RandomInfoSets
+                                 : ComputationSettings::BrouwerZimmermann;
     cs.bzWeight      = std::min(weightUpTo, n);
+    cs.leonWeight    = std::min(weightUpTo, n);
     sub.setSettings(cs.toJson());
     sub.initializeRunState(LoadMode::Reset);
 
@@ -1609,7 +1624,19 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
         throw std::runtime_error("расчёт отменён");
 
     std::vector<quint64> spectrum(sub.finalSpectrum().begin(), sub.finalSpectrum().end());
-    return Product::fromSpectrum(n, k, spectrum, sub.finalExactUpTo());
+    if (!wantWords)
+        return Product::fromSpectrum(n, k, spectrum, sub.finalExactUpTo());
+
+    // Случайный поиск: слова до предела найдены все — с вероятностью пропуска
+    // из настроек поиска. Спектр компоненты в этих пределах — счёт найденного.
+    Product::Component c = Product::fromSpectrum(n, k, spectrum, std::min(weightUpTo, n));
+    c.probabilistic   = true;
+    c.missProbability = settings.leonMissProbability();
+    c.hasWords        = true;
+    c.wordsUpTo       = std::min(weightUpTo, n);
+    c.words           = sub.foundWords();
+    c.weights         = sub.foundWeights();
+    return c;
 }
 
 // Код произведения C1 ⊗ C2 — см. productcode.h. Три шага: минимальные веса
@@ -1625,7 +1652,11 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     const quint64 productLength = quint64(n1) * quint64(n2);
 
     progress.begin(1, 0, 0);
-    productExactUpTo = -1;
+    productExactUpTo    = -1;
+    productMissExponent = 0;
+    // Ранги выше первого строятся из списков слов; для большой компоненты
+    // их даёт только случайный поиск — без сертификата, зато со списком.
+    const bool wantWords = maxRank >= 2;
 
     // Шаг 1. Минимальные веса. У маленькой компоненты — из полного перебора,
     // у большой — Брауэром–Циммерманом с удвоением предела, пока слово не
@@ -1634,11 +1665,11 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     auto minWeight = [&](const QStringList& rows, const QString& label, Product::Component& out) {
         const int n = rows.first().length();
         if (rows.size() <= Product::bruteForceMaxK) {
-            out = analyzeComponent(rows, 0, label);
+            out = analyzeComponent(rows, 0, label, wantWords);
             return;
         }
         for (int t = 8; ; t = std::min(n, t * 2)) {
-            out = analyzeComponent(rows, t, label);
+            out = analyzeComponent(rows, t, label, wantWords);
             if (out.d > 0 || t >= n)
                 return;
         }
@@ -1662,10 +1693,12 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     // слов веса <= target/d другой компоненты.
     const int limit1 = int(std::min<quint64>(target / quint64(c2.d), quint64(n1)));
     const int limit2 = int(std::min<quint64>(target / quint64(c1.d), quint64(n2)));
-    if (c1.exactUpTo < limit1 || (k1 <= Product::bruteForceMaxK && c1.wordsUpTo < limit1))
-        c1 = analyzeComponent(g1, limit1, tr("компонента 1"));
-    if (c2.exactUpTo < limit2 || (k2 <= Product::bruteForceMaxK && c2.wordsUpTo < limit2))
-        c2 = analyzeComponent(g2, limit2, tr("компонента 2"));
+    if (c1.exactUpTo < limit1 || (wantWords && c1.wordsUpTo < limit1))
+        c1 = analyzeComponent(g1, limit1, tr("компонента 1"), wantWords);
+    if (c2.exactUpTo < limit2 || (wantWords && c2.wordsUpTo < limit2))
+        c2 = analyzeComponent(g2, limit2, tr("компонента 2"), wantWords);
+    if (c1.probabilistic || c2.probabilistic)
+        productMissExponent = settings.leonMissExponent;
 
     // Точность спектра произведения: по рангам — до границы следующего, по
     // компонентам — пока хватает их точности.
@@ -1710,11 +1743,17 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     for (size_t w = 1; w < total.size() && int(w) <= productExactUpTo; ++w)
         h_spectrum[w] = total[w];
 
-    const QString summary = tr("[%1,%2,%3] x [%4,%5,%6] = [%7,%8,%9]; ранги до %10; точно до веса %11%12")
+    if (productMissExponent > 0)
+        notes.prepend(tr("компоненты %1 — случайным поиском, пропуск до 10^-%2")
+                          .arg(c1.probabilistic && c2.probabilistic ? QStringLiteral("1 и 2")
+                               : c1.probabilistic ? QStringLiteral("1") : QStringLiteral("2"))
+                          .arg(productMissExponent));
+    const QString summary = tr("[%1,%2,%3] x [%4,%5,%6] = [%7,%8,%9]; ранги до %10; %13 до веса %11%12")
                                 .arg(n1).arg(k1).arg(c1.d).arg(n2).arg(k2).arg(c2.d)
                                 .arg(productLength).arg(quint64(k1) * quint64(k2)).arg(d)
                                 .arg(ranksDone).arg(productExactUpTo)
-                                .arg(notes.isEmpty() ? QString() : QStringLiteral("; ") + notes.join(QStringLiteral("; ")));
+                                .arg(notes.isEmpty() ? QString() : QStringLiteral("; ") + notes.join(QStringLiteral("; ")))
+                                .arg(productMissExponent > 0 ? tr("полно") : tr("точно"));
     emit productPlan(summary, productExactUpTo);
     progress.setDoneOps(1);
     emit updateInfoPBR(100);
@@ -1814,6 +1853,7 @@ void Worker::makeCheckpoint(int numOfCols, bool finished)
         record.productRank      = settings.productRank;
         record.productRows1     = settings.matrix.size();
         record.productExactUpTo = productExactUpTo;
+        record.productMissExponent = productMissExponent;
     }
     record.savedAt   = QDateTime::currentDateTime();
     record.state     = runState;

@@ -231,6 +231,12 @@ void WordTable::hitCounts(std::vector<quint64>& f1, std::vector<quint64>& f2) co
     }
 }
 
+void WordTable::appendWords(std::vector<quint64>& words, std::vector<int>& weights) const
+{
+    words.insert(words.end(), m_store.begin(), m_store.begin() + ptrdiff_t(m_count * quint64(m_words)));
+    weights.insert(weights.end(), m_weight.begin(), m_weight.begin() + ptrdiff_t(m_count));
+}
+
 std::vector<double> chaoUnseen(const std::vector<quint64>& f1, const std::vector<quint64>& f2)
 {
     std::vector<double> unseen(f1.size(), 0.0);
@@ -352,6 +358,12 @@ std::vector<quint64> ShardedWordTable::countByWeight() const
             total[w] += part[w];
     }
     return total;
+}
+
+void ShardedWordTable::exportWords(std::vector<quint64>& words, std::vector<int>& weights) const
+{
+    for (const WordTable& t : m_shards)
+        t.appendWords(words, weights);
 }
 
 std::vector<double> ShardedWordTable::unseenByWeight() const

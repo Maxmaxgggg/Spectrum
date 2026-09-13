@@ -113,7 +113,9 @@ QString AutosaveDialog::describeProgress(const AutosaveEntry& entry)
         if (record.algorithm == ComputationSettings::RandomInfoSets)
             return tr("готово, попыток %1").arg(Format::count(record.leonTrials));
         if (record.algorithm == ComputationSettings::ProductCode)
-            return tr("готово, точно до веса %1").arg(record.productExactUpTo);
+            return record.productMissExponent > 0
+                       ? tr("готово, до веса %1 (пропуск 10^-%2)").arg(record.productExactUpTo).arg(record.productMissExponent)
+                       : tr("готово, точно до веса %1").arg(record.productExactUpTo);
         return tr("готово до %1 строк").arg(record.maxRows);
     }
 
