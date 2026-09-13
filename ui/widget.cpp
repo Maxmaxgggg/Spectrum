@@ -268,18 +268,13 @@ void MainWindow::setupDocks()
         return dock;
     };
 
-    matrixDock   = makeDock(ui->matrixPTE,   tr("Матрица 1"),
+    matrixDock   = makeDock(ui->matrixPTE,   tr("Матрица"),
                             UIStrings::MATRIX_TOOLTIP,   "matrixDock");
     matrix2PTE   = new FilterPlainTextEdit(this);
     matrix2PTE->setFont(ui->matrixPTE->font());
     matrix2Dock  = makeDock(matrix2PTE, tr("Матрица 2"),
                             UIStrings::MATRIX2_TOOLTIP,  "matrix2Dock");
-    connect(matrix2PTE, &FilterPlainTextEdit::textChanged, this, [this]() {
-        const Matrix rows = matrix2PTE->toStringList();
-        int maxLen = 0;
-        for (const QString& row : rows) maxLen = qMax(maxLen, row.length());
-        matrix2Dock->setWindowTitle(tr("Матрица 2 (%1,%2)").arg(maxLen).arg(rows.size()));
-    });
+    connect(matrix2PTE, &FilterPlainTextEdit::textChanged, this, [this]() { updateMatrixTitles(); });
     spectrumDock = makeDock(ui->spectrumPTE, tr("Спектр кодовых слов"),
                             UIStrings::SPECTRUM_TOOLTIP, "spectrumDock");
     plotDock     = makeDock(ui->spectrumCPT, tr("График спектра"),
@@ -306,7 +301,9 @@ void MainWindow::setupDocks()
     splitDockWidget(matrixDock,   statsDock,    Qt::Horizontal);
     splitDockWidget(spectrumDock, plotDock,     Qt::Horizontal);
     // Вторая матрица — вкладкой поверх первой: нужна только коду
-    // произведения, места отдельного не просит.
+    // произведения, места отдельного не просит. Вкладки сверху: снизу они
+    // читаются как принадлежащие панели под ними.
+    setTabPosition(Qt::AllDockWidgetAreas, QTabWidget::North);
     tabifyDockWidget(matrixDock, matrix2Dock);
 
     // На стыке вкладок — кнопка «поменять местами»: компоненты произведения
@@ -360,6 +357,7 @@ void MainWindow::updateMatrix2Visibility()
     }
     if (matrixSwap)
         matrixSwap->attach();
+    updateMatrixTitles();
 }
 
 void MainWindow::resetLayout()
@@ -517,7 +515,9 @@ QString MainWindow::matrixError() const
         return QString();
     };
 
-    const QString first = check(ui->matrixPTE->toStringList(), tr("Матрица 1"));
+    const QString first = check(ui->matrixPTE->toStringList(),
+                                settings.algorithmType == ComputationSettings::ProductCode
+                                    ? tr("Матрица 1") : tr("Матрица"));
     if (!first.isEmpty())
         return first;
     // Код произведения: компоненты проверяются каждая сама по себе, само
@@ -762,10 +762,24 @@ void MainWindow::handleMatrixChanged()
         emit matrixChanged( rows.size(), maxLen );
     // Размеры показывает заголовок дока — отдельной подписи над редактором
     // больше нет.
-    if (matrixDock)
-        matrixDock->setWindowTitle(tr("Матрица 1 (%1,%2)").arg(maxLen).arg(rows.size()));
-    
-    
+    updateMatrixTitles();
+}
+
+// «Матрица (n,k)» у произвольного кода; у произведения панели две, и они
+// нумеруются.
+void MainWindow::updateMatrixTitles()
+{
+    if (!matrixDock || !matrix2Dock)
+        return;
+    auto size = [](const Matrix& rows) {
+        int maxLen = 0;
+        for (const QString& row : rows) maxLen = qMax(maxLen, row.length());
+        return QStringLiteral(" (%1,%2)").arg(maxLen).arg(rows.size());
+    };
+    const bool product = settings.algorithmType == ComputationSettings::ProductCode;
+    matrixDock->setWindowTitle((product ? tr("Матрица 1") : tr("Матрица"))
+                               + size(ui->matrixPTE->toStringList()));
+    matrix2Dock->setWindowTitle(tr("Матрица 2") + size(matrix2PTE->toStringList()));
 }
 void MainWindow::handleError(const QString& message)
 {

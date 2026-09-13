@@ -87,8 +87,10 @@ private:
     // Кнопка «поменять местами» на стыке вкладок двух матриц.
     class DockSwapButton* matrixSwap = nullptr;
     // Вторая матрица нужна только коду произведения: при других алгоритмах
-    // её панель прячется.
+    // её панель прячется, а первая зовётся просто «Матрица».
     void updateMatrix2Visibility();
+    // Заголовок панели матрицы: имя и размер.
+    void updateMatrixTitles();
     QDockWidget    *spectrumDock     = nullptr;
     QDockWidget    *plotDock         = nullptr;
     QDockWidget    *statsDock        = nullptr;
