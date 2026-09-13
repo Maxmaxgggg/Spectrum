@@ -1,7 +1,10 @@
 #include "widget.h"
 #include "infosets.h"
 #include "filterplaintextedit.h"
-#include "dockswapbutton.h"
+#include "tabswapbutton.h"
+
+#include <QTabBar>
+#include <QTabWidget>
 #include "docktitlebar.h"
 #include "fonticons.h"
 
@@ -268,16 +271,32 @@ void MainWindow::setupDocks()
         return dock;
     };
 
-    matrixDock   = makeDock(ui->matrixPTE,   tr("Матрица"),
-                            UIStrings::MATRIX_TOOLTIP,   "matrixDock");
     matrix2PTE   = new FilterPlainTextEdit(this);
     matrix2PTE->setFont(ui->matrixPTE->font());
     // Как у первой: строка матрицы не переносится, а уходит за край с
     // прокруткой — перенесённая строка нулей и единиц нечитаема.
     matrix2PTE->setLineWrapMode(ui->matrixPTE->lineWrapMode());
-    matrix2Dock  = makeDock(matrix2PTE, tr("Матрица 2"),
-                            UIStrings::MATRIX2_TOOLTIP,  "matrix2Dock");
     connect(matrix2PTE, &FilterPlainTextEdit::textChanged, this, [this]() { updateMatrixTitles(); });
+
+    matrixTabs = new QTabWidget(this);
+    // Без рамки вокруг страницы: редактор должен заполнять панель, как и
+    // раньше, а полоса вкладок при одной вкладке прячется.
+    matrixTabs->setDocumentMode(true);
+    matrixTabs->addTab(ui->matrixPTE, tr("Матрица 1"));
+    matrixTabs->addTab(matrix2PTE,    tr("Матрица 2"));
+    matrixTabs->setTabToolTip(1, UIStrings::MATRIX2_TOOLTIP);
+    matrixDock   = makeDock(matrixTabs, tr("Матрица"),
+                            UIStrings::MATRIX_TOOLTIP,   "matrixDock");
+
+    // На стыке вкладок — кнопка «поменять местами»: компоненты произведения
+    // легко загрузить не в те вкладки. На спектр порядок не влияет.
+    auto* const swap = new TabSwapButton(matrixTabs->tabBar(), tr("Поменять матрицы местами"));
+    connect(swap, &TabSwapButton::clicked, this, [this]() {
+        const QString first  = ui->matrixPTE->toPlainText();
+        const QString second = matrix2PTE->toPlainText();
+        ui->matrixPTE->setPlainText(second);
+        matrix2PTE->setPlainText(first);
+    });
     spectrumDock = makeDock(ui->spectrumPTE, tr("Спектр кодовых слов"),
                             UIStrings::SPECTRUM_TOOLTIP, "spectrumDock");
     plotDock     = makeDock(ui->spectrumCPT, tr("График спектра"),
@@ -303,22 +322,6 @@ void MainWindow::setupDocks()
     splitDockWidget(matrixDock,   spectrumDock, Qt::Vertical);
     splitDockWidget(matrixDock,   statsDock,    Qt::Horizontal);
     splitDockWidget(spectrumDock, plotDock,     Qt::Horizontal);
-    // Вторая матрица — вкладкой поверх первой: нужна только коду
-    // произведения, места отдельного не просит. Вкладки сверху: снизу они
-    // читаются как принадлежащие панели под ними.
-    setTabPosition(Qt::AllDockWidgetAreas, QTabWidget::North);
-    tabifyDockWidget(matrixDock, matrix2Dock);
-
-    // На стыке вкладок — кнопка «поменять местами»: компоненты произведения
-    // легко загрузить не в те панели. На спектр порядок не влияет.
-    matrixSwap = new DockSwapButton(this, matrixDock, matrix2Dock,
-                                    tr("Поменять матрицы местами"));
-    connect(matrixSwap, &DockSwapButton::clicked, this, [this]() {
-        const QString first  = ui->matrixPTE->toPlainText();
-        const QString second = matrix2PTE->toPlainText();
-        ui->matrixPTE->setPlainText(second);
-        matrix2PTE->setPlainText(first);
-    });
 
     // Ширины задаются явно. Сам Qt делит место по sizeHint, а у графика он
     // крошечный, у текстовых полей — во всю строку, и график получал узкую
@@ -331,14 +334,11 @@ void MainWindow::setupDocks()
     // кнопками исчезала, отдав всю высоту панелям.
     ui->centralwidget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
-    // В раскладке по умолчанию сверху первая матрица, а не вторая.
-    matrixDock->raise();
     defaultLayout = saveState(Constants::LAYOUT_VERSION);
-    matrixSwap->attach();
+    updateMatrixTabs();
 
     // Меню «Вид»: галочки Qt делает сам, они же возвращают закрытую панель.
     ui->viewMNU->addAction(matrixDock->toggleViewAction());
-    ui->viewMNU->addAction(matrix2Dock->toggleViewAction());
     ui->viewMNU->addAction(spectrumDock->toggleViewAction());
     ui->viewMNU->addAction(plotDock->toggleViewAction());
     ui->viewMNU->addAction(statsDock->toggleViewAction());
@@ -346,25 +346,16 @@ void MainWindow::setupDocks()
     ui->viewMNU->addAction(UIStrings::VIEW_RESET_TEXT, this, &MainWindow::resetLayout);
 }
 
-void MainWindow::updateMatrix2Visibility()
+void MainWindow::updateMatrixTabs()
 {
-    if (!matrix2Dock)
+    if (!matrixTabs)
         return;
     const bool product = settings.algorithmType == ComputationSettings::ProductCode;
-    matrix2Dock->toggleViewAction()->setEnabled(product);
-    if (product) {
-        if (!matrix2Dock->isVisible())
-            matrix2Dock->show();
-    } else {
-        matrix2Dock->hide();
-    }
-    if (matrixSwap)
-        matrixSwap->attach();
+    matrixTabs->setTabVisible(1, product);
+    matrixTabs->tabBar()->setVisible(product);
+    if (!product)
+        matrixTabs->setCurrentIndex(0);
     updateMatrixTitles();
-    // Заголовок первой матрицы прячет название, пока рядом вкладка второй:
-    // вторая появилась или ушла — перерисовать.
-    if (QWidget* title = matrixDock->titleBarWidget())
-        title->update();
 }
 
 void MainWindow::resetLayout()
@@ -375,8 +366,6 @@ void MainWindow::resetLayout()
     matrixDock->show();
     spectrumDock->show();
     plotDock->show();
-    updateMatrix2Visibility();
-    matrixDock->raise();
 }
 
 void MainWindow::setToolTips() {
@@ -469,7 +458,7 @@ void MainWindow::connectSettingsDialog()
             settings.matrix  = ui->matrixPTE->toStringList();
             settings.matrix2 = matrix2PTE->toStringList();
             spectrumPlot->setMaxBars(settings.maxPlotBars);
-            updateMatrix2Visibility();
+            updateMatrixTabs();
 
             // Поднятая запись — про свой алгоритм. Сменили алгоритм — кнопка
             // «Продолжить» больше не про неё: иначе расчёт стартовал бы как
@@ -772,11 +761,11 @@ void MainWindow::handleMatrixChanged()
     updateMatrixTitles();
 }
 
-// «Матрица (n,k)» у произвольного кода; у произведения панели две, и они
-// нумеруются.
+// «Матрица (n,k)» у произвольного кода; у произведения панель зовётся
+// «Матрицы», а размеры — на вкладках.
 void MainWindow::updateMatrixTitles()
 {
-    if (!matrixDock || !matrix2Dock)
+    if (!matrixDock || !matrixTabs)
         return;
     auto size = [](const Matrix& rows) {
         int maxLen = 0;
@@ -784,9 +773,10 @@ void MainWindow::updateMatrixTitles()
         return QStringLiteral(" (%1,%2)").arg(maxLen).arg(rows.size());
     };
     const bool product = settings.algorithmType == ComputationSettings::ProductCode;
-    matrixDock->setWindowTitle((product ? tr("Матрица 1") : tr("Матрица"))
-                               + size(ui->matrixPTE->toStringList()));
-    matrix2Dock->setWindowTitle(tr("Матрица 2") + size(matrix2PTE->toStringList()));
+    matrixDock->setWindowTitle(product ? tr("Матрицы")
+                                       : tr("Матрица") + size(ui->matrixPTE->toStringList()));
+    matrixTabs->setTabText(0, tr("Матрица 1") + size(ui->matrixPTE->toStringList()));
+    matrixTabs->setTabText(1, tr("Матрица 2") + size(matrix2PTE->toStringList()));
 }
 void MainWindow::handleError(const QString& message)
 {

@@ -80,16 +80,14 @@ private:
 
     Ui::MainWindow *ui;
     QDockWidget    *matrixDock       = nullptr;
-    // Вторая компонента кода произведения — своя панель, вкладкой рядом с
-    // первой матрицей. У остальных алгоритмов не участвует.
-    QDockWidget    *matrix2Dock      = nullptr;
+    // Обе матрицы — вкладками в одной панели. У произвольного кода вкладка
+    // одна и полосы вкладок нет; у кода произведения — две, «Матрица 1» и
+    // «Матрица 2», и на стыке вкладок кнопка «поменять местами».
+    class QTabWidget*          matrixTabs = nullptr;
     class FilterPlainTextEdit* matrix2PTE = nullptr;
-    // Кнопка «поменять местами» на стыке вкладок двух матриц.
-    class DockSwapButton* matrixSwap = nullptr;
-    // Вторая матрица нужна только коду произведения: при других алгоритмах
-    // её панель прячется, а первая зовётся просто «Матрица».
-    void updateMatrix2Visibility();
-    // Заголовок панели матрицы: имя и размер.
+    // Показать или спрятать вторую вкладку по алгоритму.
+    void updateMatrixTabs();
+    // Заголовок панели и вкладок: имя и размер.
     void updateMatrixTitles();
     QDockWidget    *spectrumDock     = nullptr;
     QDockWidget    *plotDock         = nullptr;
