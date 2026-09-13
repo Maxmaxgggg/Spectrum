@@ -136,16 +136,6 @@
             </item>
            </layout>
           </item>
-          <item>
-           <widget class="QLabel" name="weightHintLBL">
-            <property name="text">
-             <string/>
-            </property>
-            <property name="wordWrap">
-             <bool>true</bool>
-            </property>
-           </widget>
-          </item>
          </layout>
         </widget>
        </item>
@@ -333,16 +323,6 @@
              </widget>
             </item>
            </layout>
-          </item>
-          <item>
-           <widget class="QLabel" name="algorithmHintLBL">
-            <property name="text">
-             <string/>
-            </property>
-            <property name="wordWrap">
-             <bool>true</bool>
-            </property>
-           </widget>
           </item>
          </layout>
         </widget>
