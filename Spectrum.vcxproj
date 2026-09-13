@@ -15,6 +15,7 @@
     <ClCompile Include="compute\gridtuner.cpp" />
     <ClCompile Include="compute\infosets.cpp" />
     <ClCompile Include="compute\leonsearch.cpp" />
+    <ClCompile Include="compute\productcode.cpp" />
     <ClCompile Include="compute\worker.cpp" />
     <ClCompile Include="helpers\workwithmatrix.cpp" />
     <ClCompile Include="main.cpp" />
@@ -40,6 +41,7 @@
     <ClInclude Include="compute\gridtuner.h" />
     <ClInclude Include="compute\infosets.h" />
     <ClInclude Include="compute\leonsearch.h" />
+    <ClInclude Include="compute\productcode.h" />
     <ClInclude Include="compute\leonkernel.cuh" />
     <ClInclude Include="compute\spectrumring.h" />
     <ClInclude Include="defines.h" />

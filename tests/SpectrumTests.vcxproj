@@ -18,6 +18,7 @@
     <ClCompile Include="..\compute\gridtuner.cpp" />
     <ClCompile Include="..\compute\infosets.cpp" />
     <ClCompile Include="..\compute\leonsearch.cpp" />
+    <ClCompile Include="..\compute\productcode.cpp" />
     <ClCompile Include="..\helpers\workwithmatrix.cpp" />
   </ItemGroup>
   <ItemGroup>

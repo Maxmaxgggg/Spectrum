@@ -33,6 +33,7 @@
 #include "ui/updateintervals.h"
 #include "bz.h"
 #include "leonkernel.cuh"
+#include "productcode.h"
 
 #ifdef Q_OS_WIN
     #define NOMINMAX
@@ -2720,6 +2721,110 @@ static int leonRun(const QString& path, int weight, int missExponent, const QStr
     return 0;
 }
 
+// ------------------------------------------------ коды произведения
+
+// Порождающая матрица C1 ⊗ C2: строка (i, j) — произведение строки i из G1
+// на строку j из G2, позиция (x, y) идёт под номером x·n2 + y.
+static QStringList kronecker(const QStringList& g1, const QStringList& g2)
+{
+    const int n1 = g1.first().length(), n2 = g2.first().length();
+    QStringList out;
+    for (const QString& a : g1)
+        for (const QString& b : g2) {
+            QString row(n1 * n2, QLatin1Char('0'));
+            for (int x = 0; x < n1; ++x)
+                if (a.at(x) == QLatin1Char('1'))
+                    for (int y = 0; y < n2; ++y)
+                        if (b.at(y) == QLatin1Char('1'))
+                            row[x * n2 + y] = QLatin1Char('1');
+            out << row;
+        }
+    return out;
+}
+
+// Спектр произведения по компонентам: ранги 1..maxRank, до веса maxWeight.
+static Spectrum productSpectrum(const QStringList& g1, const QStringList& g2,
+                                int maxRank, quint64 maxWeight, int& exactUpTo)
+{
+    const Product::Component c1 = Product::bruteForce(g1, g1.first().length());
+    const Product::Component c2 = Product::bruteForce(g2, g2.first().length());
+    std::vector<quint64> total = Product::rankOne(c1, c2, maxWeight);
+    for (int r = 2; r <= maxRank; ++r) {
+        Product::ProfileMap p1, p2;
+        const int limit1 = int(maxWeight / quint64(c2.d));
+        const int limit2 = int(maxWeight / quint64(c1.d));
+        if (!Product::profiles(c1, r, limit1, 1ULL << 40, p1, false)
+            || !Product::profiles(c2, r, limit2, 1ULL << 40, p2, true))
+            break;
+        const std::vector<quint64> part = Product::rankR(p1, p2, r, maxWeight);
+        for (size_t w = 0; w < total.size(); ++w) total[w] += part[w];
+    }
+    exactUpTo = int(std::min<quint64>(maxWeight, Product::rankWeightBound(c1.d, c2.d, maxRank + 1) - 1));
+    Spectrum spec;
+    spec[0] = 1;
+    for (size_t w = 1; w < total.size(); ++w)
+        if (total[w] > 0) spec[int(w)] = total[w];
+    return spec;
+}
+
+static void testProductCode()
+{
+    out << Qt::endl << QStringLiteral("Коды произведения: низ спектра по компонентам") << Qt::endl;
+
+    struct Case { QString name; QStringList g1, g2; };
+    const QVector<Case> cases = {
+        { QStringLiteral("eHamming(8,4) x eHamming(8,4) = [64,16]"), Reference::extHamming8_4(), Reference::extHamming8_4() },
+        { QStringLiteral("Hamming(7,4) x Hamming(7,4) = [49,16]"),   Reference::hamming7_4(),    Reference::hamming7_4() },
+        { QStringLiteral("Hamming(7,4) x eHamming(8,4) = [56,16]"),  Reference::hamming7_4(),    Reference::extHamming8_4() },
+        { QStringLiteral("Hamming(7,4) x rnd[12,5] = [84,20]"),      Reference::hamming7_4(),    BZ::systematicRandom(5, 12, 3) },
+    };
+    for (const Case& c : cases) {
+        const QStringList product = kronecker(c.g1, c.g2);
+        const Spectrum exact = Reference::bruteForce(product);
+        const int n = product.first().length();
+        const int maxRank = std::min(c.g1.size(), c.g2.size());
+
+        // Все ранги — весь спектр целиком: слов ранга выше min(k1,k2) нет.
+        int exactUpTo = 0;
+        const Spectrum full = productSpectrum(c.g1, c.g2, maxRank, quint64(n), exactUpTo);
+        bool ok = full == exact;
+        QStringList problems;
+        if (!ok)
+            for (auto it = exact.cbegin(); it != exact.cend(); ++it)
+                if (full.value(it.key(), 0) != it.value())
+                    problems << QStringLiteral("вес %1: точно %2, по рангам %3")
+                                    .arg(it.key()).arg(it.value()).arg(full.value(it.key(), 0));
+        expectLeon(c.name + QStringLiteral(", все ранги (до %1) — весь спектр").arg(maxRank), ok,
+                   problems.join(QStringLiteral("; ")));
+
+        // Ранги до R: ниже границы ранга R+1 — точно, выше — не больше точного.
+        for (int R = 1; R < maxRank; ++R) {
+            const Spectrum part = productSpectrum(c.g1, c.g2, R, quint64(n), exactUpTo);
+            bool okR = true;
+            QStringList probs;
+            for (auto it = exact.cbegin(); it != exact.cend(); ++it) {
+                const quint64 got = part.value(it.key(), 0);
+                if (it.key() <= exactUpTo ? got != it.value() : got > it.value()) {
+                    okR = false;
+                    probs << QStringLiteral("вес %1: точно %2, ранги<=%3 дают %4")
+                                 .arg(it.key()).arg(it.value()).arg(R).arg(got);
+                }
+            }
+            for (auto it = part.cbegin(); it != part.cend(); ++it)
+                if (!exact.contains(it.key())) { okR = false; probs << QStringLiteral("лишний вес %1").arg(it.key()); }
+            expectLeon(c.name + QStringLiteral(", ранги до %1: точно до веса %2").arg(R).arg(exactUpTo),
+                       okR, probs.join(QStringLiteral("; ")));
+        }
+    }
+
+    // Граница Толхёйзена для ранга 2 и порядок GL.
+    expectLeon(QStringLiteral("|GL(2,2)| = 6, |GL(3,2)| = 168, |GL(4,2)| = 20160"),
+               Product::generalLinearOrder(2) == 6 && Product::generalLinearOrder(3) == 168
+                   && Product::generalLinearOrder(4) == 20160);
+    expectLeon(QStringLiteral("граница ранга 2 для d = 4, 4: 24; для 3, 3: 15"),
+               Product::rankWeightBound(4, 4, 2) == 24 && Product::rankWeightBound(3, 3, 2) == 15);
+}
+
 // Гарантия алгоритма: ниже границы совпадение с точным спектром обязано быть
 // побитовым, выше — БЦ не имеет права насчитать больше, чем есть.
 static void testBrouwerZimmermann()
@@ -2890,6 +2995,7 @@ int main(int argc, char* argv[])
     testBrouwerZimmermannWorker();
     testLeonModel();
     testLeonWorker();
+    testProductCode();
 
     testAutosaveStore();
     testCanResume();
