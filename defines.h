@@ -61,7 +61,12 @@ namespace SettingsKeys
     constexpr const char MATRICES_JSON[]            = "matricesJson";
     // Тип перебора, выбранный для простого XOR. Хранится отдельно от
     // computationSettings: там при коде Грея лежит принудительный «Полный».
-    constexpr const char XOR_ENUM_TYPE[]            = "xorEnumType";
+    constexpr const char XOR_ENUM_TYPE[]            = "xorEnumType";   // больше не пишется
+    // Выбор в парах алгоритмов и тип перебора произвольного кода: в самих
+    // настройках лежит один алгоритм, а помнить надо все три.
+    constexpr const char FULL_ALGORITHM[]           = "fullAlgorithm";
+    constexpr const char PARTIAL_ALGORITHM[]        = "partialAlgorithm";
+    constexpr const char SINGLE_ENUM_TYPE[]         = "singleEnumType";
     // Вписанное число строк для частичного перебора — по той же причине:
     // при полном там лежит число строк матрицы.
     constexpr const char XOR_MAX_ROWS[]             = "xorMaxRows";

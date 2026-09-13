@@ -35,15 +35,18 @@
       </attribute>
       <layout class="QVBoxLayout" name="computationTabLayout">
        <item>
-        <widget class="QGroupBox" name="algorithmGBX">
+        <widget class="QGroupBox" name="codeKindGBX">
          <property name="title">
-          <string>Алгоритм расчёта:</string>
+          <string>Тип кода:</string>
          </property>
-         <layout class="QVBoxLayout" name="verticalLayout">
+         <layout class="QHBoxLayout" name="codeKindLayout">
           <item>
-           <widget class="QRadioButton" name="simpleXorRB">
+           <widget class="QRadioButton" name="singleCodeRB">
+            <property name="toolTip">
+             <string>Код задан одной порождающей матрицей — панель «Матрица 1»</string>
+            </property>
             <property name="text">
-             <string>Простой XOR</string>
+             <string>Произвольный код</string>
             </property>
             <property name="checked">
              <bool>true</bool>
@@ -51,46 +54,12 @@
            </widget>
           </item>
           <item>
-           <widget class="QRadioButton" name="grayCodeRB">
-            <property name="text">
-             <string>Код Грея</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QRadioButton" name="dualCodeRB">
-            <property name="text">
-             <string>Дуальный код</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QRadioButton" name="brouwerZimmermannRB">
-            <property name="toolTip">
-             <string>Низ спектра с гарантией: все слова до заданного веса — точно, за время, которое зависит от веса, а не от размера кода</string>
-            </property>
-            <property name="text">
-             <string>Брауэр–Циммерман</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QRadioButton" name="randomInfoSetsRB">
-            <property name="toolTip">
-             <string>Низ спектра без гарантии, но глубже и быстрее: тысячи случайных информационных множеств с мелким перебором в каждом. Пропуск слова — событие заданной малой вероятности</string>
-            </property>
-            <property name="text">
-             <string>Случайный поиск (Леон)</string>
-            </property>
-           </widget>
-          </item>
-          <item>
            <widget class="QRadioButton" name="productCodeRB">
             <property name="toolTip">
-             <string>Код произведения C1 ⊗ C2 по двум компонентам: «Матрица» и «Матрица 2». Низ спектра точно, по рангам слов, без построения самого произведения</string>
+             <string>Код произведения C1 ⊗ C2 по двум компонентам: «Матрица 1» и «Матрица 2». Низ спектра по рангам слов, без построения самого произведения</string>
             </property>
             <property name="text">
-             <string>Код произведения</string>
+             <string>Код-произведение</string>
             </property>
            </widget>
           </item>
@@ -102,11 +71,14 @@
          <property name="title">
           <string>Тип перебора:</string>
          </property>
-         <layout class="QVBoxLayout" name="verticalLayout_2">
+         <layout class="QVBoxLayout" name="enumTypeLayout">
           <item>
-           <layout class="QHBoxLayout" name="horizontalLayout_3">
+           <layout class="QHBoxLayout" name="enumTypeRowLayout">
             <item>
              <widget class="QRadioButton" name="fullEnumRB">
+              <property name="toolTip">
+               <string>Все 2^k слов — весь спектр целиком. Только для кодов до 63 строк</string>
+              </property>
               <property name="text">
                <string>Полный</string>
               </property>
@@ -117,6 +89,9 @@
             </item>
             <item>
              <widget class="QRadioButton" name="partialEnumRB">
+              <property name="toolTip">
+               <string>Только слова до заданного веса — низ спектра</string>
+              </property>
               <property name="text">
                <string>Частичный</string>
               </property>
@@ -125,16 +100,16 @@
            </layout>
           </item>
           <item>
-           <layout class="QHBoxLayout" name="horizontalLayout">
+           <layout class="QHBoxLayout" name="weightLayout">
             <item>
-             <widget class="QLabel" name="maxRowsLBL">
+             <widget class="QLabel" name="weightLBL">
               <property name="text">
-               <string>Максимальное количество строк: </string>
+               <string>До веса: </string>
               </property>
              </widget>
             </item>
             <item>
-             <spacer name="horizontalSpacer">
+             <spacer name="weightSpacer">
               <property name="orientation">
                <enum>Qt::Horizontal</enum>
               </property>
@@ -147,50 +122,7 @@
              </spacer>
             </item>
             <item>
-             <widget class="QSpinBox" name="maxRowsSPB">
-              <property name="minimum">
-               <number>1</number>
-              </property>
-              <property name="maximum">
-               <number>100</number>
-              </property>
-             </widget>
-            </item>
-           </layout>
-          </item>
-         </layout>
-        </widget>
-       </item>
-       <item>
-        <widget class="QGroupBox" name="bzGBX">
-         <property name="title">
-          <string>Брауэр–Циммерман:</string>
-         </property>
-         <layout class="QVBoxLayout" name="bzLayout">
-          <item>
-           <layout class="QHBoxLayout" name="bzWeightLayout">
-            <item>
-             <widget class="QLabel" name="bzWeightLBL">
-              <property name="text">
-               <string>Точно до веса: </string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <spacer name="bzWeightSpacer">
-              <property name="orientation">
-               <enum>Qt::Horizontal</enum>
-              </property>
-              <property name="sizeHint" stdset="0">
-               <size>
-                <width>40</width>
-                <height>20</height>
-               </size>
-              </property>
-             </spacer>
-            </item>
-            <item>
-             <widget class="QSpinBox" name="bzWeightSPB">
+             <widget class="QSpinBox" name="weightSPB">
               <property name="minimum">
                <number>1</number>
               </property>
@@ -198,16 +130,16 @@
                <number>2048</number>
               </property>
               <property name="value">
-               <number>8</number>
+               <number>24</number>
               </property>
              </widget>
             </item>
            </layout>
           </item>
           <item>
-           <widget class="QLabel" name="bzHintLBL">
+           <widget class="QLabel" name="weightHintLBL">
             <property name="text">
-             <string>Все слова не тяжелее этого веса будут найдены и посчитаны точно; более тяжёлые — не все. Сколько строк перебирать, программа выведет сама по информационным множествам матрицы. Цена растёт с весом быстро.</string>
+             <string/>
             </property>
             <property name="wordWrap">
              <bool>true</bool>
@@ -218,43 +150,57 @@
         </widget>
        </item>
        <item>
-        <widget class="QGroupBox" name="leonGBX">
+        <widget class="QGroupBox" name="algorithmGBX">
          <property name="title">
-          <string>Случайный поиск:</string>
+          <string>Алгоритм:</string>
          </property>
-         <layout class="QVBoxLayout" name="leonLayout">
+         <layout class="QVBoxLayout" name="algorithmLayout">
           <item>
-           <layout class="QHBoxLayout" name="leonWeightLayout">
+           <layout class="QHBoxLayout" name="fullAlgorithmLayout">
             <item>
-             <widget class="QLabel" name="leonWeightLBL">
+             <widget class="QRadioButton" name="grayCodeRB">
+              <property name="toolTip">
+               <string>Соседние слова отличаются одной строкой — один XOR на слово. До 63 строк</string>
+              </property>
               <property name="text">
-               <string>Все слова до веса: </string>
+               <string>Код Грея</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
               </property>
              </widget>
             </item>
             <item>
-             <spacer name="leonWeightSpacer">
-              <property name="orientation">
-               <enum>Qt::Horizontal</enum>
+             <widget class="QRadioButton" name="dualCodeRB">
+              <property name="toolTip">
+               <string>Перебирается проверочная матрица (n − k строк), спектр получается преобразованием Мак-Вильямс. Для кодов высокой скорости</string>
               </property>
-              <property name="sizeHint" stdset="0">
-               <size>
-                <width>40</width>
-                <height>20</height>
-               </size>
+              <property name="text">
+               <string>Дуальный код</string>
               </property>
-             </spacer>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="partialAlgorithmLayout">
+            <item>
+             <widget class="QRadioButton" name="brouwerZimmermannRB">
+              <property name="toolTip">
+               <string>Низ спектра с гарантией: все слова до заданного веса — точно. Время растёт экспоненциально с весом</string>
+              </property>
+              <property name="text">
+               <string>Брауэр–Циммерман</string>
+              </property>
+             </widget>
             </item>
             <item>
-             <widget class="QSpinBox" name="leonWeightSPB">
-              <property name="minimum">
-               <number>1</number>
+             <widget class="QRadioButton" name="randomInfoSetsRB">
+              <property name="toolTip">
+               <string>Без гарантии, но на порядки глубже и быстрее: тысячи случайных информационных множеств с мелким перебором в каждом. Пропуск слова — событие заданной малой вероятности</string>
               </property>
-              <property name="maximum">
-               <number>2048</number>
-              </property>
-              <property name="value">
-               <number>24</number>
+              <property name="text">
+               <string>Случайный поиск (Леон)</string>
               </property>
              </widget>
             </item>
@@ -352,62 +298,6 @@
            </layout>
           </item>
           <item>
-           <widget class="QLabel" name="leonHintLBL">
-            <property name="text">
-             <string>Слова до этого веса будут найдены все, если не случится события такой вероятности; тяжелее — не собираются. Гарантии нет, зато на порядки глубже и быстрее Брауэра–Циммермана. Предел — память под найденные слова: около 60 байт на слово длины 336, 260 — длины 2048.</string>
-            </property>
-            <property name="wordWrap">
-             <bool>true</bool>
-            </property>
-           </widget>
-          </item>
-         </layout>
-        </widget>
-       </item>
-       <item>
-        <widget class="QGroupBox" name="productGBX">
-         <property name="title">
-          <string>Код произведения:</string>
-         </property>
-         <layout class="QVBoxLayout" name="productLayout">
-          <item>
-           <layout class="QHBoxLayout" name="productWeightLayout">
-            <item>
-             <widget class="QLabel" name="productWeightLBL">
-              <property name="text">
-               <string>До веса (0 — до границы ранга): </string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <spacer name="productWeightSpacer">
-              <property name="orientation">
-               <enum>Qt::Horizontal</enum>
-              </property>
-              <property name="sizeHint" stdset="0">
-               <size>
-                <width>40</width>
-                <height>20</height>
-               </size>
-              </property>
-             </spacer>
-            </item>
-            <item>
-             <widget class="QSpinBox" name="productWeightSPB">
-              <property name="minimum">
-               <number>0</number>
-              </property>
-              <property name="maximum">
-               <number>10000000</number>
-              </property>
-              <property name="value">
-               <number>0</number>
-              </property>
-             </widget>
-            </item>
-           </layout>
-          </item>
-          <item>
            <layout class="QHBoxLayout" name="productRankLayout">
             <item>
              <widget class="QLabel" name="productRankLBL">
@@ -445,9 +335,9 @@
            </layout>
           </item>
           <item>
-           <widget class="QLabel" name="productHintLBL">
+           <widget class="QLabel" name="algorithmHintLBL">
             <property name="text">
-             <string>Первая компонента — в панели «Матрица», вторая — в «Матрица 2». Слово ранга r — сумма r произведений слов компонент; ранг 1 даёт спектр до границы Толхёйзена, каждый следующий — дальше. Компонента до 28 строк перебирается целиком; больше — при ранге 1 Брауэром–Циммерманом (точно), при ранге 2 и выше случайным поиском с вероятностью пропуска из его настроек.</string>
+             <string/>
             </property>
             <property name="wordWrap">
              <bool>true</bool>

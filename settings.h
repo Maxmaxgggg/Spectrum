@@ -68,6 +68,10 @@ struct ComputationSettings
     // начинаются слова следующего ранга) и до какого ранга слов идти.
     int             productWeight = 0;
     int             productRank   = 2;
+    // Чем считать большие компоненты произведения: Брауэр–Циммерман (точно,
+    // только ранг 1) или случайный поиск (список слов, ранги выше). Хранится
+    // как значение Algorithm.
+    int             productAlgorithm = RandomInfoSets;
 
     // Перебор идёт слоями по числу складываемых строк: простой XOR и
     // Брауэр–Циммерман. Код Грея и дуальный расчёт идут по маскам сплошь.
@@ -114,6 +118,7 @@ struct ComputationSettings
         , leonMemoryMb(other.leonMemoryMb)
         , productWeight(other.productWeight)
         , productRank(other.productRank)
+        , productAlgorithm(other.productAlgorithm)
         , compDev(other.compDev)
         , autoTuneGrid(other.autoTuneGrid)
         , maxPlotBars(other.maxPlotBars)
@@ -135,6 +140,7 @@ struct ComputationSettings
         leonMemoryMb = other.leonMemoryMb;
         productWeight = other.productWeight;
         productRank = other.productRank;
+        productAlgorithm = other.productAlgorithm;
         compDev = other.compDev;
         autoTuneGrid = other.autoTuneGrid;
         maxPlotBars = other.maxPlotBars;
@@ -155,6 +161,7 @@ struct ComputationSettings
             leonMissExponent == other.leonMissExponent &&
             productWeight == other.productWeight &&
             productRank == other.productRank &&
+            productAlgorithm == other.productAlgorithm &&
             compDev == other.compDev &&
             autoTuneGrid == other.autoTuneGrid &&
             compDevSet.threadsCpu == other.compDevSet.threadsCpu &&
@@ -186,6 +193,7 @@ struct ComputationSettings
         obj["leonMemoryMb"] = leonMemoryMb;
         obj["productWeight"] = productWeight;
         obj["productRank"] = productRank;
+        obj["productAlgorithm"] = productAlgorithm;
         obj["compDev"] = static_cast<int>(compDev);
         obj["maxPlotBars"] = maxPlotBars;
         obj["autoTuneGrid"] = autoTuneGrid;
@@ -243,6 +251,8 @@ struct ComputationSettings
         s.productWeight = obj["productWeight"].toInt();
         if (obj["productRank"].toInt() > 0)
             s.productRank = obj["productRank"].toInt();
+        if (obj.contains("productAlgorithm"))
+            s.productAlgorithm = obj["productAlgorithm"].toInt();
         s.compDev = static_cast<ComputeDevice>(obj["compDev"].toInt());
         // Ноль означает «ключа не было» — остаётся значение по умолчанию.
         if (obj["maxPlotBars"].toInt() > 0)
@@ -283,6 +293,7 @@ struct ComputationSettings
         seed = qHash(matrix2, seed);
         seed = qHash(productWeight, seed);
         seed = qHash(productRank, seed);
+        seed = qHash(productAlgorithm, seed);
         seed = qHash(static_cast<int>(compDev), seed);
 
         // autoTuneGrid в ключ не входит намеренно: спектр от сетки не зависит,

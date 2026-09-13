@@ -1,6 +1,7 @@
 #include "widget.h"
 #include "infosets.h"
 #include "filterplaintextedit.h"
+#include "dockswapbutton.h"
 #include "docktitlebar.h"
 #include "fonticons.h"
 
@@ -65,6 +66,9 @@ MainWindow::MainWindow(QWidget* parent)
     setWorker();
     setMatrixMenu();
     setToolTips();
+    // Настройки диалога нужны окну сразу: от алгоритма зависит, показывать ли
+    // панель второй матрицы. Пустая матрица сигнала о смене не даёт.
+    emit requestSettings();
     emit handleMatrixChanged();
     // Старые чекпоинты лежали в реестре, по мегабайту с матрицей на запись.
     // Переносим их в файлы один раз и вычищаем ветку.
@@ -157,9 +161,15 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
     // У произведения в полях записи — свой вес и ранг; диалогу они уходят
     // через те же два числа.
     const bool product = record.algorithm == ComputationSettings::ProductCode;
+    int weight = record.bzWeight;
+    if (record.algorithm == ComputationSettings::RandomInfoSets) weight = record.leonWeight;
+    if (product)                                                  weight = record.productWeight;
     emit applySettingsFromAutosave(int(record.algorithm), int(record.enumType),
-                                   product ? record.productRank   : record.maxRows,
-                                   product ? record.productWeight : record.bzWeight);
+                                   product ? record.productRank : record.maxRows, weight,
+                                   product ? (record.productMissExponent > 0
+                                                  ? int(ComputationSettings::RandomInfoSets)
+                                                  : int(ComputationSettings::BrouwerZimmermann))
+                                           : 0);
 
     // Гарантия поднятой записи: слои до rOffset пройдены целиком (начатый
     // слой не в счёт), и по ним видно, до какого веса спектр уже точен.
@@ -279,7 +289,7 @@ void MainWindow::setupDocks()
         return dock;
     };
 
-    matrixDock   = makeDock(ui->matrixPTE,   tr("Матрица"),
+    matrixDock   = makeDock(ui->matrixPTE,   tr("Матрица 1"),
                             UIStrings::MATRIX_TOOLTIP,   "matrixDock");
     matrix2PTE   = new FilterPlainTextEdit(this);
     matrix2PTE->setFont(ui->matrixPTE->font());
@@ -320,6 +330,17 @@ void MainWindow::setupDocks()
     // произведения, места отдельного не просит.
     tabifyDockWidget(matrixDock, matrix2Dock);
 
+    // На стыке вкладок — кнопка «поменять местами»: компоненты произведения
+    // легко загрузить не в те панели. На спектр порядок не влияет.
+    matrixSwap = new DockSwapButton(this, matrixDock, matrix2Dock,
+                                    tr("Поменять матрицы местами"));
+    connect(matrixSwap, &DockSwapButton::clicked, this, [this]() {
+        const QString first  = ui->matrixPTE->toPlainText();
+        const QString second = matrix2PTE->toPlainText();
+        ui->matrixPTE->setPlainText(second);
+        matrix2PTE->setPlainText(first);
+    });
+
     // Ширины задаются явно. Сам Qt делит место по sizeHint, а у графика он
     // крошечный, у текстовых полей — во всю строку, и график получал узкую
     // полоску у правого края. Числа относительные, Qt подгоняет их под окно;
@@ -334,6 +355,7 @@ void MainWindow::setupDocks()
     // В раскладке по умолчанию сверху первая матрица, а не вторая.
     matrixDock->raise();
     defaultLayout = saveState(Constants::LAYOUT_VERSION);
+    matrixSwap->attach();
 
     // Меню «Вид»: галочки Qt делает сам, они же возвращают закрытую панель.
     ui->viewMNU->addAction(matrixDock->toggleViewAction());
@@ -345,15 +367,31 @@ void MainWindow::setupDocks()
     ui->viewMNU->addAction(UIStrings::VIEW_RESET_TEXT, this, &MainWindow::resetLayout);
 }
 
+void MainWindow::updateMatrix2Visibility()
+{
+    if (!matrix2Dock)
+        return;
+    const bool product = settings.algorithmType == ComputationSettings::ProductCode;
+    matrix2Dock->toggleViewAction()->setEnabled(product);
+    if (product) {
+        if (!matrix2Dock->isVisible())
+            matrix2Dock->show();
+    } else {
+        matrix2Dock->hide();
+    }
+    if (matrixSwap)
+        matrixSwap->attach();
+}
+
 void MainWindow::resetLayout()
 {
     restoreState(defaultLayout, Constants::LAYOUT_VERSION);
 
     // restoreState возвращает положение, но закрытую панель не открывает.
     matrixDock->show();
-    matrix2Dock->show();
     spectrumDock->show();
     plotDock->show();
+    updateMatrix2Visibility();
     matrixDock->raise();
 }
 
@@ -446,6 +484,7 @@ void MainWindow::connectSettingsDialog()
             settings.matrix  = ui->matrixPTE->toStringList();
             settings.matrix2 = matrix2PTE->toStringList();
             spectrumPlot->setMaxBars(settings.maxPlotBars);
+            updateMatrix2Visibility();
             MainWindow::sendSettingsToWorker(settings.toJson());
 
             // Идущему расчёту настройки через очередь не доходят: воркер до
@@ -490,7 +529,7 @@ QString MainWindow::matrixError() const
         return QString();
     };
 
-    const QString first = check(ui->matrixPTE->toStringList(), tr("Матрица"));
+    const QString first = check(ui->matrixPTE->toStringList(), tr("Матрица 1"));
     if (!first.isEmpty())
         return first;
     // Код произведения: компоненты проверяются каждая сама по себе, само
@@ -740,7 +779,7 @@ void MainWindow::handleMatrixChanged()
     // Размеры показывает заголовок дока — отдельной подписи над редактором
     // больше нет.
     if (matrixDock)
-        matrixDock->setWindowTitle(tr("Матрица (%1,%2)").arg(maxLen).arg(rows.size()));
+        matrixDock->setWindowTitle(tr("Матрица 1 (%1,%2)").arg(maxLen).arg(rows.size()));
     
     
 }

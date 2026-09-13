@@ -98,10 +98,14 @@ void StatsPanel::showTask(const ComputationSettings& settings)
     if (settings.algorithmType == ComputationSettings::RandomInfoSets)
         enumeration = tr("до веса %1, пропуск 10^-%2")
                           .arg(settings.leonWeight).arg(settings.leonMissExponent);
-    if (settings.algorithmType == ComputationSettings::ProductCode)
+    if (settings.algorithmType == ComputationSettings::ProductCode) {
         enumeration = settings.productWeight > 0
                           ? tr("до веса %1, ранги до %2").arg(settings.productWeight).arg(settings.productRank)
                           : tr("ранги до %1, до границы следующего").arg(settings.productRank);
+        enumeration += settings.productAlgorithm == int(ComputationSettings::RandomInfoSets)
+                          ? tr("; компоненты — случайным поиском")
+                          : tr("; компоненты — Брауэром–Циммерманом");
+    }
     algorithmValue->setText(algorithmName(settings.algorithmType)
                             + QStringLiteral(", ") + enumeration);
     // План приходит позже, отдельным сигналом; до него — прочерк.

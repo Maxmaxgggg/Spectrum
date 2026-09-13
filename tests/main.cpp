@@ -115,6 +115,8 @@ struct RunConfig
     QStringList matrix2;
     int         productWeight = 0;
     int         productRank   = 2;
+    // Чем считать большие компоненты; по умолчанию — случайным поиском.
+    Algorithm   productAlgorithm = Algorithm::RandomInfoSets;
 };
 
 static ComputationSettings makeSettings(const RunConfig& cfg)
@@ -130,6 +132,7 @@ static ComputationSettings makeSettings(const RunConfig& cfg)
     s.matrix2       = cfg.matrix2;
     s.productWeight = cfg.productWeight;
     s.productRank   = cfg.productRank;
+    s.productAlgorithm = int(cfg.productAlgorithm);
     s.compDev       = cfg.device;
     s.compDevSet.threadsCpu = cfg.threadsCpu;
     s.compDevSet.blocksGpu  = cfg.blocksGpu;

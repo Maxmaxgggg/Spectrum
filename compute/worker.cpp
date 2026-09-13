@@ -1703,7 +1703,8 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     productMissExponent = 0;
     // Ранги выше первого строятся из списков слов; для большой компоненты
     // их даёт только случайный поиск — без сертификата, зато со списком.
-    const bool wantWords = maxRank >= 2;
+    const bool wantWords = maxRank >= 2
+                        && settings.productAlgorithm == int(ComputationSettings::RandomInfoSets);
 
     // Шаг 1. Минимальные веса. У маленькой компоненты — из полного перебора,
     // у большой — Брауэром–Циммерманом с удвоением предела, пока слово не

@@ -12,30 +12,39 @@ using Algorithm       = ComputationSettings::Algorithm;
 using EnumerationType = ComputationSettings::EnumerationType;
 using ComputeDevice   = ComputationSettings::ComputeDevice;
 
+namespace {
 
+// Идентификаторы группы «Тип кода».
+enum CodeKind { SingleCode = 0, ProductCode = 1 };
+
+} // namespace
 
 SettingsDialog::SettingsDialog(QWidget *parent)
     : QDialog(parent), ui(new Ui::SettingsDialog)
 {
     ui->setupUi(this);
-    // Создаём группу радиокнопок, отвечающую за выбор алгоритма
+
+    codeKindBGP = new QButtonGroup(this);
+    codeKindBGP->addButton( ui->singleCodeRB,  SingleCode  );
+    codeKindBGP->addButton( ui->productCodeRB, ProductCode );
+
+    enumeratorBGP = new QButtonGroup(this);
+    enumeratorBGP->addButton( ui->fullEnumRB,    EnumerationType::Full    );
+    enumeratorBGP->addButton( ui->partialEnumRB, EnumerationType::Partial );
+
+    // Одна группа на обе пары: видна всегда только подходящая пара, но
+    // выбранной может быть лишь одна кнопка из четырёх.
     algorithmBGP = new QButtonGroup(this);
-    algorithmBGP->addButton( ui->simpleXorRB, Algorithm::SimpleXor );
-    algorithmBGP->addButton( ui->grayCodeRB,  Algorithm::GrayCode  );
-    algorithmBGP->addButton( ui->dualCodeRB,  Algorithm::DualCode  );
+    algorithmBGP->addButton( ui->grayCodeRB,          Algorithm::GrayCode          );
+    algorithmBGP->addButton( ui->dualCodeRB,          Algorithm::DualCode          );
     algorithmBGP->addButton( ui->brouwerZimmermannRB, Algorithm::BrouwerZimmermann );
     algorithmBGP->addButton( ui->randomInfoSetsRB,    Algorithm::RandomInfoSets    );
-    algorithmBGP->addButton( ui->productCodeRB,       Algorithm::ProductCode       );
 
     // Степень десятки в данных пункта: так же, как интервалы.
     ui->leonMissCBX->setItemData(0, 3);
     ui->leonMissCBX->setItemData(1, 6);
     ui->leonMissCBX->setItemData(2, 9);
     ui->leonMissCBX->setItemData(3, 12);
-
-    enumeratorBGP = new QButtonGroup(this);
-    enumeratorBGP->addButton( ui->fullEnumRB,    EnumerationType::Full    );
-    enumeratorBGP->addButton( ui->partialEnumRB, EnumerationType::Partial );
 
     computeDeviceBGP = new QButtonGroup(this);
     computeDeviceBGP->addButton( ui->cpuRB, ComputeDevice::CPU );
@@ -59,41 +68,44 @@ SettingsDialog::SettingsDialog(QWidget *parent)
 
     loadSettings();
     checkGpuAvailable();
+    collectSettings();
 
-    settings.algorithmType = static_cast<Algorithm>(algorithmBGP->checkedId());
-    settings.enumType = static_cast<EnumerationType>(enumeratorBGP->checkedId());
-    settings.maxRows = ui->maxRowsSPB->value();
-    settings.compDev = static_cast<ComputeDevice>(computeDeviceBGP->checkedId());
-    
     int maxThreads = omp_get_max_threads();
     ui->threadsCpuSPB->setMaximum(maxThreads);
     settings.compDevSet.threadsCpu = std::min(maxThreads, ui->threadsCpuSPB->value());
-    settings.compDevSet.blocksGpu = ui->blocksGpuSPB->value();
-    settings.compDevSet.threadsGpu = ui->threadsGpuSPB->value();
-    settings.autoTuneGrid = ui->autoTuneGridCHB->isChecked();
-    settings.maxPlotBars = ui->maxPlotBarsSPB->value();
 
     ui->maxPlotBarsSPB->setToolTip(
         tr("Сколько столбцов рисовать на графике.\n"
            "Если весов больше, соседние сливаются в один столбец,\n"
            "а их значения складываются — форма распределения сохраняется."));
 
-    connect(algorithmBGP, &QButtonGroup::idClicked,
-        this, [this](int) { updateEnumTypeControls(); });
-    //Если выбран полный перебор, то отключаем выбор числа строк
+    connect(codeKindBGP, &QButtonGroup::idClicked,
+        this, [this](int) { updateComputationControls(); });
     connect(enumeratorBGP, &QButtonGroup::idClicked,
         this, [this](int id) {
-            // Запоминается только осознанный выбор пользователя: idClicked
-            // на программное setChecked не приходит, поэтому принудительный
-            // «Полный» на коде Грея сюда не попадает и выбор не затирает.
-            xorEnumType = static_cast<EnumerationType>(id);
-            updateEnumTypeControls();
+            // Запоминается только осознанный выбор: idClicked на программное
+            // setChecked не приходит, и принудительный «частичный» у
+            // произведения или длинного кода выбор не затирает.
+            singleEnumType = static_cast<EnumerationType>(id);
+            updateComputationControls();
         });
-    // Вписанное число строк запоминается отдельно. Сигналы поля на время
-    // программной установки блокируются, так что сюда доходит только ввод
-    // пользователя и подрезка по новому максимуму при смене матрицы.
-    connect(ui->maxRowsSPB, QOverload<int>::of(&QSpinBox::valueChanged),
-        this, [this](int value) { xorMaxRows = value; });
+    connect(algorithmBGP, &QButtonGroup::idClicked,
+        this, [this](int id) {
+            const Algorithm algorithm = static_cast<Algorithm>(id);
+            if (algorithm == Algorithm::GrayCode || algorithm == Algorithm::DualCode)
+                fullAlgorithm = algorithm;
+            else
+                partialAlgorithm = algorithm;
+            updateComputationControls();
+        });
+    // Вес хранится по алгоритму: у Брауэра–Циммермана он маленький, у Леона
+    // большой, у произведения ноль означает «до границы ранга». Поле одно,
+    // и при смене алгоритма оно показывает свой вес.
+    connect(ui->weightSPB, QOverload<int>::of(&QSpinBox::valueChanged),
+        this, [this](int value) {
+            if (!updatingControls)
+                weightFor(currentAlgorithm()) = value;
+        });
     connect(computeDeviceBGP, &QButtonGroup::idClicked,
         this, [=](int id) {
             Q_UNUSED(id);
@@ -104,10 +116,12 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     // Потолок обновления зависит от кода, вычислителя, алгоритма и сетки.
     // Меняется любое из них — прежний замер больше не про эту конфигурацию,
     // и список снова закрывается.
+    connect(codeKindBGP,      &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
+    connect(enumeratorBGP,    &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
     connect(algorithmBGP,     &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
     connect(computeDeviceBGP, &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
     connect(ui->autoTuneGridCHB, &QCheckBox::toggled,   this, [this](bool) { applyUpdateRateLimit(); });
-    for (QSpinBox* box : { ui->blocksGpuSPB, ui->threadsGpuSPB, ui->threadsCpuSPB, ui->maxRowsSPB, ui->bzWeightSPB, ui->leonWeightSPB })
+    for (QSpinBox* box : { ui->blocksGpuSPB, ui->threadsGpuSPB, ui->threadsCpuSPB, ui->weightSPB, ui->productRankSPB })
         connect(box, QOverload<int>::of(&QSpinBox::valueChanged),
                 this, [this](int) { applyUpdateRateLimit(); });
 
@@ -133,11 +147,6 @@ SettingsDialog::SettingsDialog(QWidget *parent)
         loadSettings();
         emit sendSettingsToWidget(settings.toJson());
     });
-
-
-
-
-
     applyUpdateRateLimit();
 
     // Отключаем кнопку помощи
@@ -149,21 +158,142 @@ SettingsDialog::~SettingsDialog()
     saveSettings();
 }
 
+// ------------------------------------------------------------ вкладка «Расчёт»
+
+Algorithm SettingsDialog::currentAlgorithm() const
+{
+    if (codeKindBGP->checkedId() == ProductCode)
+        return Algorithm::ProductCode;
+    return enumeratorBGP->checkedId() == EnumerationType::Full ? fullAlgorithm : partialAlgorithm;
+}
+
+int& SettingsDialog::weightFor(Algorithm algorithm)
+{
+    switch (algorithm) {
+        case Algorithm::RandomInfoSets: return settings.leonWeight;
+        case Algorithm::ProductCode:    return settings.productWeight;
+        default:                        return settings.bzWeight;
+    }
+}
+
+void SettingsDialog::updateComputationControls()
+{
+    updatingControls = true;
+
+    const bool product = codeKindBGP->checkedId() == ProductCode;
+
+    // Тип перебора. У произведения он всегда частичный — по рангам; у
+    // произвольного кода полный перебор возможен только до 63 строк.
+    const bool fullPossible = !product && codeLength == Length::Short;
+    ui->fullEnumRB->setEnabled(fullPossible);
+    ui->enumTypeGBX->setEnabled(!product);
+    EnumerationType shown = product ? EnumerationType::Partial : singleEnumType;
+    if (!fullPossible)
+        shown = EnumerationType::Partial;
+    if (QAbstractButton* button = enumeratorBGP->button(shown))
+        button->setChecked(true);
+    const bool full = shown == EnumerationType::Full;
+
+    // Алгоритм: видна пара, подходящая типу перебора.
+    ui->grayCodeRB->setVisible(full);
+    ui->dualCodeRB->setVisible(full);
+    ui->brouwerZimmermannRB->setVisible(!full);
+    ui->randomInfoSetsRB->setVisible(!full);
+    // Код Грея не длиннее 63 строк, дуальный расчёт — не длиннее 63 строк
+    // проверочной матрицы.
+    ui->grayCodeRB->setEnabled(codeLength == Length::Short);
+    ui->dualCodeRB->setEnabled(dualCodeLength == Length::Short);
+    if (full) {
+        if (fullAlgorithm == Algorithm::GrayCode && !ui->grayCodeRB->isEnabled())
+            fullAlgorithm = Algorithm::DualCode;
+        if (fullAlgorithm == Algorithm::DualCode && !ui->dualCodeRB->isEnabled())
+            fullAlgorithm = Algorithm::GrayCode;
+    }
+    if (QAbstractButton* button = algorithmBGP->button(full ? fullAlgorithm : partialAlgorithm))
+        button->setChecked(true);
+
+    const Algorithm algorithm = currentAlgorithm();
+    const bool leon = partialAlgorithm == Algorithm::RandomInfoSets && !full;
+
+    // Поле веса: у полного перебора его нет, у произведения ноль — «до
+    // границы ранга».
+    ui->weightLBL->setVisible(!full);
+    ui->weightSPB->setVisible(!full);
+    ui->weightHintLBL->setVisible(!full);
+    // Пока матрицы нет, предел не известен — оставляем широкий, иначе вес
+    // из настроек подрезался бы до единицы при первом же открытии.
+    ui->weightSPB->setMinimum(product ? 0 : 1);
+    ui->weightSPB->setMaximum(product ? 10000000 : matrixCols > 0 ? matrixCols : 2048);
+    ui->weightSPB->setValue(qBound(ui->weightSPB->minimum(), weightFor(algorithm), ui->weightSPB->maximum()));
+    ui->weightLBL->setText(product ? tr("До веса (0 — до границы ранга): ") : tr("До веса: "));
+    if (product)
+        ui->weightHintLBL->setText(
+            tr("Слова произведения не тяжелее этого веса; ноль — до веса, с которого "
+               "начинаются слова следующего ранга."));
+    else if (leon)
+        ui->weightHintLBL->setText(
+            tr("Все слова не тяжелее этого веса будут найдены, если не случится "
+               "события заданной вероятности; тяжелее — не собираются."));
+    else
+        ui->weightHintLBL->setText(
+            tr("Все слова не тяжелее этого веса будут найдены и посчитаны точно; "
+               "более тяжёлые — не все. Число строк перебора программа выведет сама."));
+
+    // Настройки Леона и произведения.
+    ui->leonMissLBL->setVisible(leon);
+    ui->leonMissCBX->setVisible(leon);
+    ui->leonMemoryLBL->setVisible(leon);
+    ui->leonMemorySPB->setVisible(leon);
+    ui->productRankLBL->setVisible(product);
+    ui->productRankSPB->setVisible(product);
+
+    QString hint;
+    if (product) {
+        hint = partialAlgorithm == Algorithm::RandomInfoSets
+             ? tr("Компоненты — в панелях «Матрица 1» и «Матрица 2». Слово ранга r — сумма r "
+                  "произведений слов компонент; ранг 1 даёт спектр до границы Толхёйзена, каждый "
+                  "следующий — дальше. Компонента до 28 строк перебирается целиком; больше — "
+                  "случайным поиском, и итог «полон», а не «точен».")
+             : tr("Компоненты — в панелях «Матрица 1» и «Матрица 2». Компонента до 28 строк "
+                  "перебирается целиком, больше — Брауэром–Циммерманом: точно, но без списка слов, "
+                  "поэтому для неё доступен только ранг 1.");
+    }
+    else if (full) {
+        hint = fullAlgorithm == Algorithm::DualCode
+             ? tr("Перебирается проверочная матрица: выгодно, когда строк в ней меньше, чем в "
+                  "порождающей. Спектр — преобразованием Мак-Вильямс, целиком и точно.")
+             : tr("Все 2^k слов, спектр целиком и точно.");
+    }
+    else if (leon) {
+        hint = tr("Гарантии нет, зато на порядки глубже и быстрее Брауэра–Циммермана. Предел — "
+                  "память под найденные слова: около 60 байт на слово длины 336, 260 — длины 2048.");
+    }
+    else {
+        hint = tr("Сколько строк перебирать, программа выведет по информационным множествам "
+                  "матрицы. Цена растёт с весом быстро.");
+    }
+    ui->algorithmHintLBL->setText(hint);
+
+    updatingControls = false;
+}
+
+// ------------------------------------------------------------ замер потолка
+
 QString SettingsDialog::updateRateKey() const
 {
     // Матрицы диалог не видит, только её размер. Этого достаточно: потолок
     // определяется шириной строки и числом строк, а не тем, какие в матрице
     // биты.
-    return QStringLiteral("%1|%2|%3x%4|%5|%6x%7|%8|%9")
+    const Algorithm algorithm = currentAlgorithm();
+    return QStringLiteral("%1|%2|%3x%4|%5|%6x%7|%8|%9|%10")
         .arg(computeDeviceBGP->checkedId())
-        .arg(algorithmBGP->checkedId())
+        .arg(int(algorithm))
         .arg(matrixCols).arg(matrixRows)
-        .arg(algorithmBGP->checkedId() == Algorithm::BrouwerZimmermann ? ui->bzWeightSPB->value()
-           : algorithmBGP->checkedId() == Algorithm::RandomInfoSets    ? ui->leonWeightSPB->value()
-                                                                       : ui->maxRowsSPB->value())
+        .arg(ui->weightSPB->value())
         .arg(ui->blocksGpuSPB->value()).arg(ui->threadsGpuSPB->value())
         .arg(ui->threadsCpuSPB->value())
-        .arg(ui->autoTuneGridCHB->isChecked() ? 1 : 0);
+        .arg(ui->autoTuneGridCHB->isChecked() ? 1 : 0)
+        .arg(algorithm == Algorithm::ProductCode ? int(partialAlgorithm) * 10 + ui->productRankSPB->value() : 0);
 }
 
 void SettingsDialog::applyUpdateRateLimit()
@@ -230,50 +360,6 @@ void SettingsDialog::handleSettingsRequested()
     emit sendSettingsToWidget(settings.toJson());
 }
 
-// Группа «Тип перебора» имеет смысл только для простого XOR: код Грея и
-// дуальный расчёт идут по всем 2^k маскам, частичного перебора у них нет.
-//
-// Раньше группа на них просто исчезала, и вкладка оставалась полупустой.
-// Теперь она блокируется и показывает «Полный» — видно, что вариант есть,
-// но к этому алгоритму неприменим.
-void SettingsDialog::updateEnumTypeControls()
-{
-    const bool forXor = algorithmBGP->checkedId() == Algorithm::SimpleXor;
-
-    ui->enumTypeGBX->setEnabled(forXor);
-    // Своя группа у Брауэра–Циммермана: там задаётся вес, а не число строк.
-    ui->bzGBX->setEnabled(algorithmBGP->checkedId() == Algorithm::BrouwerZimmermann);
-    ui->leonGBX->setEnabled(algorithmBGP->checkedId() == Algorithm::RandomInfoSets);
-    ui->productGBX->setEnabled(algorithmBGP->checkedId() == Algorithm::ProductCode);
-
-    EnumerationType shown = EnumerationType::Full;
-    if (forXor) {
-        shown = xorEnumType;
-        // У длинных кодов полный перебор запрещён независимо от того, что
-        // пользователь выбирал раньше.
-        if (!ui->fullEnumRB->isEnabled())
-            shown = EnumerationType::Partial;
-    }
-
-    if (QAbstractButton* button = enumeratorBGP->button(shown))
-        button->setChecked(true);
-
-    const bool partial = shown == EnumerationType::Partial;
-
-    // Поле не прячется, а блокируется: при полном переборе оно показывает,
-    // сколько строк складывается на самом деле — все, сколько их в матрице.
-    // Пропадавшая надпись оставляла на её месте дыру, да и не было видно,
-    // что настройка вообще есть.
-    ui->maxRowsLBL->setEnabled(partial);
-    ui->maxRowsSPB->setEnabled(partial);
-
-    // Без блокировки сигналов setValue сам же и затёр бы запомненное число.
-    const QSignalBlocker block(ui->maxRowsSPB);
-    ui->maxRowsSPB->setValue(partial
-        ? qBound(ui->maxRowsSPB->minimum(), xorMaxRows, ui->maxRowsSPB->maximum())
-        : ui->maxRowsSPB->maximum());
-}
-
 void SettingsDialog::setInterfaceEnabled( bool enabled )
 {
     // Гасятся страницы, а не сам QTabWidget: иначе вместе с ними отключится
@@ -291,140 +377,78 @@ void SettingsDialog::setInterfaceEnabled( bool enabled )
     // Пробе нужен свободный вычислитель, а он сейчас занят расчётом.
     ui->measureRatePBN->setEnabled(enabled);
 
-    if (enabled) {
-        // Часть пунктов недоступна и в покое: код Грея не бывает длиннее
-        // 63 строк, дуальный расчёт — тоже.
-        if ( codeLength == Length::Short ) {
-            ui->grayCodeRB->setEnabled(true);
-            // Включаем возможность полного перебора
-            ui->fullEnumRB->setEnabled(true);
-        }
-        else {
-            ui->grayCodeRB->setEnabled(false);
-            // Отключаем возможность полного перебора
-            ui->fullEnumRB->setEnabled(false);
-            // Включаем частичный перебор
-            ui->partialEnumRB->setChecked(true);
-        }
-        if ( dualCodeLength == Length::Short ) {
-            ui->dualCodeRB->setEnabled(true);
-        }
-        else {
-            ui->dualCodeRB->setEnabled(false);
-        }
-    }
+    if (enabled)
+        updateComputationControls();
 }
 
-void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int maxRows, int bzWeight)
+void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int rank, int weight,
+                                       int componentAlgorithm)
 {
-    if (QAbstractButton* button = algorithmBGP->button(algorithm))
-        button->setChecked(true);
+    Q_UNUSED(enumType);
+    const Algorithm a = static_cast<Algorithm>(algorithm);
 
-    if (algorithm == Algorithm::SimpleXor)
-        xorEnumType = static_cast<EnumerationType>(enumType);
-    if (maxRows > 0)
-        xorMaxRows = maxRows;
-    if (algorithm == Algorithm::BrouwerZimmermann && bzWeight > 0)
-        ui->bzWeightSPB->setValue(bzWeight);
-    if (algorithm == Algorithm::RandomInfoSets && bzWeight > 0)
-        ui->leonWeightSPB->setValue(bzWeight);
-    if (algorithm == Algorithm::ProductCode) {
-        ui->productWeightSPB->setValue(bzWeight);
-        if (maxRows > 0)
-            ui->productRankSPB->setValue(qBound(1, maxRows, 4));
+    switch (a) {
+        case Algorithm::GrayCode:
+        case Algorithm::DualCode:
+            codeKindBGP->button(SingleCode)->setChecked(true);
+            singleEnumType = EnumerationType::Full;
+            fullAlgorithm  = a;
+            break;
+        case Algorithm::BrouwerZimmermann:
+        case Algorithm::RandomInfoSets:
+            codeKindBGP->button(SingleCode)->setChecked(true);
+            singleEnumType   = EnumerationType::Partial;
+            partialAlgorithm = a;
+            if (weight > 0)
+                weightFor(a) = weight;
+            break;
+        case Algorithm::ProductCode:
+            codeKindBGP->button(ProductCode)->setChecked(true);
+            partialAlgorithm = componentAlgorithm == int(Algorithm::RandomInfoSets)
+                                 ? Algorithm::RandomInfoSets : Algorithm::BrouwerZimmermann;
+            settings.productWeight = qMax(0, weight);
+            if (rank > 0)
+                ui->productRankSPB->setValue(qBound(1, rank, 4));
+            break;
+        default:
+            // Простой XOR из интерфейса убран; запись показывается, а продолжать
+            // её нечем — расчёт пойдёт Брауэром–Циммерманом заново.
+            codeKindBGP->button(SingleCode)->setChecked(true);
+            singleEnumType   = EnumerationType::Partial;
+            partialAlgorithm = Algorithm::BrouwerZimmermann;
+            break;
     }
 
-    updateEnumTypeControls();
-
-    settings.algorithmType = static_cast<Algorithm>(algorithm);
-    settings.enumType      = static_cast<EnumerationType>(enumeratorBGP->checkedId());
-    settings.maxRows       = ui->maxRowsSPB->value();
-    settings.bzWeight      = ui->bzWeightSPB->value();
-    settings.leonWeight    = ui->leonWeightSPB->value();
-    settings.productWeight = ui->productWeightSPB->value();
-    settings.productRank   = ui->productRankSPB->value();
-
+    updateComputationControls();
+    collectSettings();
     emit sendSettingsToWidget(settings.toJson());
 }
 
 void SettingsDialog::handleMatrixChanged(int rows, int cols) {
     matrixRows = rows;
     matrixCols = cols;
-    // Если число строк порождающей матрицы больше 63
-    if (rows > 63) {
-        codeLength = Length::Long;
-        // Отключаем возможность использования кода грея
-        ui->grayCodeRB->setEnabled(false);
-        // Если перед отключением было включено использование кода Грея, то насильно выключаем его
-        if ( ui->grayCodeRB->isChecked() ){
-            ui->simpleXorRB->setChecked(true);
-            settings.algorithmType = Algorithm::SimpleXor;
-        }
-            
-        // Отключаем возможность полного перебора
-        ui->fullEnumRB->setEnabled(false);
-        // Включаем частичный перебор
-        ui->partialEnumRB->setChecked(true);
-        settings.enumType = EnumerationType::Partial;
-        // Находим максимальное количество строк, которые можем сложить, не выходя за uint64
-        ui->maxRowsSPB->setMaximum(maxCombIndex(rows));
-        if (settings.maxRows > ui->maxRowsSPB->maximum())
-            settings.maxRows = ui->maxRowsSPB->value();
-    }
-    // -||- меньше 63
-    else {
-        codeLength = Length::Short;
-        // Включаем возможность использования кода грея
-        ui->grayCodeRB->setEnabled(true);
-        // Включаем возможность полного перебора
-        ui->fullEnumRB->setEnabled(true);
-        // Устанавливаем максимальное количество строк равным числу строк порождающей матрицы
-        ui->maxRowsSPB->setMaximum(rows);
-        if ( settings.maxRows > ui->maxRowsSPB->maximum() )
-            settings.maxRows = ui->maxRowsSPB->value();
-    }
-    // Если размерность дуального кода больше 63
-    if (cols - rows > 63) {
-        dualCodeLength = Length::Long;
-        // Отключаем возможность использование дуального кода для расчета
-        ui->dualCodeRB->setEnabled(false);
-        // Если во время вписывания новой матрицы был выбран расчет с использованием дуального кода
-        if (ui->dualCodeRB->isChecked())
-            // Если число строк больше 63, то выбираем расчет с использованием простого XOR-а
-            if (rows > 63) {
-                ui->simpleXorRB->setChecked(true);
-                settings.algorithmType = Algorithm::SimpleXor;
-                ui->fullEnumRB->setEnabled(false);
-            }
-            // Иначе - с использованием кода грея
-            else {
-                ui->grayCodeRB->setChecked(true);
-                settings.algorithmType = Algorithm::GrayCode;
-            }
-                
-    }
-    // -||- меньше 63
-    else {
-        dualCodeLength = Length::Short;
-        ui->dualCodeRB->setEnabled(true);
-    }
+    // Код Грея перебирает 2^k масок в одном слове — не длиннее 63 строк;
+    // дуальный расчёт перебирает проверочную матрицу, у неё n - k строк.
+    codeLength     = rows > 63        ? Length::Long : Length::Short;
+    dualCodeLength = cols - rows > 63 ? Length::Long : Length::Short;
+
     // Слов тяжелее длины кода не бывает.
-    ui->bzWeightSPB->setMaximum(qMax(1, cols));
-    if (settings.bzWeight > ui->bzWeightSPB->maximum())
-        settings.bzWeight = ui->bzWeightSPB->value();
-    ui->leonWeightSPB->setMaximum(qMax(1, cols));
-    if (settings.leonWeight > ui->leonWeightSPB->maximum())
-        settings.leonWeight = ui->leonWeightSPB->value();
+    if (settings.bzWeight > cols)   settings.bzWeight   = qMax(1, cols);
+    if (settings.leonWeight > cols) settings.leonWeight = qMax(1, cols);
 
     // Доступность полного перебора и сам алгоритм могли только что поменяться —
-    // приводим группу в согласованный вид одним местом, а не в каждой ветке.
-    updateEnumTypeControls();
+    // приводим вкладку в согласованный вид одним местом, а не в каждой ветке.
+    updateComputationControls();
+    collectSettings();
     // Сменилась матрица — прежний замер был про другой код.
     applyUpdateRateLimit();
 
     // Отправляем новые настройки в виджет
     emit sendSettingsToWidget(settings.toJson());
 }
+
+// ------------------------------------------------------------ вычислитель
+
 bool SettingsDialog::isGpuAvailable() {
     int deviceCount = 0;
     cudaError_t err = cudaGetDeviceCount(&deviceCount);
@@ -495,6 +519,8 @@ void SettingsDialog::checkGpuAvailable() {
     }
 }
 
+// ------------------------------------------------------------ хранение
+
 void SettingsDialog::saveSettings() {
     QSettings s;
 
@@ -504,10 +530,11 @@ void SettingsDialog::saveSettings() {
 
     QJsonDocument doc(settings.toJson());
     s.setValue(SettingsKeys::COMPUTATION_SETTINGS, doc.toJson());
-    // Отдельно от JSON: в settings.enumType при коде Грея лежит «Полный», и
-    // выбор пользователя для XOR там не сохранить.
-    s.setValue(SettingsKeys::XOR_ENUM_TYPE, int(xorEnumType));
-    s.setValue(SettingsKeys::XOR_MAX_ROWS,  xorMaxRows);
+    // Отдельно от JSON: в самих настройках лежит один алгоритм, а помнить
+    // надо выбор в обеих парах и тип перебора произвольного кода.
+    s.setValue(SettingsKeys::FULL_ALGORITHM,    int(fullAlgorithm));
+    s.setValue(SettingsKeys::PARTIAL_ALGORITHM, int(partialAlgorithm));
+    s.setValue(SettingsKeys::SINGLE_ENUM_TYPE,  int(singleEnumType));
     // Замер живёт рядом с настройками: он свойство конфигурации, а не сеанса,
     // и переживать перезапуск обязан — иначе список закрывался бы каждый раз.
     s.setValue(SettingsKeys::UPDATE_RATE,     measuredRate);
@@ -521,14 +548,20 @@ void SettingsDialog::saveSettings() {
 // подтвердил кнопкой.
 void SettingsDialog::collectSettings()
 {
-    settings.algorithmType = static_cast<Algorithm>(algorithmBGP->checkedId());
-    settings.enumType = static_cast<EnumerationType>(enumeratorBGP->checkedId());
-    settings.maxRows = ui->maxRowsSPB->value();
-    settings.bzWeight = ui->bzWeightSPB->value();
-    settings.leonWeight = ui->leonWeightSPB->value();
+    const Algorithm algorithm = currentAlgorithm();
+    settings.algorithmType = algorithm;
+    settings.enumType = enumeratorBGP->checkedId() == EnumerationType::Full
+                          ? EnumerationType::Full : EnumerationType::Partial;
+    // Число строк простого XOR больше не задаётся: всё, сколько есть.
+    settings.maxRows = qMax(1, matrixRows);
+    // Веса хранятся по алгоритму и обновляются по вводу; здесь — на случай,
+    // если поле видно и его значение подрезал новый предел.
+    if (algorithm == Algorithm::BrouwerZimmermann || algorithm == Algorithm::RandomInfoSets
+        || algorithm == Algorithm::ProductCode)
+        weightFor(algorithm) = ui->weightSPB->value();
+    settings.productAlgorithm = partialAlgorithm;
     settings.leonMissExponent = ui->leonMissCBX->currentData().toInt();
     settings.leonMemoryMb = ui->leonMemorySPB->value();
-    settings.productWeight = ui->productWeightSPB->value();
     settings.productRank = ui->productRankSPB->value();
     settings.compDev = static_cast<ComputeDevice>(computeDeviceBGP->checkedId());
 
@@ -541,6 +574,7 @@ void SettingsDialog::collectSettings()
     settings.timeIntSet.saveSpectrumInterval = ui->saveSpectrumIntervalCBX->currentData().toInt();
     settings.timeIntSet.updateSpectrumInterval = ui->updateSpectrumIntervalCBX->currentData().toInt();
 }
+
 void SettingsDialog::loadSettings() {
     QSettings s;
 
@@ -553,31 +587,57 @@ void SettingsDialog::loadSettings() {
         settings = ComputationSettings::fromJson(doc.object());
     }
 
-    // дальше UI без изменений
-    algorithmBGP->button(settings.algorithmType)->setChecked(true);
-
-    // Выбор для XOR хранится отдельно от settings: в самих настройках при
-    // выбранном коде Грея лежит «Полный», иначе выбор терялся бы при каждом
-    // перезапуске.
     measuredRate = s.value(SettingsKeys::UPDATE_RATE, 0.0).toDouble();
     measuredFor  = s.value(SettingsKeys::UPDATE_RATE_KEY).toString();
 
-    xorEnumType = static_cast<EnumerationType>(
-        s.value(SettingsKeys::XOR_ENUM_TYPE, int(settings.enumType)).toInt());
+    // Выбор в парах — из реестра, а сам алгоритм настроек его уточняет: они
+    // могли разойтись, если настройки писала другая версия программы.
+    fullAlgorithm = static_cast<Algorithm>(
+        s.value(SettingsKeys::FULL_ALGORITHM, int(Algorithm::GrayCode)).toInt());
+    partialAlgorithm = static_cast<Algorithm>(
+        s.value(SettingsKeys::PARTIAL_ALGORITHM, int(Algorithm::BrouwerZimmermann)).toInt());
+    singleEnumType = static_cast<EnumerationType>(
+        s.value(SettingsKeys::SINGLE_ENUM_TYPE, int(EnumerationType::Full)).toInt());
+    if (fullAlgorithm != Algorithm::GrayCode && fullAlgorithm != Algorithm::DualCode)
+        fullAlgorithm = Algorithm::GrayCode;
+    if (partialAlgorithm != Algorithm::BrouwerZimmermann && partialAlgorithm != Algorithm::RandomInfoSets)
+        partialAlgorithm = Algorithm::BrouwerZimmermann;
 
-    ui->maxRowsSPB->setValue(settings.maxRows);
-    xorMaxRows = s.value(SettingsKeys::XOR_MAX_ROWS, settings.maxRows).toInt();
-    ui->bzWeightSPB->setValue(settings.bzWeight);
-    ui->leonWeightSPB->setValue(settings.leonWeight);
+    switch (settings.algorithmType) {
+        case Algorithm::GrayCode:
+        case Algorithm::DualCode:
+            codeKindBGP->button(SingleCode)->setChecked(true);
+            singleEnumType = EnumerationType::Full;
+            fullAlgorithm  = settings.algorithmType;
+            break;
+        case Algorithm::BrouwerZimmermann:
+        case Algorithm::RandomInfoSets:
+            codeKindBGP->button(SingleCode)->setChecked(true);
+            singleEnumType   = EnumerationType::Partial;
+            partialAlgorithm = settings.algorithmType;
+            break;
+        case Algorithm::ProductCode:
+            codeKindBGP->button(ProductCode)->setChecked(true);
+            if (settings.productAlgorithm == Algorithm::RandomInfoSets
+                || settings.productAlgorithm == Algorithm::BrouwerZimmermann)
+                partialAlgorithm = static_cast<Algorithm>(settings.productAlgorithm);
+            break;
+        default:
+            // Простой XOR: в новом интерфейсе его нет — ближайшее по смыслу.
+            codeKindBGP->button(SingleCode)->setChecked(true);
+            singleEnumType   = EnumerationType::Partial;
+            partialAlgorithm = Algorithm::BrouwerZimmermann;
+            break;
+    }
+
     {
         const int at = ui->leonMissCBX->findData(settings.leonMissExponent);
         ui->leonMissCBX->setCurrentIndex(at >= 0 ? at : 2);
     }
     ui->leonMemorySPB->setValue(settings.leonMemoryMb);
-    ui->productWeightSPB->setValue(settings.productWeight);
     ui->productRankSPB->setValue(settings.productRank);
 
-    updateEnumTypeControls();
+    updateComputationControls();
 
     s.endGroup(); // ← не забыть
 

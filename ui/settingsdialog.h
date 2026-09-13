@@ -13,6 +13,17 @@
 namespace Ui { class SettingsDialog; }
 enum class Length { Short, Long };
 
+// Вкладка «Расчёт» устроена как три вопроса подряд: какой код, сколько
+// перебирать, каким алгоритмом. Ответы на первые два сужают третий:
+//
+//   Полный перебор   → код Грея | дуальный код   (весь спектр, до 63 строк)
+//   Частичный        → Брауэр–Циммерман | Леон   (низ спектра до веса)
+//   Код-произведение → всегда частичный по рангам; алгоритм выбирает, чем
+//                      считать большие компоненты
+//
+// Простой XOR из интерфейса убран: всё, что он умел, Брауэр–Циммерман делает
+// быстрее и с гарантией. Сам путь в расчёте остался — старые записи с ним
+// открываются.
 class SettingsDialog : public QDialog
 {
     Q_OBJECT
@@ -33,7 +44,10 @@ public slots:
     void setInterfaceEnabled(bool enabled);
     // Ставит настройки расчёта из поднятого автосохранения: иначе кнопка
     // «Продолжить» искала бы запись другого алгоритма и не нашла бы её.
-    void applyFromAutosave(int algorithm, int enumType, int maxRows, int bzWeight = 0);
+    // weight — вес записи (у произведения — его вес, rank — ранг);
+    // componentAlgorithm — чем считались компоненты произведения.
+    void applyFromAutosave(int algorithm, int enumType, int rank, int weight,
+                           int componentAlgorithm);
     // Результат пробы, отправок в секунду.
     void applyMeasuredRate(double perSecond);
 private slots:
@@ -52,32 +66,37 @@ private:
     void applyDeviceLimits();
     // Показывает поля вычислителя, подходящие текущему устройству.
     void updateDeviceControls();
-    // Приводит группу «Тип перебора» в соответствие выбранному алгоритму.
-    void updateEnumTypeControls();
+    // Приводит вкладку «Расчёт» в согласованный вид: какие переключатели
+    // видны и доступны, что показывает поле веса, что написано в подсказках.
+    void updateComputationControls();
+    // Алгоритм, который следует из положения переключателей.
+    ComputationSettings::Algorithm currentAlgorithm() const;
+    // Вес для текущего алгоритма — они хранятся отдельно, поле одно.
+    int& weightFor(ComputationSettings::Algorithm algorithm);
     bool isGpuAvailable();
     void loadSettings();
     void saveSettings();
 
 
-    Length codeLength;
-    Length dualCodeLength;
+    // До первой матрицы считаем код коротким: полный перебор доступен.
+    Length codeLength     = Length::Short;
+    Length dualCodeLength = Length::Short;
     Ui::SettingsDialog *ui;
-    QButtonGroup* algorithmBGP;
+    QButtonGroup* codeKindBGP;
     QButtonGroup* enumeratorBGP;
+    QButtonGroup* algorithmBGP;
     QButtonGroup* computeDeviceBGP;
 
-    // Тип перебора, выбранный для простого XOR. Код Грея и дуальный расчёт
-    // перебирают все 2^k масок и о частичном переборе не знают, поэтому на
-    // них группа блокируется и показывает «Полный». Выбор пользователя при
-    // этом не теряется: он лежит здесь и возвращается при переходе обратно.
-    ComputationSettings::EnumerationType xorEnumType =
-        ComputationSettings::EnumerationType::Full;
+    // Последний выбор в каждой из двух пар алгоритмов: при переключении
+    // «полный/частичный» показывается та пара, что подходит, и в ней —
+    // то, что пользователь выбирал раньше.
+    ComputationSettings::Algorithm fullAlgorithm    = ComputationSettings::GrayCode;
+    ComputationSettings::Algorithm partialAlgorithm = ComputationSettings::BrouwerZimmermann;
 
-    // Число строк, вписанное пользователем для частичного перебора. Хранится
-    // отдельно от поля ввода: при полном переборе там показывается число
-    // строк матрицы, и вписанное значение иначе затиралось бы при каждом
-    // переключении туда-обратно.
-    int xorMaxRows = 0;
+    // Тип перебора, выбранный для произвольного кода: у произведения группа
+    // блокируется на «частичном», и выбор надо помнить отдельно.
+    ComputationSettings::EnumerationType singleEnumType =
+        ComputationSettings::EnumerationType::Full;
 
     // Замеренный потолок обновления и конфигурация, на которой он получен.
     // Ноль — замера нет.
@@ -87,6 +106,10 @@ private:
     // Размер кода: от него зависит потолок, а самой матрицы диалог не видит.
     int matrixRows = 0;
     int matrixCols = 0;
+
+    // Поле веса перезаписывается программно при смене алгоритма; в это время
+    // его сигнал не должен трогать запомненные веса.
+    bool updatingControls = false;
 
     ComputationSettings settings;
 };

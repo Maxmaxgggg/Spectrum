@@ -43,7 +43,8 @@ public: signals:
     void sendSettingsToWorker( const QJsonObject& );
     void requestSettings();
     // Настройки расчёта из поднятого автосохранения.
-    void applySettingsFromAutosave(int algorithm, int enumType, int maxRows, int bzWeight);
+    void applySettingsFromAutosave(int algorithm, int enumType, int rank, int weight,
+                                   int componentAlgorithm);
 
 private slots:
 
@@ -83,6 +84,11 @@ private:
     // первой матрицей. У остальных алгоритмов не участвует.
     QDockWidget    *matrix2Dock      = nullptr;
     class FilterPlainTextEdit* matrix2PTE = nullptr;
+    // Кнопка «поменять местами» на стыке вкладок двух матриц.
+    class DockSwapButton* matrixSwap = nullptr;
+    // Вторая матрица нужна только коду произведения: при других алгоритмах
+    // её панель прячется.
+    void updateMatrix2Visibility();
     QDockWidget    *spectrumDock     = nullptr;
     QDockWidget    *plotDock         = nullptr;
     QDockWidget    *statsDock        = nullptr;
