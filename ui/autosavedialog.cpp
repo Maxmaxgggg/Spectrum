@@ -94,8 +94,9 @@ QString AutosaveDialog::describeAlgorithm(const AutosaveRecord& record)
         case ComputationSettings::GrayCode:          return tr("код Грея");
         case ComputationSettings::DualCode:          return tr("дуальный код");
         case ComputationSettings::BrouwerZimmermann: return tr("Брауэр–Циммерман, до веса %1").arg(record.bzWeight);
-        case ComputationSettings::RandomInfoSets:    return tr("случайный поиск, до веса %1, пропуск 10^-%2")
-                                                                .arg(record.leonWeight).arg(record.leonMissExponent);
+        case ComputationSettings::RandomInfoSets:    return tr("случайный поиск, до веса %1, в-ть пропуска %2")
+                                                                .arg(record.leonWeight)
+                                                                .arg(Format::powerOfTen(-record.leonMissExponent));
         case ComputationSettings::ProductCode:       return tr("код произведения, ранги до %1").arg(record.productRank);
         default:                                     return tr("простой XOR");
     }
@@ -114,7 +115,8 @@ QString AutosaveDialog::describeProgress(const AutosaveEntry& entry)
             return tr("готово, попыток %1").arg(Format::count(record.leonTrials));
         if (record.algorithm == ComputationSettings::ProductCode)
             return record.productMissExponent > 0
-                       ? tr("готово, до веса %1 (пропуск 10^-%2)").arg(record.productExactUpTo).arg(record.productMissExponent)
+                       ? tr("готово, до веса %1 (в-ть пропуска %2)").arg(record.productExactUpTo)
+                             .arg(Format::powerOfTen(-record.productMissExponent))
                        : tr("готово, точно до веса %1").arg(record.productExactUpTo);
         return tr("готово до %1 строк").arg(record.maxRows);
     }

@@ -596,6 +596,7 @@ void MainWindow::pauseComputation()
 
     runState = RunState::Paused;
     setWindowTitle(UIStrings::PAUSE_TEXT);
+    statsPanel->showState(tr("Пауза"));
     updateExecuteButton();
 }
 
@@ -605,6 +606,7 @@ void MainWindow::resumeComputation()
         workerPtr->resume();
 
     runState = RunState::Running;
+    statsPanel->showState(tr("Идёт расчёт"));
     updateExecuteButton();
 
     // Оценка времени с прошлого запуска ещё актуальна — возвращаем её

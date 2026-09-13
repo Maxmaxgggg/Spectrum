@@ -27,4 +27,7 @@ QString speed(double wordsPerSecond);
 // без сокращения читать невозможно.
 QString count(quint64 n);
 
+// «10⁻⁹» вместо «10^-9»: степень надстрочными цифрами.
+QString powerOfTen(int exponent);
+
 } // namespace Format

@@ -19,12 +19,12 @@ const QString kDash = QStringLiteral("—");
 QString algorithmName(ComputationSettings::Algorithm algorithm)
 {
     switch (algorithm) {
-    case ComputationSettings::GrayCode:          return QObject::tr("код Грея");
-    case ComputationSettings::DualCode:          return QObject::tr("дуальный код");
+    case ComputationSettings::GrayCode:          return QObject::tr("Код Грея");
+    case ComputationSettings::DualCode:          return QObject::tr("Дуальный код");
     case ComputationSettings::BrouwerZimmermann: return QObject::tr("Брауэр–Циммерман");
-    case ComputationSettings::RandomInfoSets:    return QObject::tr("случайный поиск");
-    case ComputationSettings::ProductCode:       return QObject::tr("код произведения");
-    default:                                     return QObject::tr("простой XOR");
+    case ComputationSettings::RandomInfoSets:    return QObject::tr("Случайный поиск");
+    case ComputationSettings::ProductCode:       return QObject::tr("Код произведения");
+    default:                                     return QObject::tr("Простой XOR");
     }
 }
 
@@ -94,14 +94,15 @@ void StatsPanel::showTask(const ComputationSettings& settings)
     if (settings.algorithmType == ComputationSettings::BrouwerZimmermann)
         enumeration = tr("компоненты весом до %1").arg(settings.bzWeight);
     if (settings.algorithmType == ComputationSettings::RandomInfoSets)
-        enumeration = tr("компоненты весом до %1, пропуск 10^-%2")
-                          .arg(settings.leonWeight).arg(settings.leonMissExponent);
+        enumeration = tr("компоненты весом до %1, в-ть пропуска %2")
+                          .arg(settings.leonWeight).arg(Format::powerOfTen(-settings.leonMissExponent));
     if (settings.algorithmType == ComputationSettings::ProductCode) {
         enumeration = settings.productWeight > 0
                           ? tr("компоненты весом до %1, ранги до %2").arg(settings.productWeight).arg(settings.productRank)
                           : tr("ранги до %1").arg(settings.productRank);
         enumeration += settings.productAlgorithm == int(ComputationSettings::RandomInfoSets)
-                          ? tr("; компоненты кода — случайным поиском")
+                          ? tr("; компоненты кода — случайным поиском, в-ть пропуска %1")
+                                .arg(Format::powerOfTen(-settings.leonMissExponent))
                           : tr("; компоненты кода — Брауэром–Циммерманом");
     }
     algorithmValue->setText(algorithmName(settings.algorithmType)

@@ -101,3 +101,19 @@ QString Format::count(quint64 n)
     return QString::number(n);
 }
 
+QString Format::powerOfTen(int exponent)
+{
+    static const QChar digits[] = {
+        QChar(0x2070), QChar(0x00B9), QChar(0x00B2), QChar(0x00B3), QChar(0x2074),
+        QChar(0x2075), QChar(0x2076), QChar(0x2077), QChar(0x2078), QChar(0x2079),
+    };
+    QString power;
+    if (exponent < 0) {
+        power += QChar(0x207B);   // надстрочный минус
+        exponent = -exponent;
+    }
+    const QString plain = QString::number(exponent);
+    for (const QChar c : plain)
+        power += digits[c.digitValue()];
+    return QStringLiteral("10") + power;
+}

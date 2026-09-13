@@ -1631,7 +1631,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     }
 
     if (wantWords)
-        emit productPlan(tr("%1: случайный поиск до веса %2, пропуск 10^-%3…")
+        emit productPlan(tr("%1: случайный поиск до веса %2, в-ть пропуска 10^-%3…")
                              .arg(label).arg(weightUpTo).arg(settings.leonMissExponent), -1);
     else
         emit productPlan(tr("%1: Брауэр–Циммерман до веса %2…").arg(label).arg(weightUpTo), -1);
@@ -1814,7 +1814,7 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
         h_spectrum[w] = total[w];
 
     if (productMissExponent > 0)
-        notes.prepend(tr("компоненты %1 — случайным поиском, пропуск до 10^-%2")
+        notes.prepend(tr("компоненты %1 — случайным поиском, в-ть пропуска до 10^-%2")
                           .arg(c1.probabilistic && c2.probabilistic ? QStringLiteral("1 и 2")
                                : c1.probabilistic ? QStringLiteral("1") : QStringLiteral("2"))
                           .arg(productMissExponent));
