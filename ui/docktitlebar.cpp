@@ -109,7 +109,15 @@ void DockTitleBar::initStyleOption(QStyleOptionDockWidget* option) const
 bool DockTitleBar::tabified() const
 {
     const auto* window = qobject_cast<const QMainWindow*>(dock->parentWidget());
-    return window && !dock->isFloating() && !window->tabifiedDockWidgets(dock).isEmpty();
+    if (!window || dock->isFloating())
+        return false;
+    // Спрятанный сосед по группе в списке остаётся, а вкладок при нём нет —
+    // считаем только видимых.
+    const QList<QDockWidget*> neighbours = window->tabifiedDockWidgets(dock);
+    for (const QDockWidget* other : neighbours)
+        if (other->isVisible())
+            return true;
+    return false;
 }
 
 void DockTitleBar::paintEvent(QPaintEvent* event)
