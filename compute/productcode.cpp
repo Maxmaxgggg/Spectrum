@@ -38,36 +38,6 @@ inline int trailingZeros(quint64 v)
 #endif
 }
 
-// Ранг набора слов — Гаусс на r строках. r маленькое, слов немного.
-bool independent(const std::vector<const quint64*>& tuple, int words)
-{
-    const int r = int(tuple.size());
-    std::vector<quint64> m;
-    m.reserve(size_t(r) * words);
-    for (const quint64* w : tuple)
-        m.insert(m.end(), w, w + words);
-
-    int rank = 0;
-    for (int bit = 0; bit < words * 64 && rank < r; ++bit) {
-        const int wi = bit >> 6;
-        const quint64 mask = 1ULL << (bit & 63);
-        int src = -1;
-        for (int row = rank; row < r; ++row)
-            if (m[size_t(row) * words + wi] & mask) { src = row; break; }
-        if (src < 0)
-            continue;
-        if (src != rank)
-            std::swap_ranges(m.begin() + src * words, m.begin() + (src + 1) * words,
-                             m.begin() + rank * words);
-        for (int row = 0; row < r; ++row)
-            if (row != rank && (m[size_t(row) * words + wi] & mask))
-                for (int w = 0; w < words; ++w)
-                    m[size_t(row) * words + w] ^= m[size_t(rank) * words + w];
-        ++rank;
-    }
-    return rank == r;
-}
-
 // Ячейки профиля набора: для каждого ненулевого u — сколько позиций x, где
 // (a_1(x), …, a_r(x)) = u.
 void cellsOf(const std::vector<const quint64*>& tuple, int words, std::vector<int>& cells)
@@ -239,12 +209,22 @@ namespace {
 
 // Обход наборов одним потоком: своя карта профилей, свои буферы. Потоки
 // делят между собой первое слово набора, остальное — рекурсия.
+//
+// Отсечка — по весам, а не по носителям. Каждая позиция объединения
+// носителей набора из t слов накрыта ровно 2^(t-1) ненулевыми комбинациями
+// набора, поэтому сумма весов всех комбинаций равна 2^(t-1)·|объединение|.
+// Значит, у набора из r слов с объединением не больше U сумма весов всех
+// 2^r - 1 комбинаций не больше 2^(r-1)·U, а каждая комбинация весит не
+// меньше d. Отсюда потолок веса следующего слова, и раз кандидаты
+// отсортированы по весу, перебор обрывается, едва потолок пройден: из
+// миллионов слов веса до 9 в пару к слову веса 8 годятся только слова
+// веса 5, и их перебор кончается, не начавшись.
 struct ProfileWalker
 {
     const Component&            c;
-    const std::vector<size_t>&  candidates;
+    const std::vector<size_t>&  candidates;   // по возрастанию веса
     const std::vector<std::vector<int>>& perms;
-    int r; int unionLimit; int words;
+    int r; int unionLimit; int words; int d;
     quint64 workLimit;
     std::atomic<quint64>& work;
     std::atomic<bool>&    over;
@@ -254,6 +234,12 @@ struct ProfileWalker
     quint64    localWork = 0;
     std::vector<const quint64*> tuple, permuted;
     std::vector<int> cells;
+    // Ненулевые комбинации префикса: слова подряд и их веса; combos — сколько
+    // их сейчас (2^t - 1), spanSum — сумма их весов.
+    std::vector<quint64> span;
+    std::vector<int>     spanWeights;
+    int                  combos  = 0;
+    long long            spanSum = 0;
 
     // Счётчик работы общий, но пополняется пачками: атомарный инкремент на
     // каждого кандидата съел бы весь выигрыш от потоков.
@@ -270,13 +256,11 @@ struct ProfileWalker
         return true;
     }
 
-    void go(size_t from, int depth, const std::vector<quint64>& unionSoFar)
+    void go(size_t from, int depth)
     {
         if (over.load(std::memory_order_relaxed))
             return;
         if (depth == r) {
-            if (!independent(tuple, words))
-                return;
             for (const std::vector<int>& p : perms) {
                 for (int i = 0; i < r; ++i)
                     permuted[size_t(i)] = tuple[size_t(p[size_t(i)])];
@@ -285,21 +269,57 @@ struct ProfileWalker
             }
             return;
         }
-        std::vector<quint64> u(static_cast<size_t>(words));
+
+        const long long budget         = (1LL << (r - 1)) * unionLimit;
+        const long long pending        = (1LL << r) - (1LL << depth) - 1;   // комбинаций ещё не было
+        const long long pendingAfter   = (1LL << r) - (1LL << (depth + 1)); // останется после этого слова
+        const long long maxWeight      = budget - spanSum - pending * d;
+        if (maxWeight < d)
+            return;
+
         for (size_t ci = from; ci < candidates.size(); ++ci) {
             if (!tick())
                 return;
-            const quint64* a = c.word(candidates[ci]);
-            int size = 0;
-            for (int w = 0; w < words; ++w) {
-                u[size_t(w)] = unionSoFar[size_t(w)] | a[w];
-                size += popcount64(u[size_t(w)]);
+            const size_t idx = candidates[ci];
+            const int weight = c.weights[idx];
+            if (weight > maxWeight)
+                break;
+            const quint64* a = c.word(idx);
+
+            // Новые комбинации: само слово и его суммы со всеми прежними.
+            // Нулевая сумма — слово уже в линейной оболочке префикса.
+            long long added = weight;
+            bool dependent = false;
+            const int base = combos;
+            for (int j = 0; j < base; ++j) {
+                int wt = 0;
+                const quint64* p = span.data() + size_t(j) * words;
+                quint64* dst = span.data() + size_t(base + 1 + j) * words;
+                for (int w = 0; w < words; ++w) {
+                    dst[w] = a[w] ^ p[w];
+                    wt += popcount64(dst[w]);
+                }
+                if (wt == 0) { dependent = true; break; }
+                spanWeights[size_t(base + 1 + j)] = wt;
+                added += wt;
             }
-            if (size > unionLimit)
+            if (dependent)
                 continue;
+            if (spanSum + added + pendingAfter * d > budget)
+                continue;
+
+            std::copy(a, a + words, span.data() + size_t(base) * words);
+            spanWeights[size_t(base)] = weight;
+            const long long savedSum = spanSum;
+            spanSum += added;
+            combos = 2 * base + 1;
             tuple.push_back(a);
-            go(ci + 1, depth + 1, u);
+
+            go(ci + 1, depth + 1);
+
             tuple.pop_back();
+            combos  = base;
+            spanSum = savedSum;
             if (over.load(std::memory_order_relaxed))
                 return;
         }
@@ -315,12 +335,17 @@ bool profiles(const Component& c, int r, int unionLimit, quint64 workLimit,
     // Слов тяжелее n не бывает: предел выше длины кода — это «все слова».
     if (!c.hasWords || c.wordsUpTo < std::min(unionLimit, c.n) || r < 1 || r > 4)
         return false;
+    if (c.d <= 0)
+        return true;
 
-    // Кандидаты — слова веса не больше предела; тяжелее в набор не попадут.
+    // Кандидаты — слова веса не больше предела, по возрастанию веса: на
+    // порядке держится отсечка.
     std::vector<size_t> candidates;
     for (size_t i = 0; i < c.wordCount(); ++i)
         if (c.weights[i] <= unionLimit)
             candidates.push_back(i);
+    std::stable_sort(candidates.begin(), candidates.end(),
+                     [&c](size_t a, size_t b) { return c.weights[a] < c.weights[b]; });
     const int words = c.wordsPerRow;
 
     // Наборы перебираются по возрастанию индексов — по одному на множество,
@@ -342,28 +367,33 @@ bool profiles(const Component& c, int r, int unionLimit, quint64 workLimit,
 
     #pragma omp parallel num_threads(threads)
     {
-        ProfileWalker walker{ c, candidates, perms, r, unionLimit, words, workLimit,
-                              work, over, cancelled, ProfileMap(), 0, {}, {}, {} };
+        ProfileWalker walker{ c, candidates, perms, r, unionLimit, words, c.d, workLimit,
+                              work, over, cancelled, ProfileMap(), 0, {}, {}, {}, {}, {}, 0, 0 };
         walker.permuted.resize(static_cast<size_t>(r));
-        std::vector<quint64> empty(static_cast<size_t>(words), 0ULL);
-        std::vector<quint64> u(static_cast<size_t>(words));
+        walker.span.assign(size_t((1 << r) - 1) * size_t(words), 0ULL);
+        walker.spanWeights.assign(size_t((1 << r) - 1), 0);
 
         // Первое слово набора раздаётся потокам; длинные хвосты у первых
-        // слов, поэтому раздача динамическая.
+        // слов, поэтому раздача динамическая. Потолок веса первого слова —
+        // тот же, что и в рекурсии на нулевой глубине.
+        const long long budget    = (1LL << (r - 1)) * unionLimit;
+        const long long maxWeight = budget - ((1LL << r) - 2) * c.d;
+
         #pragma omp for schedule(dynamic, 1)
         for (long long ci = 0; ci < (long long)candidates.size(); ++ci) {
             if (over.load(std::memory_order_relaxed) || !walker.tick())
                 continue;
-            const quint64* a = c.word(candidates[size_t(ci)]);
-            int size = 0;
-            for (int w = 0; w < words; ++w) {
-                u[size_t(w)] = a[w];
-                size += popcount64(u[size_t(w)]);
-            }
-            if (size > unionLimit)
+            const size_t idx = candidates[size_t(ci)];
+            const int weight = c.weights[idx];
+            if (weight > maxWeight)
                 continue;
+            const quint64* a = c.word(idx);
+            std::copy(a, a + words, walker.span.data());
+            walker.spanWeights[0] = weight;
+            walker.combos  = 1;
+            walker.spanSum = weight;
             walker.tuple.assign(1, a);
-            walker.go(size_t(ci) + 1, 1, u);
+            walker.go(size_t(ci) + 1, 1);
         }
         maps[size_t(omp_get_thread_num())] = std::move(walker.map);
     }
