@@ -2187,9 +2187,15 @@ static Spectrum checkBzExact(const QString& name, const RunConfig& cfg, const Sp
     if (g_planExactUpTo < cfg.bzWeight)
         problems << QStringLiteral("план обещает точность до %1, просили %2")
                         .arg(g_planExactUpTo).arg(cfg.bzWeight);
+    // Показывается только заказанное: до веса cfg.bzWeight — точно, выше
+    // веса заказа — ничего, даже если план гарантирует больше.
+    const int shownUpTo = std::min(g_planExactUpTo, cfg.bzWeight);
     for (auto it = exact.cbegin(); it != exact.cend(); ++it) {
         const quint64 found = actual.value(it.key(), 0);
-        if (it.key() <= g_planExactUpTo ? found != it.value() : found > it.value()) {
+        const bool bad = it.key() <= shownUpTo     ? found != it.value()
+                       : it.key() <= cfg.bzWeight ? found > it.value()
+                                                  : found != 0;
+        if (bad) {
             ok = false;
             problems << QStringLiteral("вес %1: точно %2, получено %3")
                             .arg(it.key()).arg(it.value()).arg(found);

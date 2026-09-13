@@ -1849,12 +1849,16 @@ void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
     QStringList spectrumCopyPTE;
     SpectrumFloat spectrumCopyPlot;
 
-    quint64 val = 0;
+    // Веса за пределом заказа не показываются вовсе: график остаётся той же
+    // длины, но там нули.
+    const quint64 shownUpTo = displayUpToWeight >= 0
+                                ? std::min<quint64>(quint64(numOfCols), quint64(displayUpToWeight))
+                                : quint64(numOfCols);
     for (quint64 w = 0; w <= numOfCols; ++w) {
-        spectrumCopyPlot.append(float(spectrum[w]));
-        if (spectrum[w] != 0) {
-            val += spectrum[w];
-            spectrumCopyPTE.append(QString::number(w) + " - " + QString::number(spectrum[w]));
+        const quint64 value = w <= shownUpTo ? spectrum[w] : 0;
+        spectrumCopyPlot.append(float(value));
+        if (value != 0) {
+            spectrumCopyPTE.append(QString::number(w) + " - " + QString::number(value));
             spectrumEmpty = false;
         }
     }
@@ -2437,6 +2441,8 @@ void Worker::computeSpectrumImpl()
     activeInfoSets = g.setColumns;
     activeMaxRows  = int(g.maxRows);
     activeTrials   = 0;
+    displayUpToWeight = settings.algorithmType == ComputationSettings::BrouwerZimmermann
+                          ? settings.bzWeight : -1;
     if (g.guaranteedBelow > 0)
         emit planReady(g.setCount, int(g.maxRows), g.guaranteedBelow - 1);
 

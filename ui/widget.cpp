@@ -173,8 +173,8 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
 
     // Гарантия поднятой записи: слои до rOffset пройдены целиком (начатый
     // слой не в счёт), и по ним видно, до какого веса спектр уже точен.
-    exactUpToWeight = -1;
     unseenByWeight.clear();
+    int shownUpTo = -1;   // -1 — весь спектр записи
     if (record.algorithm == ComputationSettings::RandomInfoSets)
         statsPanel->showSearch(record.leonWeight, record.leonTrials, record.leonTrials, 0.0);
     if (record.algorithm == ComputationSettings::ProductCode)
@@ -184,9 +184,11 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
         const int cols = matrix.first().length();
         const int done = int(record.state.rOffset) - 1;
         const std::vector<int> overlaps = InfoSets::overlapsOf(record.infoSets);
-        exactUpToWeight = done < 0 ? -1
-                        : InfoSets::guaranteedBelow(overlaps, done, rows, cols) - 1;
-        statsPanel->showPlan(record.infoSets.size(), record.maxRows, qMax(0, exactUpToWeight));
+        const int exactUpTo = done < 0 ? -1
+                            : InfoSets::guaranteedBelow(overlaps, done, rows, cols) - 1;
+        statsPanel->showPlan(record.infoSets.size(), record.maxRows, qMax(0, exactUpTo));
+        // Как и по ходу расчёта: только до заказанного веса.
+        shownUpTo = record.bzWeight;
     }
 
     // Спектр показывается сырым — ровно так же, как во время расчёта: у
@@ -194,7 +196,7 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
     SpectrumFloat plot;
     SpectrumText  text;
     for (int w = 0; w < record.state.spectrum.size(); ++w) {
-        const quint64 value = record.state.spectrum.at(w);
+        const quint64 value = shownUpTo >= 0 && w > shownUpTo ? 0 : record.state.spectrum.at(w);
         plot.append(float(value));
         if (value != 0)
             text.append(QString::number(w) + " - " + QString::number(value));
@@ -238,9 +240,8 @@ void MainWindow::updateExecuteButton()
 
 // Спектр выводится так же, как его присылает воркер: строками «вес - число».
 //
-// У Брауэра–Циммермана к строкам тяжелее гарантированного веса дописывается
-// «неполно»: слова там найдены, но не все, и число — только нижняя оценка.
-// Без пометки такой спектр читался бы как готовый.
+// Веса, которых не заказывали, сюда не приходят — воркер режет спектр по
+// заказанному весу сам, и помечать на экране нечего.
 void MainWindow::setSpectrumRows(const SpectrumText& lines)
 {
     lastSpectrum = lines;
@@ -251,13 +252,6 @@ void MainWindow::setSpectrumRows(const SpectrumText& lines)
     const int scroll = bar->value();
 
     SpectrumText shown = lines;
-    if (exactUpToWeight >= 0) {
-        for (QString& line : shown) {
-            const int weight = line.section(QStringLiteral(" - "), 0, 0).toInt();
-            if (weight > exactUpToWeight)
-                line += UIStrings::INCOMPLETE_SUFFIX;
-        }
-    }
     // Случайный поиск: у весов, где по словам, пойманным по одному разу,
     // видно недобор, дописывается оценка — сколько ещё не найдено.
     if (!unseenByWeight.isEmpty()) {
@@ -480,11 +474,20 @@ void MainWindow::connectSettingsDialog()
 
     connect( settingsDialog, &SettingsDialog::sendSettingsToWidget,
         this, [this]( const QJsonObject& obj ) {
+            const ComputationSettings::Algorithm before = settings.algorithmType;
             settings = ComputationSettings::fromJson(obj);
             settings.matrix  = ui->matrixPTE->toStringList();
             settings.matrix2 = matrix2PTE->toStringList();
             spectrumPlot->setMaxBars(settings.maxPlotBars);
             updateMatrix2Visibility();
+
+            // Поднятая запись — про свой алгоритм. Сменили алгоритм — кнопка
+            // «Продолжить» больше не про неё: иначе расчёт стартовал бы как
+            // продолжение и тащил бы за собой состояние прежнего показа.
+            if (runState == RunState::Loaded && settings.algorithmType != before) {
+                runState = RunState::Idle;
+                updateExecuteButton();
+            }
             MainWindow::sendSettingsToWorker(settings.toJson());
 
             // Идущему расчёту настройки через очередь не доходят: воркер до
@@ -593,10 +596,6 @@ void MainWindow::startComputation()
     // Настройки к этому моменту уже пришли от диалога по requestSettings.
     statsPanel->showTask(settings);
     statsPanel->clearProgress();
-    // Гарантия придёт от воркера вместе с планом; до неё спектр без пометок.
-    // При продолжении записи прежняя гарантия остаётся: слои уже пройдены.
-    if (!resuming)
-        exactUpToWeight = -1;
     unseenByWeight.clear();
 
     QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection);
@@ -703,10 +702,7 @@ void MainWindow::handleGridTuned(int blocks, int threads)
 
 void MainWindow::handlePlanReady(int sets, int rows, int exactUpToWeight)
 {
-    this->exactUpToWeight = exactUpToWeight;
     statsPanel->showPlan(sets, rows, exactUpToWeight);
-    // Пометки в спектре зависят от гарантии — перерисовать то, что уже есть.
-    setSpectrumRows(lastSpectrum);
 }
 
 void MainWindow::handleSearchEstimate(int weight, quint64 trialsDone, quint64 trialsTotal,
@@ -720,8 +716,6 @@ void MainWindow::handleSearchEstimate(int weight, quint64 trialsDone, quint64 tr
 void MainWindow::handleProductPlan(const QString& text, int exactUpToWeight)
 {
     statsPanel->showText(text);
-    // Спектр произведения показывается только точный, помечать нечего.
-    this->exactUpToWeight = -1;
     Q_UNUSED(exactUpToWeight);
 }
 
