@@ -2582,6 +2582,38 @@ static void testLeonWorker()
         }
     }
 
+    // Подбор сетки включён, устройство GPU: подбор обязан промолчать (у
+    // поиска своё ядро), а итог — попасть в запись автосохранения. Раньше
+    // подбор лез в пустую таблицу биномов, а финал затирал спектр нулями из
+    // d_spectrum, который поиск не трогает.
+    if (g_gpuAvailable) {
+        RunConfig cfg;
+        cfg.matrix     = Reference::golay24_12();
+        cfg.algorithm  = Algorithm::RandomInfoSets;
+        cfg.leonWeight = 12;
+        cfg.device     = ComputeDevice::GPU;
+        cfg.autoTune   = true;
+        clearCheckpoints();
+        const Spectrum found = runWorker(cfg);
+        const QVector<AutosaveEntry> entries = testStore().list();
+        Spectrum saved;
+        if (!entries.isEmpty())
+            for (int w = 0; w < entries.first().record.state.spectrum.size(); ++w)
+                if (entries.first().record.state.spectrum.at(w) != 0)
+                    saved[w] = entries.first().record.state.spectrum.at(w);
+        clearCheckpoints();
+        Spectrum expected;
+        const Spectrum analytic = Reference::analyticGolay24_12();
+        for (auto it = analytic.cbegin(); it != analytic.cend(); ++it)
+            if (it.key() <= cfg.leonWeight)
+                expected[it.key()] = it.value();
+        expectLeon(QStringLiteral("GPU с подбором сетки: спектр найден и записан"),
+                   !found.isEmpty() && found == expected
+                       && !entries.isEmpty() && stripZeros(saved) == found,
+                   QStringLiteral("найдено: %1\n      записано: %2")
+                       .arg(formatSpectrum(found), formatSpectrum(saved)));
+    }
+
     // Одинаковые номера попыток дают одинаковые множества на обоих
     // устройствах: при одной глубине перебора спектры обязаны совпасть
     // побитово — не «оба точны», а именно совпасть, включая веса выше

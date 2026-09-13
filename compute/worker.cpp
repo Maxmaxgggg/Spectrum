@@ -1911,6 +1911,10 @@ void Worker::tuneGrid(CodeGeometry& g)
 {
     if (!settings.autoTuneGrid || !g.useGpu)
         return;
+    // У случайного поиска своё ядро и своя сетка — блок на попытку; подбор
+    // здесь мерил бы чужое ядро, да ещё по пустой таблице биномов.
+    if (settings.algorithmType == ComputationSettings::RandomInfoSets)
+        return;
 
     GridTuneTask task;
     task.numOfCols   = int(g.numOfCols);
@@ -2053,7 +2057,9 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
         return;
     }
 
-    if (g.useGpu) {
+    // Случайный поиск копит спектр на хосте, d_spectrum у него пустой —
+    // забирать оттуда нечего, это затёрло бы найденное нулями.
+    if (g.useGpu && settings.algorithmType != ComputationSettings::RandomInfoSets) {
         CUDA_CALL(cudaDeviceSynchronize());
         CUDA_CALL(cudaMemcpy(h_spectrum.get(), d_spectrum.get(),
                              g.spectrumSize * sizeof(quint64), cudaMemcpyDeviceToHost));
