@@ -1,5 +1,14 @@
 #include "worker.h"
 #include "gridtuner.h"
+
+#ifdef Q_OS_WIN
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <windows.h>
+#else
+    #include <unistd.h>
+#endif
 #include "leonkernel.cuh"
 
 #include <algorithm>
@@ -115,6 +124,22 @@ static inline quint64 reverseLowBits(quint64 v, quint64 k)
 // Теперь складываются готовые значения из BinomTable: она строится по
 // треугольнику Паскаля, без промежуточных произведений, и сама проверяет
 // переполнение.
+// Сколько физической памяти у машины; 0 — не узнать.
+static quint64 physicalMemoryBytes()
+{
+#ifdef Q_OS_WIN
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status))
+        return quint64(status.ullTotalPhys);
+    return 0;
+#else
+    const long pages = sysconf(_SC_PHYS_PAGES);
+    const long size  = sysconf(_SC_PAGE_SIZE);
+    return pages > 0 && size > 0 ? quint64(pages) * quint64(size) : 0;
+#endif
+}
+
 // Кусок слоя, уходящий в один запуск ядра или один параллельный проход.
 //
 // Слой r у Брауэра–Циммермана — это C(k, r) комбинаций на каждое множество,
@@ -1242,9 +1267,12 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     const int depth = int(g.maxRows);
     const int maxWeight = settings.leonWeight;
 
-    // Больше гигабайта под слова не берём: дальше уже не поиск, а полный
-    // перебор, и для него есть другие алгоритмы.
-    constexpr quint64 kTableLimitBytes = 1ULL << 30;
+    // Память под слова — из настроек; по умолчанию половина физической: таблица
+    // растёт удвоением, и в момент роста ей нужно место под старую и новую
+    // копии сразу.
+    const quint64 kTableLimitBytes = settings.leonMemoryMb > 0
+        ? quint64(settings.leonMemoryMb) << 20
+        : std::max<quint64>(256ULL << 20, physicalMemoryBytes() / 2);
 
     // Ранг проверяется один раз здесь: ядро молча даёт пустую попытку, а
     // CPU-путь узнал бы об этом только внутри параллельной области.
@@ -1321,9 +1349,10 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     auto checkMemory = [&]() {
         if (table.bytes() > kTableLimitBytes) {
             publish(true);
-            throw std::runtime_error(
-                "слишком много слов до заданного веса: таблица не помещается в память, "
-                "уменьшите вес");
+            throw std::runtime_error(QStringLiteral(
+                "слишком много слов до заданного веса: таблица (%1 слов) не помещается в "
+                "отведённые %2 МБ — уменьшите вес или поднимите память в настройках поиска")
+                .arg(table.size()).arg(kTableLimitBytes >> 20).toStdString());
         }
     };
 

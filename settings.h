@@ -55,6 +55,8 @@ struct ComputationSettings
     // попыток программа выводит сама.
     int             leonWeight       = 24;
     int             leonMissExponent = 9;
+    // Память под таблицу найденных слов, мегабайты; 0 — половина физической.
+    int             leonMemoryMb     = 0;
 
     double leonMissProbability() const
     {
@@ -109,6 +111,7 @@ struct ComputationSettings
         , bzWeight(other.bzWeight)
         , leonWeight(other.leonWeight)
         , leonMissExponent(other.leonMissExponent)
+        , leonMemoryMb(other.leonMemoryMb)
         , productWeight(other.productWeight)
         , productRank(other.productRank)
         , compDev(other.compDev)
@@ -129,6 +132,7 @@ struct ComputationSettings
         bzWeight = other.bzWeight;
         leonWeight = other.leonWeight;
         leonMissExponent = other.leonMissExponent;
+        leonMemoryMb = other.leonMemoryMb;
         productWeight = other.productWeight;
         productRank = other.productRank;
         compDev = other.compDev;
@@ -179,6 +183,7 @@ struct ComputationSettings
         obj["bzWeight"] = bzWeight;
         obj["leonWeight"] = leonWeight;
         obj["leonMissExponent"] = leonMissExponent;
+        obj["leonMemoryMb"] = leonMemoryMb;
         obj["productWeight"] = productWeight;
         obj["productRank"] = productRank;
         obj["compDev"] = static_cast<int>(compDev);
@@ -234,6 +239,7 @@ struct ComputationSettings
             s.leonWeight = obj["leonWeight"].toInt();
         if (obj["leonMissExponent"].toInt() > 0)
             s.leonMissExponent = obj["leonMissExponent"].toInt();
+        s.leonMemoryMb = obj["leonMemoryMb"].toInt();
         s.productWeight = obj["productWeight"].toInt();
         if (obj["productRank"].toInt() > 0)
             s.productRank = obj["productRank"].toInt();

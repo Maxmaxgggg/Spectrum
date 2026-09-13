@@ -527,6 +527,7 @@ void SettingsDialog::collectSettings()
     settings.bzWeight = ui->bzWeightSPB->value();
     settings.leonWeight = ui->leonWeightSPB->value();
     settings.leonMissExponent = ui->leonMissCBX->currentData().toInt();
+    settings.leonMemoryMb = ui->leonMemorySPB->value();
     settings.productWeight = ui->productWeightSPB->value();
     settings.productRank = ui->productRankSPB->value();
     settings.compDev = static_cast<ComputeDevice>(computeDeviceBGP->checkedId());
@@ -572,6 +573,7 @@ void SettingsDialog::loadSettings() {
         const int at = ui->leonMissCBX->findData(settings.leonMissExponent);
         ui->leonMissCBX->setCurrentIndex(at >= 0 ? at : 2);
     }
+    ui->leonMemorySPB->setValue(settings.leonMemoryMb);
     ui->productWeightSPB->setValue(settings.productWeight);
     ui->productRankSPB->setValue(settings.productRank);
 

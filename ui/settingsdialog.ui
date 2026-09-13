@@ -309,9 +309,52 @@
            </layout>
           </item>
           <item>
+           <layout class="QHBoxLayout" name="leonMemoryLayout">
+            <item>
+             <widget class="QLabel" name="leonMemoryLBL">
+              <property name="text">
+               <string>Память под найденные слова (0 — половина ОЗУ): </string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="leonMemorySpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="leonMemorySPB">
+              <property name="suffix">
+               <string> МБ</string>
+              </property>
+              <property name="minimum">
+               <number>0</number>
+              </property>
+              <property name="maximum">
+               <number>1048576</number>
+              </property>
+              <property name="singleStep">
+               <number>1024</number>
+              </property>
+              <property name="value">
+               <number>0</number>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
            <widget class="QLabel" name="leonHintLBL">
             <property name="text">
-             <string>Слова до этого веса будут найдены все, если не случится события такой вероятности; тяжелее — не собираются. Гарантии нет, зато на порядки глубже и быстрее Брауэра–Циммермана. Предел — память под найденные слова.</string>
+             <string>Слова до этого веса будут найдены все, если не случится события такой вероятности; тяжелее — не собираются. Гарантии нет, зато на порядки глубже и быстрее Брауэра–Циммермана. Предел — память под найденные слова: около 60 байт на слово длины 336, 260 — длины 2048.</string>
             </property>
             <property name="wordWrap">
              <bool>true</bool>
