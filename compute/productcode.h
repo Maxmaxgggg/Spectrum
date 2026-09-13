@@ -63,12 +63,17 @@ struct Component
     const quint64* word(size_t i) const { return words.data() + i * size_t(wordsPerRow); }
 };
 
+// Ход работы: сделано/всего в единицах текущего шага. Зовётся из потока,
+// вызвавшего функцию, не чаще нескольких раз в секунду.
+using Progress = std::function<void(quint64 done, quint64 total)>;
+
 // Полный перебор компоненты кодом Грея: точный спектр и все ненулевые слова
 // веса не больше wordsUpTo. Годится при k до bruteForceMaxK.
 // cancelled — опрос отмены; при отмене возвращает hasWords = false.
 extern int bruteForceMaxK;   // по умолчанию 28; тесты меняют
 Component bruteForce(const QStringList& rows, int wordsUpTo,
-                     const std::function<bool()>& cancelled = {});
+                     const std::function<bool()>& cancelled = {},
+                     const Progress& progress = {});
 
 // Спектр компоненты в объект без списка слов (для больших k, где спектр
 // посчитан другим способом).
@@ -105,12 +110,14 @@ std::vector<int> unpackProfile(const ProfileKey& key, int cellCount);
 // workLimit — потолок числа рассмотренных кандидатов, при превышении
 // возвращает false (профили неполные — использовать нельзя).
 bool profiles(const Component& c, int r, int unionLimit, quint64 workLimit,
-              ProfileMap& out, bool ordered, const std::function<bool()>& cancelled = {});
+              ProfileMap& out, bool ordered, const std::function<bool()>& cancelled = {},
+              const Progress& progress = {});
 
 // Слова ранга r веса до maxWeight: свёртка профилей двух компонент. p1 —
 // по множествам, p2 — по упорядоченным наборам; тогда каждое слово получено
 // |GL(r, 2)| / r! раз, на это и делится.
-std::vector<quint64> rankR(const ProfileMap& p1, const ProfileMap& p2, int r, quint64 maxWeight);
+std::vector<quint64> rankR(const ProfileMap& p1, const ProfileMap& p2, int r, quint64 maxWeight,
+                           const Progress& progress = {});
 
 // |GL(r, 2)| = Π_{i<r} (2^r - 2^i).
 quint64 generalLinearOrder(int r);

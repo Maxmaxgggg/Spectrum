@@ -202,6 +202,19 @@ void Worker::reportEstimate()
                                 progress.totalOps());
 }
 
+// Ход одного шага расчёта произведения: общий счётчик подменяется на шаг,
+// оценка времени и полоса считаются от его начала.
+void Worker::reportStageProgress(quint64 done, quint64 total)
+{
+    progress.setTotalOps(std::max<quint64>(1, total));
+    progress.setDoneOps(done);
+    const ProgressTracker::Due due = progress.due();
+    if (due.estimate)
+        reportEstimate();
+    if (due.bar)
+        reportProgressBar();
+}
+
 void Worker::reportProgressBar()
 {
     if (probeMode)
@@ -1576,10 +1589,15 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
 
     if (k <= Product::bruteForceMaxK) {
         emit productPlan(tr("%1: полный перебор (2^%2 слов)…").arg(label).arg(k), -1);
+        progress.begin(1ULL << k, 0, 0);
         Product::Component c = Product::bruteForce(rows, std::min(weightUpTo, n),
-                                                   [this]() { return cancelled.load() != 0; });
+                                                   [this]() { return cancelled.load() != 0; },
+                                                   [this](quint64 done, quint64 total) {
+                                                       reportStageProgress(done, total);
+                                                   });
         if (cancelled.load())
             throw std::runtime_error("расчёт отменён");
+        emit updateInfoPBR(100);
         return c;
     }
 
@@ -1711,10 +1729,18 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
         return int(bound);
     };
 
-    // Шаг 3. Ранги.
-    emit productPlan(tr("свёртка по рангам…"), -1);
+    // Шаг 3. Ранги. Каждый шаг — со своим ходом и оценкой времени: у
+    // перебора наборов единица работы — первое слово набора, у свёртки —
+    // профиль первой компоненты.
     std::vector<quint64> total = Product::rankOne(c1, c2, target);
     QStringList notes;
+    auto cancelledPoll = [this]() { return cancelled.load() != 0; };
+    auto onProgress    = [this](quint64 done, quint64 all) { reportStageProgress(done, all); };
+    auto lightWords    = [](const Product::Component& c, int limit) {
+        quint64 count = 0;
+        for (int w : c.weights) if (w <= limit) ++count;
+        return count;
+    };
     for (int r = 2; r <= maxRank; ++r) {
         if (!c1.hasWords || !c2.hasWords) {
             notes << tr("ранг %1 и выше не считался: у большой компоненты нет списка слов").arg(r);
@@ -1722,19 +1748,33 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
         }
         Product::ProfileMap p1, p2;
         constexpr quint64 kWorkLimit = 20ULL << 30;
-        auto cancelledPoll = [this]() { return cancelled.load() != 0; };
-        const bool ok1 = Product::profiles(c1, r, limit1, kWorkLimit, p1, false, cancelledPoll);
-        const bool ok2 = ok1 && Product::profiles(c2, r, limit2, kWorkLimit, p2, true, cancelledPoll);
+
+        const quint64 words1 = lightWords(c1, limit1);
+        emit productPlan(tr("ранг %1: наборы компоненты 1 (%2 слов веса до %3)…")
+                             .arg(r).arg(QString::number(words1)).arg(limit1), -1);
+        progress.begin(std::max<quint64>(1, words1), 0, 0);
+        const bool ok1 = Product::profiles(c1, r, limit1, kWorkLimit, p1, false, cancelledPoll, onProgress);
+
+        const quint64 words2 = lightWords(c2, limit2);
+        emit productPlan(tr("ранг %1: наборы компоненты 2 (%2 слов веса до %3)…")
+                             .arg(r).arg(QString::number(words2)).arg(limit2), -1);
+        progress.begin(std::max<quint64>(1, words2), 0, 0);
+        const bool ok2 = ok1 && Product::profiles(c2, r, limit2, kWorkLimit, p2, true, cancelledPoll, onProgress);
         if (cancelled.load())
             throw std::runtime_error("расчёт отменён");
         if (!ok1 || !ok2) {
             notes << tr("ранг %1 и выше не считался: слишком много наборов").arg(r);
             break;
         }
-        const std::vector<quint64> part = Product::rankR(p1, p2, r, target);
+
+        emit productPlan(tr("ранг %1: свёртка профилей (%2 x %3)…")
+                             .arg(r).arg(QString::number(p1.size())).arg(QString::number(p2.size())), -1);
+        progress.begin(std::max<quint64>(1, p1.size()), 0, 0);
+        const std::vector<quint64> part = Product::rankR(p1, p2, r, target, onProgress);
         for (size_t w = 0; w < total.size(); ++w)
             total[w] += part[w];
         ranksDone = r;
+        emit updateInfoPBR(100);
     }
 
     productExactUpTo = exactFor(ranksDone);

@@ -66,7 +66,7 @@ void cellsOf(const std::vector<const quint64*>& tuple, int words, std::vector<in
 // --------------------------------------------------------------- перебор
 
 Component bruteForce(const QStringList& rows, int wordsUpTo,
-                     const std::function<bool()>& cancelled)
+                     const std::function<bool()>& cancelled, const Progress& progress)
 {
     Component c;
     c.k = rows.size();
@@ -111,8 +111,13 @@ Component bruteForce(const QStringList& rows, int wordsUpTo,
                 mine.insert(mine.end(), word.begin(), word.end());
                 myW.push_back(weight);
             }
-            if ((idx & 0xFFFF) == 0xFFFF && cancelled && cancelled())
-                stop.store(true);
+            if ((idx & 0xFFFF) == 0xFFFF) {
+                if (cancelled && cancelled())
+                    stop.store(true);
+                // Ход показывает главный поток по своей доле: доли равные.
+                if (tid == 0 && progress && (idx & 0xFFFFF) == 0xFFFFF)
+                    progress(idx - start, end - start);
+            }
             if (stop.load())
                 break;
             // Следующий код Грея отличается одним битом — номером младшей
@@ -329,7 +334,8 @@ struct ProfileWalker
 } // namespace
 
 bool profiles(const Component& c, int r, int unionLimit, quint64 workLimit,
-              ProfileMap& out, bool ordered, const std::function<bool()>& cancelled)
+              ProfileMap& out, bool ordered, const std::function<bool()>& cancelled,
+              const Progress& progress)
 {
     out.clear();
     // Слов тяжелее n не бывает: предел выше длины кода — это «все слова».
@@ -362,6 +368,7 @@ bool profiles(const Component& c, int r, int unionLimit, quint64 workLimit,
 
     std::atomic<quint64> work{ 0 };
     std::atomic<bool>    over{ false };
+    std::atomic<quint64> firstDone{ 0 };   // первых слов разобрано — для хода
     const int threads = std::max(1, omp_get_max_threads());
     std::vector<ProfileMap> maps(static_cast<size_t>(threads));
 
@@ -379,14 +386,22 @@ bool profiles(const Component& c, int r, int unionLimit, quint64 workLimit,
         const long long budget    = (1LL << (r - 1)) * unionLimit;
         const long long maxWeight = budget - ((1LL << r) - 2) * c.d;
 
+        const int tid = omp_get_thread_num();
+        quint64 mine = 0;
+
         #pragma omp for schedule(dynamic, 1)
         for (long long ci = 0; ci < (long long)candidates.size(); ++ci) {
+            // Ход: главный поток раз в несколько своих слов смотрит общий счёт.
+            if (tid == 0 && progress && (++mine & 15) == 0)
+                progress(firstDone.load(std::memory_order_relaxed), candidates.size());
             if (over.load(std::memory_order_relaxed) || !walker.tick())
                 continue;
             const size_t idx = candidates[size_t(ci)];
             const int weight = c.weights[idx];
-            if (weight > maxWeight)
+            if (weight > maxWeight) {
+                firstDone.fetch_add(1, std::memory_order_relaxed);
                 continue;
+            }
             const quint64* a = c.word(idx);
             std::copy(a, a + words, walker.span.data());
             walker.spanWeights[0] = weight;
@@ -394,8 +409,9 @@ bool profiles(const Component& c, int r, int unionLimit, quint64 workLimit,
             walker.spanSum = weight;
             walker.tuple.assign(1, a);
             walker.go(size_t(ci) + 1, 1);
+            firstDone.fetch_add(1, std::memory_order_relaxed);
         }
-        maps[size_t(omp_get_thread_num())] = std::move(walker.map);
+        maps[size_t(tid)] = std::move(walker.map);
     }
     if (over.load()) {
         out.clear();
@@ -427,7 +443,8 @@ quint64 rankWeightBound(int d1, int d2, int r)
     return std::max(quint64(d2) * s1, quint64(d1) * s2);
 }
 
-std::vector<quint64> rankR(const ProfileMap& p1, const ProfileMap& p2, int r, quint64 maxWeight)
+std::vector<quint64> rankR(const ProfileMap& p1, const ProfileMap& p2, int r, quint64 maxWeight,
+                           const Progress& progress)
 {
     std::vector<quint64> result(size_t(maxWeight) + 1, 0ULL);
     if (p1.empty() || p2.empty())
@@ -462,9 +479,13 @@ std::vector<quint64> rankR(const ProfileMap& p1, const ProfileMap& p2, int r, qu
     const int threads = std::max(1, omp_get_max_threads());
     std::vector<std::vector<quint64>> partial(size_t(threads), std::vector<quint64>(size_t(maxWeight) + 1, 0ULL));
 
+    std::atomic<quint64> done{ 0 };
     #pragma omp parallel for schedule(dynamic, 64) num_threads(threads)
     for (long long li = 0; li < (long long)left.size(); ++li) {
         std::vector<quint64>& mine = partial[size_t(omp_get_thread_num())];
+        const quint64 seen = done.fetch_add(1, std::memory_order_relaxed);
+        if (omp_get_thread_num() == 0 && progress && (seen & 63) == 0)
+            progress(seen, left.size());
         const std::vector<int>& p = left[size_t(li)].first;
         const quint64 m1 = left[size_t(li)].second;
         for (const Right& rt : right) {

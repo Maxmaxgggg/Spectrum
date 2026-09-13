@@ -256,6 +256,8 @@ private:
     /* Отчёт о ходе расчёта — общий для всех шести вычислительных путей */
     void    reportEstimate();
     void    reportProgressBar();
+    // Ход шага, у которого своя единица работы (код произведения).
+    void    reportStageProgress(quint64 done, quint64 total);
 
     // Ждёт снятия паузы. Возвращает false, если расчёт отменили.
     bool    waitWhilePaused();
