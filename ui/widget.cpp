@@ -171,25 +171,10 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
                                                   : int(ComputationSettings::BrouwerZimmermann))
                                            : 0);
 
-    // Гарантия поднятой записи: слои до rOffset пройдены целиком (начатый
-    // слой не в счёт), и по ним видно, до какого веса спектр уже точен.
     unseenByWeight.clear();
-    int shownUpTo = -1;   // -1 — весь спектр записи
-    if (record.algorithm == ComputationSettings::RandomInfoSets)
-        statsPanel->showSearch(record.leonWeight, record.leonTrials, record.leonTrials, 0.0);
-    if (record.algorithm == ComputationSettings::ProductCode)
-        statsPanel->showText(tr("код произведения, точно до веса %1").arg(record.productExactUpTo));
-    if (record.algorithm == ComputationSettings::BrouwerZimmermann && !record.infoSets.isEmpty()) {
-        const int rows = matrix.size();
-        const int cols = matrix.first().length();
-        const int done = int(record.state.rOffset) - 1;
-        const std::vector<int> overlaps = InfoSets::overlapsOf(record.infoSets);
-        const int exactUpTo = done < 0 ? -1
-                            : InfoSets::guaranteedBelow(overlaps, done, rows, cols) - 1;
-        statsPanel->showPlan(record.infoSets.size(), record.maxRows, qMax(0, exactUpTo));
-        // Как и по ходу расчёта: только до заказанного веса.
-        shownUpTo = record.bzWeight;
-    }
+    // Как и по ходу расчёта: Брауэр–Циммерман — только до заказанного веса.
+    const int shownUpTo = record.algorithm == ComputationSettings::BrouwerZimmermann
+                              ? record.bzWeight : -1;   // -1 — весь спектр записи
 
     // Спектр показывается сырым — ровно так же, как во время расчёта: у
     // дуального кода преобразование Мак-Вильямс делается только в конце.
@@ -702,20 +687,23 @@ void MainWindow::handleGridTuned(int blocks, int threads)
 
 void MainWindow::handlePlanReady(int sets, int rows, int exactUpToWeight)
 {
-    statsPanel->showPlan(sets, rows, exactUpToWeight);
+    // Строки «Гарантия» в панели больше нет: план виден в записи расчёта и
+    // в тестовом харнессе, на экране от него просили только вес.
+    Q_UNUSED(sets); Q_UNUSED(rows); Q_UNUSED(exactUpToWeight);
 }
 
 void MainWindow::handleSearchEstimate(int weight, quint64 trialsDone, quint64 trialsTotal,
                                       double missProbability, SpectrumFloat unseenByWeight)
 {
-    statsPanel->showSearch(weight, trialsDone, trialsTotal, missProbability);
+    Q_UNUSED(weight); Q_UNUSED(trialsDone); Q_UNUSED(trialsTotal); Q_UNUSED(missProbability);
     this->unseenByWeight = unseenByWeight;
     setSpectrumRows(lastSpectrum);
 }
 
 void MainWindow::handleProductPlan(const QString& text, int exactUpToWeight)
 {
-    statsPanel->showText(text);
+    // Что сейчас считается — в строке состояния: другой строки под это нет.
+    statsPanel->showState(text);
     Q_UNUSED(exactUpToWeight);
 }
 

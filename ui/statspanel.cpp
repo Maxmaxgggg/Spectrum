@@ -48,7 +48,6 @@ StatsPanel::StatsPanel(QWidget* parent)
     separator();
     deviceValue    = addRow(form, tr("Устройство:"));
     algorithmValue = addRow(form, tr("Алгоритм:"));
-    planValue      = addRow(form, tr("Гарантия:"));
     separator();
     elapsedValue   = addRow(form, tr("Прошло:"));
     remainingValue = addRow(form, tr("Осталось:"));
@@ -60,7 +59,6 @@ StatsPanel::StatsPanel(QWidget* parent)
     clearProgress();
     deviceValue->setText(kDash);
     algorithmValue->setText(kDash);
-    planValue->setText(kDash);
 }
 
 QLabel* StatsPanel::addRow(QFormLayout* form, const QString& caption)
@@ -94,49 +92,20 @@ void StatsPanel::showTask(const ComputationSettings& settings)
                               ? tr("полный перебор")
                               : tr("частичный, до %1 строк").arg(settings.maxRows);
     if (settings.algorithmType == ComputationSettings::BrouwerZimmermann)
-        enumeration = tr("точно до веса %1").arg(settings.bzWeight);
+        enumeration = tr("компоненты весом до %1").arg(settings.bzWeight);
     if (settings.algorithmType == ComputationSettings::RandomInfoSets)
-        enumeration = tr("до веса %1, пропуск 10^-%2")
+        enumeration = tr("компоненты весом до %1, пропуск 10^-%2")
                           .arg(settings.leonWeight).arg(settings.leonMissExponent);
     if (settings.algorithmType == ComputationSettings::ProductCode) {
         enumeration = settings.productWeight > 0
-                          ? tr("до веса %1, ранги до %2").arg(settings.productWeight).arg(settings.productRank)
-                          : tr("ранги до %1, до границы следующего").arg(settings.productRank);
+                          ? tr("компоненты весом до %1, ранги до %2").arg(settings.productWeight).arg(settings.productRank)
+                          : tr("ранги до %1").arg(settings.productRank);
         enumeration += settings.productAlgorithm == int(ComputationSettings::RandomInfoSets)
-                          ? tr("; компоненты — случайным поиском")
-                          : tr("; компоненты — Брауэром–Циммерманом");
+                          ? tr("; компоненты кода — случайным поиском")
+                          : tr("; компоненты кода — Брауэром–Циммерманом");
     }
     algorithmValue->setText(algorithmName(settings.algorithmType)
                             + QStringLiteral(", ") + enumeration);
-    // План приходит позже, отдельным сигналом; до него — прочерк.
-    planValue->setText(kDash);
-}
-
-void StatsPanel::showPlan(int sets, int rows, int exactUpToWeight)
-{
-    planValue->setText(tr("веса до %1 точно; множеств %2, до %3 строк")
-                           .arg(exactUpToWeight).arg(sets).arg(rows));
-}
-
-void StatsPanel::showText(const QString& text)
-{
-    planValue->setText(text);
-}
-
-void StatsPanel::showSearch(int weight, quint64 trialsDone, quint64 trialsTotal,
-                            double missProbability)
-{
-    // Вероятность в виде «10^-N», а не «1e-9»: так же, как задавалась.
-    QString miss;
-    if (missProbability >= 0.5)
-        miss = tr("ещё далеко");
-    else if (missProbability <= 0.0)
-        miss = tr("пропуск ~0");
-    else
-        miss = tr("пропуск ~10^%1").arg(std::floor(std::log10(missProbability)), 0, 'f', 0);
-    planValue->setText(tr("до веса %1: %2; попыток %3 из %4")
-                           .arg(weight).arg(miss)
-                           .arg(Format::count(trialsDone)).arg(Format::count(trialsTotal)));
 }
 
 void StatsPanel::showGrid(int blocks, int threads)
