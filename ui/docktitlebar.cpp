@@ -1,8 +1,10 @@
 #include "docktitlebar.h"
 
 #include <QDockWidget>
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QMainWindow>
+#include <QTabBar>
 #include <QStyle>
 #include <QStyleOptionDockWidget>
 #include <QStylePainter>
@@ -47,6 +49,38 @@ DockTitleBar::DockTitleBar(QDockWidget* owner)
     connect(dock, &QDockWidget::visibilityChanged,   this, [this](bool) { update(); });
 
     updateButtons();
+}
+
+void DockTitleBar::setTabBar(QTabBar* bar)
+{
+    tabBar = bar;
+    bar->setParent(this);
+    // Только сами вкладки: подложку и рамку рисует заголовок.
+    bar->setDocumentMode(true);
+    bar->setDrawBase(false);
+    bar->setExpanding(false);
+    auto* const row = static_cast<QHBoxLayout*>(layout());
+    row->insertWidget(0, bar, 0, Qt::AlignVCenter);
+    // Полосу показывают и прячут снаружи — высота и рисование меняются.
+    bar->installEventFilter(this);
+    updateGeometry();
+    update();
+}
+
+bool DockTitleBar::showsTabs() const
+{
+    return tabBar && !tabBar->isHidden();
+}
+
+bool DockTitleBar::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == tabBar
+        && (event->type() == QEvent::Show || event->type() == QEvent::Hide
+            || event->type() == QEvent::Resize)) {
+        updateGeometry();
+        update();
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 int DockTitleBar::buttonExtent() const
@@ -101,9 +135,10 @@ void DockTitleBar::initStyleOption(QStyleOptionDockWidget* option) const
     }
     reserved += 2 * style()->pixelMetric(QStyle::PM_DockWidgetTitleBarButtonMargin, nullptr, this);
 
-    option->title = tabified() ? QString()
-                               : fontMetrics().elidedText(dock->windowTitle(), Qt::ElideRight,
-                                                          qMax(0, width() - reserved));
+    option->title = tabified() || showsTabs()
+                        ? QString()
+                        : fontMetrics().elidedText(dock->windowTitle(), Qt::ElideRight,
+                                                   qMax(0, width() - reserved));
 }
 
 bool DockTitleBar::tabified() const
@@ -133,12 +168,17 @@ void DockTitleBar::paintEvent(QPaintEvent* event)
 QSize DockTitleBar::sizeHint() const
 {
     const int margin = style()->pixelMetric(QStyle::PM_DockWidgetTitleBarButtonMargin, nullptr, this);
-    const int height = qMax(buttonExtent(), fontMetrics().height()) + 2 * margin;
+    int content = fontMetrics().height();
+    int text    = fontMetrics().horizontalAdvance(dock->windowTitle());
+    if (showsTabs()) {
+        content = qMax(content, tabBar->sizeHint().height());
+        text    = tabBar->sizeHint().width();
+    }
+    const int height = qMax(buttonExtent(), content) + 2 * margin;
 
-    // Ширина берётся по названию с местом под кнопки; растягивать заголовок
-    // будет раскладка панели.
-    const int width = fontMetrics().horizontalAdvance(dock->windowTitle())
-                    + 2 * buttonExtent() + 4 * margin;
+    // Ширина берётся по названию (или вкладкам) с местом под кнопки;
+    // растягивать заголовок будет раскладка панели.
+    const int width = text + 2 * buttonExtent() + 4 * margin;
     return QSize(width, height);
 }
 

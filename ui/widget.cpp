@@ -3,8 +3,8 @@
 #include "filterplaintextedit.h"
 #include "tabswapbutton.h"
 
+#include <QStackedWidget>
 #include <QTabBar>
-#include <QTabWidget>
 #include "docktitlebar.h"
 #include "fonticons.h"
 
@@ -278,19 +278,23 @@ void MainWindow::setupDocks()
     matrix2PTE->setLineWrapMode(ui->matrixPTE->lineWrapMode());
     connect(matrix2PTE, &FilterPlainTextEdit::textChanged, this, [this]() { updateMatrixTitles(); });
 
-    matrixTabs = new QTabWidget(this);
-    // Без рамки вокруг страницы: редактор должен заполнять панель, как и
-    // раньше, а полоса вкладок при одной вкладке прячется.
-    matrixTabs->setDocumentMode(true);
-    matrixTabs->addTab(ui->matrixPTE, tr("Матрица 1"));
-    matrixTabs->addTab(matrix2PTE,    tr("Матрица 2"));
-    matrixTabs->setTabToolTip(1, UIStrings::MATRIX2_TOOLTIP);
-    matrixDock   = makeDock(matrixTabs, tr("Матрица"),
+    matrixPages = new QStackedWidget(this);
+    matrixPages->addWidget(ui->matrixPTE);
+    matrixPages->addWidget(matrix2PTE);
+    matrixDock   = makeDock(matrixPages, tr("Матрица"),
                             UIStrings::MATRIX_TOOLTIP,   "matrixDock");
+
+    // Вкладки — в заголовке панели, в одной строке с её кнопками.
+    matrixTabBar = new QTabBar;
+    matrixTabBar->addTab(tr("Матрица 1"));
+    matrixTabBar->addTab(tr("Матрица 2"));
+    matrixTabBar->setTabToolTip(1, UIStrings::MATRIX2_TOOLTIP);
+    connect(matrixTabBar, &QTabBar::currentChanged, matrixPages, &QStackedWidget::setCurrentIndex);
+    static_cast<DockTitleBar*>(matrixDock->titleBarWidget())->setTabBar(matrixTabBar);
 
     // На стыке вкладок — кнопка «поменять местами»: компоненты произведения
     // легко загрузить не в те вкладки. На спектр порядок не влияет.
-    auto* const swap = new TabSwapButton(matrixTabs->tabBar(), tr("Поменять матрицы местами"));
+    auto* const swap = new TabSwapButton(matrixTabBar, tr("Поменять матрицы местами"));
     connect(swap, &TabSwapButton::clicked, this, [this]() {
         const QString first  = ui->matrixPTE->toPlainText();
         const QString second = matrix2PTE->toPlainText();
@@ -348,13 +352,15 @@ void MainWindow::setupDocks()
 
 void MainWindow::updateMatrixTabs()
 {
-    if (!matrixTabs)
+    if (!matrixTabBar)
         return;
     const bool product = settings.algorithmType == ComputationSettings::ProductCode;
-    matrixTabs->setTabVisible(1, product);
-    matrixTabs->tabBar()->setVisible(product);
-    if (!product)
-        matrixTabs->setCurrentIndex(0);
+    matrixTabBar->setTabVisible(1, product);
+    matrixTabBar->setVisible(product);
+    if (!product) {
+        matrixTabBar->setCurrentIndex(0);
+        matrixPages->setCurrentIndex(0);
+    }
     updateMatrixTitles();
 }
 
@@ -765,7 +771,7 @@ void MainWindow::handleMatrixChanged()
 // «Матрицы», а размеры — на вкладках.
 void MainWindow::updateMatrixTitles()
 {
-    if (!matrixDock || !matrixTabs)
+    if (!matrixDock || !matrixTabBar)
         return;
     auto size = [](const Matrix& rows) {
         int maxLen = 0;
@@ -775,8 +781,8 @@ void MainWindow::updateMatrixTitles()
     const bool product = settings.algorithmType == ComputationSettings::ProductCode;
     matrixDock->setWindowTitle(product ? tr("Матрицы")
                                        : tr("Матрица") + size(ui->matrixPTE->toStringList()));
-    matrixTabs->setTabText(0, tr("Матрица 1") + size(ui->matrixPTE->toStringList()));
-    matrixTabs->setTabText(1, tr("Матрица 2") + size(matrix2PTE->toStringList()));
+    matrixTabBar->setTabText(0, tr("Матрица 1") + size(ui->matrixPTE->toStringList()));
+    matrixTabBar->setTabText(1, tr("Матрица 2") + size(matrix2PTE->toStringList()));
 }
 void MainWindow::handleError(const QString& message)
 {

@@ -80,11 +80,13 @@ private:
 
     Ui::MainWindow *ui;
     QDockWidget    *matrixDock       = nullptr;
-    // Обе матрицы — вкладками в одной панели. У произвольного кода вкладка
-    // одна и полосы вкладок нет; у кода произведения — две, «Матрица 1» и
+    // Обе матрицы — страницами одной панели; вкладки живут в заголовке
+    // панели, в одной строке с её кнопками. У произвольного кода страница
+    // одна и вкладок не видно; у кода произведения — две, «Матрица 1» и
     // «Матрица 2», и на стыке вкладок кнопка «поменять местами».
-    class QTabWidget*          matrixTabs = nullptr;
-    class FilterPlainTextEdit* matrix2PTE = nullptr;
+    class QTabBar*             matrixTabBar = nullptr;
+    class QStackedWidget*      matrixPages  = nullptr;
+    class FilterPlainTextEdit* matrix2PTE   = nullptr;
     // Показать или спрятать вторую вкладку по алгоритму.
     void updateMatrixTabs();
     // Заголовок панели и вкладок: имя и размер.

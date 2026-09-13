@@ -4,6 +4,7 @@
 
 class QDockWidget;
 class QStyleOptionDockWidget;
+class QTabBar;
 class QToolButton;
 
 // Полоса заголовка панели.
@@ -31,11 +32,17 @@ class DockTitleBar : public QWidget
 public:
     explicit DockTitleBar(QDockWidget* dock);
 
+    // Полоса вкладок вместо названия: панель с несколькими страницами держит
+    // вкладки прямо в заголовке, в одной строке с кнопками. Пока полоса
+    // спрятана, рисуется название, как обычно.
+    void setTabBar(QTabBar* bar);
+
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void initStyleOption(QStyleOptionDockWidget* option) const;
@@ -47,7 +54,11 @@ private:
     // заголовке его не дублируем — остаются одни кнопки.
     bool tabified() const;
 
+    // Название не рисуется, когда его заменяет полоса вкладок.
+    bool showsTabs() const;
+
     QDockWidget* dock  = nullptr;
     QToolButton* floatButton = nullptr;
     QToolButton* closeButton = nullptr;
+    QTabBar*     tabBar      = nullptr;
 };
