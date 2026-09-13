@@ -32,6 +32,7 @@
 #include "ui/axisticks.h"
 #include "ui/updateintervals.h"
 #include "bz.h"
+#include "leonkernel.cuh"
 
 #ifdef Q_OS_WIN
     #define NOMINMAX
@@ -2617,23 +2618,48 @@ static void testLeonWorker()
     // Одинаковые номера попыток дают одинаковые множества на обоих
     // устройствах: при одной глубине перебора спектры обязаны совпасть
     // побитово — не «оба точны», а именно совпасть, включая веса выше
-    // предела точности.
+    // предела точности. Три матрицы: в разделяемой памяти, в глобальной
+    // из-за длины строки (11 слов) и в глобальной из-за числа строк.
     if (g_gpuAvailable) {
-        const QStringList rows = BZ::scramble(BZ::systematicRandom(30, 90, 17), 3);
-        const int weight = 30;
-        // Глубина у устройств может разойтись из-за разной цены Гаусса;
-        // сравнивать имеет смысл только при одинаковой.
-        const Leon::Plan cpuPlan = Leon::plan(90, 30, weight, 1e-12, false);
-        const Leon::Plan gpuPlan = Leon::plan(90, 30, weight, 1e-12, true);
-        if (cpuPlan.rows != gpuPlan.rows) {
-            out << QStringLiteral("  ПРОПУСК  CPU и GPU слово в слово: разная глубина (%1 и %2)")
-                       .arg(cpuPlan.rows).arg(gpuPlan.rows) << Qt::endl;
-        }
-        else {
+        // Разреженный код: единичная матрица плюс несколько единиц в
+        // проверочной части. У случайного кода такой длины лёгких слов нет
+        // вовсе, а тяжёлых — миллиарды; здесь слова веса до 8 есть, их
+        // сотни, и они ловятся.
+        auto sparseCode = [](int rows, int cols, int onesPerRow, quint64 seed) {
+            quint64 state = seed | 1ULL;
+            auto next = [&state]() { state ^= state << 13; state ^= state >> 7; state ^= state << 17; return state; };
+            QStringList out;
+            for (int r = 0; r < rows; ++r) {
+                QString row(cols, QLatin1Char('0'));
+                row[r] = QLatin1Char('1');
+                for (int i = 0; i < onesPerRow; ++i)
+                    row[rows + int(next() % quint64(cols - rows))] = QLatin1Char('1');
+                out << row;
+            }
+            return BZ::scramble(out, seed + 1);
+        };
+        struct Twin { QString name; QStringList rows; int weight; };
+        const QVector<Twin> twins = {
+            { QStringLiteral("[90,30] в разделяемой"),      BZ::scramble(BZ::systematicRandom(30, 90, 17), 3), 30 },
+            { QStringLiteral("[700,40] строка в 11 слов"),  sparseCode(40, 700, 5, 23),                         12 },
+            { QStringLiteral("[600,300] строка в 10 слов"), sparseCode(300, 600, 5, 29),                         8 },
+        };
+        for (const Twin& t : twins) {
+            const int n = t.rows.first().length(), k = t.rows.size();
+            const bool shared = leonFitsShared(k, n, (n + 63) / 64);
+            // Глубина у устройств может разойтись из-за разной цены Гаусса;
+            // сравнивать имеет смысл только при одинаковой.
+            const Leon::Plan cpuPlan = Leon::plan(n, k, t.weight, 1e-12, false);
+            const Leon::Plan gpuPlan = Leon::plan(n, k, t.weight, 1e-12, true);
+            if (cpuPlan.rows != gpuPlan.rows) {
+                out << QStringLiteral("  ПРОПУСК  %1 CPU и GPU слово в слово: разная глубина (%2 и %3)")
+                           .arg(t.name).arg(cpuPlan.rows).arg(gpuPlan.rows) << Qt::endl;
+                continue;
+            }
             RunConfig cfg;
-            cfg.matrix     = rows;
+            cfg.matrix     = t.rows;
             cfg.algorithm  = Algorithm::RandomInfoSets;
-            cfg.leonWeight = weight;
+            cfg.leonWeight = t.weight;
             cfg.device     = ComputeDevice::CPU;
             clearCheckpoints();
             const Spectrum cpu = runWorker(cfg);
@@ -2643,8 +2669,10 @@ static void testLeonWorker()
             const Spectrum gpu = runWorker(cfg);
             const quint64 gpuTrials = g_searchDone;
             clearCheckpoints();
-            expectLeon(QStringLiteral("[90,30] CPU и GPU слово в слово: попыток %1 и %2")
-                           .arg(cpuTrials).arg(gpuTrials),
+            expectLeon(QStringLiteral("%1 (%2) CPU и GPU слово в слово: попыток %3 и %4, весов %5")
+                           .arg(t.name)
+                           .arg(shared ? QStringLiteral("shared") : QStringLiteral("global"))
+                           .arg(cpuTrials).arg(gpuTrials).arg(cpu.size()),
                        !cpu.isEmpty() && cpu == gpu && cpuTrials == gpuTrials,
                        QStringLiteral("CPU: %1\n      GPU: %2").arg(formatSpectrum(cpu), formatSpectrum(gpu)));
         }

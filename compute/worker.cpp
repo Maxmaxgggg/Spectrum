@@ -1359,6 +1359,15 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     constexpr quint64 kCapacityMax = 8ULL << 20;   // слов в буфере, потолок
     quint64           capacity     = 1ULL << 20;
 
+    // Матрица, не влезшая в разделяемую память, у каждого блока своя — в
+    // рабочем буфере. Буфер на слот не больше 128 МБ, им и ограничена пачка.
+    const bool   global       = !leonFitsShared(rows, cols, words);
+    const size_t scratchWords = global ? size_t(rows) * size_t(leonPaddedWords(words)) : 0;
+    quint64      blocksMax    = kBatchMax;
+    if (global)
+        blocksMax = std::max<quint64>(1, std::min<quint64>(kBatchMax,
+                        (128ULL << 20) / (scratchWords * sizeof(quint64))));
+
     DeviceBuffer<quint64> d_mat;
     d_mat.allocate(size_t(rows) * words);
     CUDA_CALL(cudaMemcpy(d_mat.get(), h_matrix.get(), size_t(rows) * words * sizeof(quint64),
@@ -1367,6 +1376,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     struct Slot
     {
         DeviceBuffer<quint64>  d_out;
+        DeviceBuffer<quint64>  d_scratch;
         DeviceBuffer<unsigned> d_count;
         HostBuffer<quint64>    h_out;
         HostBuffer<unsigned>   h_count;
@@ -1382,6 +1392,8 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     };
     for (Slot& s : slot) {
         allocateOut(s);
+        if (global)
+            s.d_scratch.allocate(size_t(blocksMax) * scratchWords);
         s.d_count.allocate(1);
         s.h_count.allocate(1, HostBuffer<unsigned>::Kind::Pinned);
         s.stream.create();
@@ -1390,14 +1402,14 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     // Размер пачки подстраивается под плотность находок: у плотного кода
     // слов нужного веса тысячи на попытку, у редкого — доли. Первая пачка
     // маленькая — по ней и меряется.
-    quint64 batchTrials  = 256;
+    quint64 batchTrials  = std::min<quint64>(256, blocksMax);
     double  hitsPerTrial = 0.0;
     auto adaptBatch = [&](quint64 found, quint64 count) {
         if (count == 0)
             return;
         hitsPerTrial = std::max(hitsPerTrial, double(found) / double(count));
         const double room = double(capacity) / 4.0 / std::max(1.0, hitsPerTrial);
-        batchTrials = quint64(std::min(double(kBatchMax), std::max(1.0, room)));
+        batchTrials = quint64(std::min(double(blocksMax), std::max(1.0, room)));
     };
 
     // Пачки, которые пришлось отложить: переполнившаяся делится пополам, и
@@ -1418,6 +1430,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         L.outWords     = s.d_out.get();
         L.outCount     = s.d_count.get();
         L.capacity     = unsigned(capacity);
+        L.scratch      = s.d_scratch.get();
         launchLeonTrials(L, kThreads, s.stream.get());
         CUDA_CALL(cudaMemcpyAsync(s.h_count.get(), s.d_count.get(), sizeof(unsigned),
                                   cudaMemcpyDeviceToHost, s.stream.get()));
@@ -1752,13 +1765,11 @@ CodeGeometry Worker::describeTask() const
         planInfoSets(g);
 
     if (settings.algorithmType == ComputationSettings::RandomInfoSets) {
-        // На видеокарте блок держит матрицу в разделяемой памяти, а слова
-        // комбинаций — в регистрах: строка не длиннее восьми слов и матрица
-        // не больше 40 КБ. Что не влезло — считается на процессоре.
+        // На видеокарте короткая матрица живёт в разделяемой памяти блока,
+        // длинная — в глобальной; ядро умеет строки до MAX_BLOCKWORDS слов.
         if (g.useGpu && leonSharedBytes(int(g.numOfRows), int(g.numOfCols), int(g.wordsPerRow)) == 0)
             throw std::invalid_argument(
-                "случайный поиск на видеокарте: строка длиннее 512 бит или матрица не "
-                "помещается в разделяемую память — выберите CPU");
+                "случайный поиск на видеокарте: строка длиннее, чем умеет ядро — выберите CPU");
         const Leon::Plan plan = Leon::plan(int(g.numOfCols), int(g.numOfRows),
                                            settings.leonWeight, settings.leonMissProbability(),
                                            g.useGpu);
