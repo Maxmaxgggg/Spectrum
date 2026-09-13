@@ -101,8 +101,13 @@ QString Format::count(quint64 n)
     return QString::number(n);
 }
 
-QString Format::powerOfTen(int exponent)
+QString Format::powerOfTen(int exponent, bool richText)
 {
+    if (richText)
+        return QStringLiteral("10<sup>%1%2</sup>")
+            .arg(exponent < 0 ? QString(QChar(0x2212)) : QString())   // настоящий минус
+            .arg(qAbs(exponent));
+
     static const QChar digits[] = {
         QChar(0x2070), QChar(0x00B9), QChar(0x00B2), QChar(0x00B3), QChar(0x2074),
         QChar(0x2075), QChar(0x2076), QChar(0x2077), QChar(0x2078), QChar(0x2079),

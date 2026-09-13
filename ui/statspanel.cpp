@@ -48,6 +48,8 @@ StatsPanel::StatsPanel(QWidget* parent)
     separator();
     deviceValue    = addRow(form, tr("Устройство:"));
     algorithmValue = addRow(form, tr("Алгоритм:"));
+    // Показатель степени в вероятности пропуска — надстрочным индексом.
+    algorithmValue->setTextFormat(Qt::RichText);
     separator();
     elapsedValue   = addRow(form, tr("Прошло:"));
     remainingValue = addRow(form, tr("Осталось:"));
@@ -95,14 +97,14 @@ void StatsPanel::showTask(const ComputationSettings& settings)
         enumeration = tr("компоненты весом до %1").arg(settings.bzWeight);
     if (settings.algorithmType == ComputationSettings::RandomInfoSets)
         enumeration = tr("компоненты весом до %1, в-ть пропуска %2")
-                          .arg(settings.leonWeight).arg(Format::powerOfTen(-settings.leonMissExponent));
+                          .arg(settings.leonWeight).arg(Format::powerOfTen(-settings.leonMissExponent, true));
     if (settings.algorithmType == ComputationSettings::ProductCode) {
         enumeration = settings.productWeight > 0
                           ? tr("компоненты весом до %1, ранги до %2").arg(settings.productWeight).arg(settings.productRank)
                           : tr("ранги до %1").arg(settings.productRank);
         enumeration += settings.productAlgorithm == int(ComputationSettings::RandomInfoSets)
                           ? tr("; компоненты кода — случайным поиском, в-ть пропуска %1")
-                                .arg(Format::powerOfTen(-settings.leonMissExponent))
+                                .arg(Format::powerOfTen(-settings.leonMissExponent, true))
                           : tr("; компоненты кода — Брауэром–Циммерманом");
     }
     algorithmValue->setText(algorithmName(settings.algorithmType)

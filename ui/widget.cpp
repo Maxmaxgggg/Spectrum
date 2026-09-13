@@ -244,7 +244,7 @@ void MainWindow::setSpectrumRows(const SpectrumText& lines)
             const int weight = line.section(QStringLiteral(" - "), 0, 0).toInt();
             if (weight >= 0 && weight < unseenByWeight.size()
                 && unseenByWeight.at(weight) >= 0.5f)
-                line += tr("   (ещё ≈%1 не найдено)")
+                line += tr("   (осталось ≈%1)")
                             .arg(qRound64(double(unseenByWeight.at(weight))));
         }
     }

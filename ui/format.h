@@ -27,7 +27,9 @@ QString speed(double wordsPerSecond);
 // без сокращения читать невозможно.
 QString count(quint64 n);
 
-// «10⁻⁹» вместо «10^-9»: степень надстрочными цифрами.
-QString powerOfTen(int exponent);
+// «10⁻⁹» вместо «10^-9»: степень надстрочными цифрами. richText — для
+// QLabel с форматированным текстом: «10<sup>−9</sup>» — в моноширинном шрифте
+// юникодные надстрочные цифры смотрятся криво, а настоящий индекс — нет.
+QString powerOfTen(int exponent, bool richText = false);
 
 } // namespace Format
