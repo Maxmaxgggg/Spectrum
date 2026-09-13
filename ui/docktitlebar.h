@@ -43,6 +43,9 @@ private:
     // «в отдельное окно», незакрываемой — крестик.
     void updateButtons();
     int  buttonExtent() const;
+    // Док сложен вкладкой с другими: название уже написано на вкладке, и в
+    // заголовке его не дублируем — остаются одни кнопки.
+    bool tabified() const;
 
     QDockWidget* dock  = nullptr;
     QToolButton* floatButton = nullptr;

@@ -358,6 +358,10 @@ void MainWindow::updateMatrix2Visibility()
     if (matrixSwap)
         matrixSwap->attach();
     updateMatrixTitles();
+    // Заголовок первой матрицы прячет название, пока рядом вкладка второй:
+    // вторая появилась или ушла — перерисовать.
+    if (QWidget* title = matrixDock->titleBarWidget())
+        title->update();
 }
 
 void MainWindow::resetLayout()

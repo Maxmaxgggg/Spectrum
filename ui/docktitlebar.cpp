@@ -2,6 +2,7 @@
 
 #include <QDockWidget>
 #include <QHBoxLayout>
+#include <QMainWindow>
 #include <QStyle>
 #include <QStyleOptionDockWidget>
 #include <QStylePainter>
@@ -38,7 +39,12 @@ DockTitleBar::DockTitleBar(QDockWidget* owner)
     connect(dock, &QDockWidget::windowTitleChanged, this, [this](const QString&) { update(); });
     connect(dock, &QDockWidget::topLevelChanged, this, [this](bool floating) {
         floatButton->setToolTip(floating ? tr("Вернуть на место") : tr("В отдельное окно"));
+        update();
     });
+    // Сложили с другой панелью или разложили — название то появляется на
+    // вкладке, то нет; перерисовать.
+    connect(dock, &QDockWidget::dockLocationChanged, this, [this](Qt::DockWidgetArea) { update(); });
+    connect(dock, &QDockWidget::visibilityChanged,   this, [this](bool) { update(); });
 
     updateButtons();
 }
@@ -95,8 +101,15 @@ void DockTitleBar::initStyleOption(QStyleOptionDockWidget* option) const
     }
     reserved += 2 * style()->pixelMetric(QStyle::PM_DockWidgetTitleBarButtonMargin, nullptr, this);
 
-    option->title = fontMetrics().elidedText(dock->windowTitle(), Qt::ElideRight,
-                                             qMax(0, width() - reserved));
+    option->title = tabified() ? QString()
+                               : fontMetrics().elidedText(dock->windowTitle(), Qt::ElideRight,
+                                                          qMax(0, width() - reserved));
+}
+
+bool DockTitleBar::tabified() const
+{
+    const auto* window = qobject_cast<const QMainWindow*>(dock->parentWidget());
+    return window && !dock->isFloating() && !window->tabifiedDockWidgets(dock).isEmpty();
 }
 
 void DockTitleBar::paintEvent(QPaintEvent* event)
