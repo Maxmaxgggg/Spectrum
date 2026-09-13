@@ -67,6 +67,8 @@ private slots:
     // Ход случайного поиска: панель и пометки «ещё не найдено» в спектре.
     void handleSearchEstimate(int weight, quint64 trialsDone, quint64 trialsTotal,
                               double missProbability, SpectrumFloat unseenByWeight);
+    // Код произведения: строка о ходе и точности в панели.
+    void handleProductPlan(const QString& text, int exactUpToWeight);
     void handleMatrixChanged();
 
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -77,6 +79,10 @@ private:
 
     Ui::MainWindow *ui;
     QDockWidget    *matrixDock       = nullptr;
+    // Вторая компонента кода произведения — своя панель, вкладкой рядом с
+    // первой матрицей. У остальных алгоритмов не участвует.
+    QDockWidget    *matrix2Dock      = nullptr;
+    class FilterPlainTextEdit* matrix2PTE = nullptr;
     QDockWidget    *spectrumDock     = nullptr;
     QDockWidget    *plotDock         = nullptr;
     QDockWidget    *statsDock        = nullptr;

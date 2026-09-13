@@ -1556,6 +1556,171 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     publish(true);
 }
 
+// Компонента произведения: точный спектр до weightUpTo и — если размерность
+// мала — все слова до этого веса. Маленькая компонента перебирается целиком
+// (код Грея), большая — Брауэром–Циммерманом во вложенном Worker: он
+// сертифицирует спектр до нужного веса и отдаёт итог через finalSpectrum().
+Product::Component Worker::analyzeComponent(const QStringList& rows, int weightUpTo,
+                                            const QString& label)
+{
+    const int k = rows.size();
+    const int n = rows.first().length();
+
+    if (k <= Product::bruteForceMaxK) {
+        emit productPlan(tr("%1: полный перебор (2^%2 слов)…").arg(label).arg(k), -1);
+        Product::Component c = Product::bruteForce(rows, std::min(weightUpTo, n),
+                                                   [this]() { return cancelled.load() != 0; });
+        if (cancelled.load())
+            throw std::runtime_error("расчёт отменён");
+        return c;
+    }
+
+    emit productPlan(tr("%1: Брауэр–Циммерман до веса %2…").arg(label).arg(weightUpTo), -1);
+
+    Worker sub;
+    sub.setAutosaveRoot(autosaveRootDir);
+    sub.setGridTuningThreshold(tuneThresholdSec);
+
+    ComputationSettings cs = settings;
+    cs.matrix        = rows;
+    cs.matrix2.clear();
+    cs.algorithmType = ComputationSettings::BrouwerZimmermann;
+    cs.bzWeight      = std::min(weightUpTo, n);
+    sub.setSettings(cs.toJson());
+    sub.initializeRunState(LoadMode::Reset);
+
+    QString error;
+    connect(&sub, &Worker::updateInfoPBR,           this, &Worker::updateInfoPBR);
+    connect(&sub, &Worker::updateRemainingMinutes,  this, &Worker::updateRemainingMinutes);
+    connect(&sub, &Worker::updateSpectrumPTE,       this, &Worker::updateSpectrumPTE);
+    connect(&sub, &Worker::updateSpectrumPlot,      this, &Worker::updateSpectrumPlot);
+    connect(&sub, &Worker::gridTuned,               this, &Worker::gridTuned);
+    connect(&sub, &Worker::errorOccurred, [&error](const QString& m) { error = m; });
+
+    activeSub.store(&sub);
+    if (cancelled.load())
+        sub.cancel();
+    sub.computeSpectrum();
+    activeSub.store(nullptr);
+
+    if (!error.isEmpty())
+        throw std::runtime_error(error.toStdString());
+    if (cancelled.load())
+        throw std::runtime_error("расчёт отменён");
+
+    std::vector<quint64> spectrum(sub.finalSpectrum().begin(), sub.finalSpectrum().end());
+    return Product::fromSpectrum(n, k, spectrum, sub.finalExactUpTo());
+}
+
+// Код произведения C1 ⊗ C2 — см. productcode.h. Три шага: минимальные веса
+// компонент, спектры и списки лёгких слов до нужного предела, свёртка по
+// рангам. Отмена по ходу — исключение, как и ошибка компоненты.
+void Worker::computeSpectrumProduct(const CodeGeometry& g)
+{
+    const QStringList& g1 = settings.matrix;
+    const QStringList& g2 = settings.matrix2;
+    const int n1 = g1.first().length(), k1 = g1.size();
+    const int n2 = g2.first().length(), k2 = g2.size();
+    const int maxRank = std::max(1, std::min({ settings.productRank, 4, k1, k2 }));
+    const quint64 productLength = quint64(n1) * quint64(n2);
+
+    progress.begin(1, 0, 0);
+    productExactUpTo = -1;
+
+    // Шаг 1. Минимальные веса. У маленькой компоненты — из полного перебора,
+    // у большой — Брауэром–Циммерманом с удвоением предела, пока слово не
+    // найдётся: сертификат «нет слов легче t» с каждым шагом дорожает, но
+    // суммарно это не больше двух последних шагов.
+    auto minWeight = [&](const QStringList& rows, const QString& label, Product::Component& out) {
+        const int n = rows.first().length();
+        if (rows.size() <= Product::bruteForceMaxK) {
+            out = analyzeComponent(rows, 0, label);
+            return;
+        }
+        for (int t = 8; ; t = std::min(n, t * 2)) {
+            out = analyzeComponent(rows, t, label);
+            if (out.d > 0 || t >= n)
+                return;
+        }
+    };
+    Product::Component c1, c2;
+    minWeight(g1, tr("компонента 1"), c1);
+    minWeight(g2, tr("компонента 2"), c2);
+    if (c1.d == 0 || c2.d == 0)
+        throw std::invalid_argument("у компоненты нет ненулевых слов: матрица нулевая");
+
+    const int d = c1.d * c2.d;
+
+    // Шаг 2. До какого веса считать. Без явного — до границы, за которой
+    // начинаются слова ранга maxRank + 1.
+    quint64 target = settings.productWeight > 0
+                       ? quint64(settings.productWeight)
+                       : Product::rankWeightBound(c1.d, c2.d, maxRank + 1) - 1;
+    target = std::min(target, productLength);
+
+    // Пределы по компонентам: слово произведения веса <= target собрано из
+    // слов веса <= target/d другой компоненты.
+    const int limit1 = int(std::min<quint64>(target / quint64(c2.d), quint64(n1)));
+    const int limit2 = int(std::min<quint64>(target / quint64(c1.d), quint64(n2)));
+    if (c1.exactUpTo < limit1 || (k1 <= Product::bruteForceMaxK && c1.wordsUpTo < limit1))
+        c1 = analyzeComponent(g1, limit1, tr("компонента 1"));
+    if (c2.exactUpTo < limit2 || (k2 <= Product::bruteForceMaxK && c2.wordsUpTo < limit2))
+        c2 = analyzeComponent(g2, limit2, tr("компонента 2"));
+
+    // Точность спектра произведения: по рангам — до границы следующего, по
+    // компонентам — пока хватает их точности.
+    int ranksDone = 1;
+    auto exactFor = [&](int ranks) {
+        quint64 bound = Product::rankWeightBound(c1.d, c2.d, ranks + 1) - 1;
+        bound = std::min(bound, target);
+        bound = std::min(bound, quint64(c1.exactUpTo + 1) * quint64(c2.d) - 1);
+        bound = std::min(bound, quint64(c2.exactUpTo + 1) * quint64(c1.d) - 1);
+        return int(bound);
+    };
+
+    // Шаг 3. Ранги.
+    emit productPlan(tr("свёртка по рангам…"), -1);
+    std::vector<quint64> total = Product::rankOne(c1, c2, target);
+    QStringList notes;
+    for (int r = 2; r <= maxRank; ++r) {
+        if (!c1.hasWords || !c2.hasWords) {
+            notes << tr("ранг %1 и выше не считался: у большой компоненты нет списка слов").arg(r);
+            break;
+        }
+        Product::ProfileMap p1, p2;
+        constexpr quint64 kWorkLimit = 20ULL << 30;
+        auto cancelledPoll = [this]() { return cancelled.load() != 0; };
+        const bool ok1 = Product::profiles(c1, r, limit1, kWorkLimit, p1, false, cancelledPoll);
+        const bool ok2 = ok1 && Product::profiles(c2, r, limit2, kWorkLimit, p2, true, cancelledPoll);
+        if (cancelled.load())
+            throw std::runtime_error("расчёт отменён");
+        if (!ok1 || !ok2) {
+            notes << tr("ранг %1 и выше не считался: слишком много наборов").arg(r);
+            break;
+        }
+        const std::vector<quint64> part = Product::rankR(p1, p2, r, target);
+        for (size_t w = 0; w < total.size(); ++w)
+            total[w] += part[w];
+        ranksDone = r;
+    }
+
+    productExactUpTo = exactFor(ranksDone);
+    h_spectrum.fillZero();
+    h_spectrum[0] = 1;
+    for (size_t w = 1; w < total.size() && int(w) <= productExactUpTo; ++w)
+        h_spectrum[w] = total[w];
+
+    const QString summary = tr("[%1,%2,%3] x [%4,%5,%6] = [%7,%8,%9]; ранги до %10; точно до веса %11%12")
+                                .arg(n1).arg(k1).arg(c1.d).arg(n2).arg(k2).arg(c2.d)
+                                .arg(productLength).arg(quint64(k1) * quint64(k2)).arg(d)
+                                .arg(ranksDone).arg(productExactUpTo)
+                                .arg(notes.isEmpty() ? QString() : QStringLiteral("; ") + notes.join(QStringLiteral("; ")));
+    emit productPlan(summary, productExactUpTo);
+    progress.setDoneOps(1);
+    emit updateInfoPBR(100);
+    updateSpectrum(int(g.numOfCols));
+}
+
 void Worker::updateSpectrum(int numOfCols)
 {
     updateSpectrumFrom(h_spectrum.get(), numOfCols);
@@ -1644,19 +1809,33 @@ void Worker::makeCheckpoint(int numOfCols, bool finished)
         record.leonMissExponent = settings.leonMissExponent;
         record.leonTrials       = activeTrials;
     }
+    if (settings.algorithmType == ComputationSettings::ProductCode) {
+        record.productWeight    = settings.productWeight;
+        record.productRank      = settings.productRank;
+        record.productRows1     = settings.matrix.size();
+        record.productExactUpTo = productExactUpTo;
+    }
     record.savedAt   = QDateTime::currentDateTime();
     record.state     = runState;
 
     // Ключ — матрица и алгоритм. Сама матрица в запись не попадает: она лежит
     // одним файлом на папку, иначе на коде (1000,997) каждое сохранение тащило
     // бы с собой мегабайт нулей и единиц.
-    autosave.save(settings.matrix, record);
+    autosave.save(autosaveKeyMatrix(), record);
     emit showSaveLBL();
 }
 
 void Worker::setAutosaveRoot(const QString& dir)
 {
+    autosaveRootDir = dir;
     autosave = AutosaveStore(dir);
+}
+
+QStringList Worker::autosaveKeyMatrix() const
+{
+    if (settings.algorithmType == ComputationSettings::ProductCode)
+        return settings.matrix + settings.matrix2;
+    return settings.matrix;
 }
 // Точка входа расчёта. Ловит всё, что может бросить вычислитель: раньше
 // ошибка CUDA звала abort() и приложение молча исчезало, а переполнение в
@@ -1763,6 +1942,21 @@ CodeGeometry Worker::describeTask() const
 
     if (settings.algorithmType == ComputationSettings::BrouwerZimmermann)
         planInfoSets(g);
+
+    if (settings.algorithmType == ComputationSettings::ProductCode) {
+        // Самого произведения в памяти нет — только его размеры, под спектр.
+        if (settings.matrix2.isEmpty())
+            throw std::invalid_argument("код произведения: не задана вторая компонента");
+        const quint64 n1 = quint64(settings.matrix.first().length());
+        const quint64 n2 = quint64(settings.matrix2.first().length());
+        g.numOfRows    = quint64(settings.matrix.size()) * quint64(settings.matrix2.size());
+        g.numOfCols    = n1 * n2;
+        g.wordsPerRow  = (g.numOfCols + 63) / 64;
+        g.matrixWords  = 0;
+        g.spectrumSize = g.numOfCols + 1;
+        g.useGpu       = false;
+        g.isLongCode   = true;
+    }
 
     if (settings.algorithmType == ComputationSettings::RandomInfoSets) {
         // На видеокарте короткая матрица живёт в разделяемой памяти блока,
@@ -2085,8 +2279,9 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
         runState.rOffset     = g.maxRows + 1;
         runState.chunkOffset = 0;
     }
-    else if (settings.algorithmType == ComputationSettings::RandomInfoSets) {
-        // Запись случайного поиска не продолжается — хранится только итог.
+    else if (settings.algorithmType == ComputationSettings::RandomInfoSets
+             || settings.algorithmType == ComputationSettings::ProductCode) {
+        // Такая запись не продолжается — хранится только итог.
         runState.rOffset     = 0;
         runState.chunkOffset = 0;
     }
@@ -2101,6 +2296,12 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
     // Пишется до преобразования Мак-Вильямс: в записи должен лежать сырой
     // спектр перебираемой матрицы, с него и продолжают.
     makeCheckpoint(int(g.numOfCols), true);
+
+    // Итог — на случай, если этот расчёт вложенный (компонента произведения).
+    m_finalSpectrum  = runState.spectrum;
+    m_finalExactUpTo = g.guaranteedBelow > 0 ? g.guaranteedBelow - 1
+                     : settings.algorithmType == ComputationSettings::ProductCode ? productExactUpTo
+                     : int(g.numOfCols);
 
     initializeRunState(LoadMode::Reset);
 
@@ -2135,9 +2336,6 @@ void Worker::computeSpectrumImpl()
 
     omp_set_num_threads(settings.compDevSet.threadsCpu);
 
-    prepareBuffers(g);
-    tuneGrid(g);
-
     // Частоты обновления из настроек. Сам отсчёт запускает вычислительная
     // функция: только она знает общее число операций.
     progress.setIntervals(
@@ -2146,6 +2344,19 @@ void Worker::computeSpectrumImpl()
     progress.setOpsCheckpoint(checkpointEveryOps);
 
     const auto startedAt = steady_clock::now() - std::chrono::seconds(runState.elapsedSec);
+
+    // Код произведения не перебирает собственную матрицу: ни буферов, ни
+    // сетки ему не нужно, только спектр на хосте.
+    if (settings.algorithmType == ComputationSettings::ProductCode) {
+        h_spectrum.allocate(g.spectrumSize, HostBuffer<quint64>::Kind::Paged);
+        h_spectrum.fillZero();
+        computeSpectrumProduct(g);
+        finishComputation(g, startedAt);
+        return;
+    }
+
+    prepareBuffers(g);
+    tuneGrid(g);
 
     dispatchComputation(g);
     finishComputation(g, startedAt);
@@ -2174,16 +2385,22 @@ void Worker::releaseResources()
 void Worker::pause()
 {
     paused.store(1);
+    if (Worker* sub = activeSub.load())
+        sub->pause();
 }
 
 void Worker::resume()
 {
     paused.store(0);
+    if (Worker* sub = activeSub.load())
+        sub->resume();
 }
 
 void Worker::cancel()
 {
     cancelled.store(1);
+    if (Worker* sub = activeSub.load())
+        sub->cancel();
 }
 void Worker::uncancel()
 {

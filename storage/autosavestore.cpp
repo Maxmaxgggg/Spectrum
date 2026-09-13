@@ -61,6 +61,12 @@ QJsonObject AutosaveRecord::toJson() const
         obj["leonMissExponent"] = leonMissExponent;
         obj["leonTrials"]       = qint64(leonTrials);
     }
+    if (algorithm == ComputationSettings::ProductCode) {
+        obj["productWeight"]    = productWeight;
+        obj["productRank"]      = productRank;
+        obj["productRows1"]     = productRows1;
+        obj["productExactUpTo"] = productExactUpTo;
+    }
     return obj;
 }
 
@@ -83,6 +89,10 @@ AutosaveRecord AutosaveRecord::fromJson(const QJsonObject& obj)
     r.leonWeight       = obj["leonWeight"].toInt();
     r.leonMissExponent = obj["leonMissExponent"].toInt();
     r.leonTrials       = quint64(obj["leonTrials"].toVariant().toLongLong());
+    r.productWeight    = obj["productWeight"].toInt();
+    r.productRank      = obj["productRank"].toInt();
+    r.productRows1     = obj["productRows1"].toInt();
+    r.productExactUpTo = obj.contains("productExactUpTo") ? obj["productExactUpTo"].toInt() : -1;
     return r;
 }
 
@@ -97,7 +107,8 @@ bool canResume(const AutosaveRecord& record, const ComputationSettings& settings
 {
     // Запись случайного поиска — только итог: найденные слова в ней не
     // хранятся, а без них продолжать нечего.
-    if (settings.algorithmType == ComputationSettings::RandomInfoSets)
+    if (settings.algorithmType == ComputationSettings::RandomInfoSets
+        || settings.algorithmType == ComputationSettings::ProductCode)
         return false;
     if (!settings.layered())
         return true;
@@ -184,6 +195,7 @@ QString AutosaveStore::fileNameFor(ComputationSettings::Algorithm algorithm)
         case ComputationSettings::DualCode:          return QStringLiteral("dual.json");
         case ComputationSettings::BrouwerZimmermann: return QStringLiteral("bz.json");
         case ComputationSettings::RandomInfoSets:    return QStringLiteral("leon.json");
+        case ComputationSettings::ProductCode:       return QStringLiteral("product.json");
         default:                            return QStringLiteral("xor.json");
     }
 }

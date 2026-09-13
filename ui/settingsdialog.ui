@@ -84,6 +84,16 @@
             </property>
            </widget>
           </item>
+          <item>
+           <widget class="QRadioButton" name="productCodeRB">
+            <property name="toolTip">
+             <string>Код произведения C1 ⊗ C2 по двум компонентам: «Матрица» и «Матрица 2». Низ спектра точно, по рангам слов, без построения самого произведения</string>
+            </property>
+            <property name="text">
+             <string>Код произведения</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>
@@ -302,6 +312,99 @@
            <widget class="QLabel" name="leonHintLBL">
             <property name="text">
              <string>Слова до этого веса будут найдены все, если не случится события такой вероятности; тяжелее — не собираются. Гарантии нет, зато на порядки глубже и быстрее Брауэра–Циммермана. Предел — память под найденные слова.</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="productGBX">
+         <property name="title">
+          <string>Код произведения:</string>
+         </property>
+         <layout class="QVBoxLayout" name="productLayout">
+          <item>
+           <layout class="QHBoxLayout" name="productWeightLayout">
+            <item>
+             <widget class="QLabel" name="productWeightLBL">
+              <property name="text">
+               <string>До веса (0 — до границы ранга): </string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="productWeightSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="productWeightSPB">
+              <property name="minimum">
+               <number>0</number>
+              </property>
+              <property name="maximum">
+               <number>10000000</number>
+              </property>
+              <property name="value">
+               <number>0</number>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="productRankLayout">
+            <item>
+             <widget class="QLabel" name="productRankLBL">
+              <property name="text">
+               <string>Ранги слов до: </string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="productRankSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="productRankSPB">
+              <property name="minimum">
+               <number>1</number>
+              </property>
+              <property name="maximum">
+               <number>4</number>
+              </property>
+              <property name="value">
+               <number>2</number>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="QLabel" name="productHintLBL">
+            <property name="text">
+             <string>Первая компонента — в панели «Матрица», вторая — в «Матрица 2». Слово ранга r — сумма r произведений слов компонент; ранг 1 даёт спектр до границы Толхёйзена, каждый следующий — дальше. Ранги выше первого требуют перебора компонент целиком (до 28 строк).</string>
             </property>
             <property name="wordWrap">
              <bool>true</bool>

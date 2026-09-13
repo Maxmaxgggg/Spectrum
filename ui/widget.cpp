@@ -1,5 +1,6 @@
 #include "widget.h"
 #include "infosets.h"
+#include "filterplaintextedit.h"
 #include "docktitlebar.h"
 #include "fonticons.h"
 
@@ -141,13 +142,24 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
     // handleMatrixChanged сбрасывает поднятое состояние — он для того и нужен,
     // чтобы ловить правку матрицы руками. Своя подстановка правкой не считается.
     applyingAutosave = true;
-    ui->matrixPTE->setPlainText(matrix.join(QLatin1Char('\n')));
+    if (record.algorithm == ComputationSettings::ProductCode
+        && record.productRows1 > 0 && record.productRows1 < matrix.size()) {
+        // В записи произведения обе компоненты подряд — по своим панелям.
+        ui->matrixPTE->setPlainText(matrix.mid(0, record.productRows1).join(QLatin1Char('\n')));
+        matrix2PTE->setPlainText(matrix.mid(record.productRows1).join(QLatin1Char('\n')));
+    } else {
+        ui->matrixPTE->setPlainText(matrix.join(QLatin1Char('\n')));
+    }
     applyingAutosave = false;
 
     // Настройки берутся из записи. Без этого «Продолжить» искал бы сохранение
     // другого алгоритма, не нашёл и молча начал бы с нуля.
+    // У произведения в полях записи — свой вес и ранг; диалогу они уходят
+    // через те же два числа.
+    const bool product = record.algorithm == ComputationSettings::ProductCode;
     emit applySettingsFromAutosave(int(record.algorithm), int(record.enumType),
-                                   record.maxRows, record.bzWeight);
+                                   product ? record.productRank   : record.maxRows,
+                                   product ? record.productWeight : record.bzWeight);
 
     // Гарантия поднятой записи: слои до rOffset пройдены целиком (начатый
     // слой не в счёт), и по ним видно, до какого веса спектр уже точен.
@@ -155,6 +167,8 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
     unseenByWeight.clear();
     if (record.algorithm == ComputationSettings::RandomInfoSets)
         statsPanel->showSearch(record.leonWeight, record.leonTrials, record.leonTrials, 0.0);
+    if (record.algorithm == ComputationSettings::ProductCode)
+        statsPanel->showText(tr("код произведения, точно до веса %1").arg(record.productExactUpTo));
     if (record.algorithm == ComputationSettings::BrouwerZimmermann && !record.infoSets.isEmpty()) {
         const int rows = matrix.size();
         const int cols = matrix.first().length();
@@ -267,6 +281,16 @@ void MainWindow::setupDocks()
 
     matrixDock   = makeDock(ui->matrixPTE,   tr("Матрица"),
                             UIStrings::MATRIX_TOOLTIP,   "matrixDock");
+    matrix2PTE   = new FilterPlainTextEdit(this);
+    matrix2PTE->setFont(ui->matrixPTE->font());
+    matrix2Dock  = makeDock(matrix2PTE, tr("Матрица 2"),
+                            UIStrings::MATRIX2_TOOLTIP,  "matrix2Dock");
+    connect(matrix2PTE, &FilterPlainTextEdit::textChanged, this, [this]() {
+        const Matrix rows = matrix2PTE->toStringList();
+        int maxLen = 0;
+        for (const QString& row : rows) maxLen = qMax(maxLen, row.length());
+        matrix2Dock->setWindowTitle(tr("Матрица 2 (%1,%2)").arg(maxLen).arg(rows.size()));
+    });
     spectrumDock = makeDock(ui->spectrumPTE, tr("Спектр кодовых слов"),
                             UIStrings::SPECTRUM_TOOLTIP, "spectrumDock");
     plotDock     = makeDock(ui->spectrumCPT, tr("График спектра"),
@@ -292,6 +316,9 @@ void MainWindow::setupDocks()
     splitDockWidget(matrixDock,   spectrumDock, Qt::Vertical);
     splitDockWidget(matrixDock,   statsDock,    Qt::Horizontal);
     splitDockWidget(spectrumDock, plotDock,     Qt::Horizontal);
+    // Вторая матрица — вкладкой поверх первой: нужна только коду
+    // произведения, места отдельного не просит.
+    tabifyDockWidget(matrixDock, matrix2Dock);
 
     // Ширины задаются явно. Сам Qt делит место по sizeHint, а у графика он
     // крошечный, у текстовых полей — во всю строку, и график получал узкую
@@ -304,10 +331,13 @@ void MainWindow::setupDocks()
     // кнопками исчезала, отдав всю высоту панелям.
     ui->centralwidget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
+    // В раскладке по умолчанию сверху первая матрица, а не вторая.
+    matrixDock->raise();
     defaultLayout = saveState(Constants::LAYOUT_VERSION);
 
     // Меню «Вид»: галочки Qt делает сам, они же возвращают закрытую панель.
     ui->viewMNU->addAction(matrixDock->toggleViewAction());
+    ui->viewMNU->addAction(matrix2Dock->toggleViewAction());
     ui->viewMNU->addAction(spectrumDock->toggleViewAction());
     ui->viewMNU->addAction(plotDock->toggleViewAction());
     ui->viewMNU->addAction(statsDock->toggleViewAction());
@@ -321,8 +351,10 @@ void MainWindow::resetLayout()
 
     // restoreState возвращает положение, но закрытую панель не открывает.
     matrixDock->show();
+    matrix2Dock->show();
     spectrumDock->show();
     plotDock->show();
+    matrixDock->raise();
 }
 
 void MainWindow::setToolTips() {
@@ -352,6 +384,7 @@ void MainWindow::setWorker()
     connect( workerPtr,       &Worker::gridTuned,                      this,      &MainWindow::handleGridTuned,                      Qt::QueuedConnection );
     connect( workerPtr,       &Worker::planReady,                      this,      &MainWindow::handlePlanReady,                      Qt::QueuedConnection );
     connect( workerPtr,       &Worker::searchEstimate,                 this,      &MainWindow::handleSearchEstimate,                 Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::productPlan,                    this,      &MainWindow::handleProductPlan,                    Qt::QueuedConnection );
     connect( workerPtr,       &Worker::updateRateMeasured,             settingsDialog, &SettingsDialog::applyMeasuredRate,            Qt::QueuedConnection );
     // Проба останавливается тем же способом, которым пользователь останавливает
     // расчёт. Отсчёт начинается по сигналу воркера, а не с самой просьбы: перед
@@ -398,7 +431,8 @@ void MainWindow::connectSettingsDialog()
             }
 
             ComputationSettings probe = ComputationSettings::fromJson(obj);
-            probe.matrix = ui->matrixPTE->toStringList();
+            probe.matrix  = ui->matrixPTE->toStringList();
+            probe.matrix2 = matrix2PTE->toStringList();
 
             workerThreadPtr->start();
             QMetaObject::invokeMethod(workerPtr, "setSettings", Qt::QueuedConnection,
@@ -409,7 +443,8 @@ void MainWindow::connectSettingsDialog()
     connect( settingsDialog, &SettingsDialog::sendSettingsToWidget,
         this, [this]( const QJsonObject& obj ) {
             settings = ComputationSettings::fromJson(obj);
-            settings.matrix = ui->matrixPTE->toStringList();
+            settings.matrix  = ui->matrixPTE->toStringList();
+            settings.matrix2 = matrix2PTE->toStringList();
             spectrumPlot->setMaxBars(settings.maxPlotBars);
             MainWindow::sendSettingsToWorker(settings.toJson());
 
@@ -437,23 +472,31 @@ void MainWindow::on_executePBN_clicked()
 // Проверяет матрицу перед запуском. Пустая строка — всё в порядке.
 QString MainWindow::matrixError() const
 {
-    const Matrix rows = ui->matrixPTE->toStringList();
+    auto check = [this](const Matrix& rows, const QString& who) -> QString {
+        if (rows.isEmpty())
+            return tr("%1 пустая").arg(who);
 
-    if (rows.isEmpty())
-        return tr("Матрица пустая");
+        if (quint64(rows.size()) > Constants::MAX_ROWS)
+            return tr("%1: число строк больше чем %2").arg(who).arg(Constants::MAX_ROWS);
 
-    if (quint64(rows.size()) > Constants::MAX_ROWS)
-        return tr("Число строк матрицы больше чем %1").arg(Constants::MAX_ROWS);
+        const int cols = rows.first().length();
+        for (const QString& row : rows) {
+            if (row.length() != cols)
+                return tr("%1: все строки должны быть одинаковой длины").arg(who);
+        }
 
-    const int cols = rows.first().length();
-    for (const QString& row : rows) {
-        if (row.length() != cols)
-            return tr("Все строки должны быть одинаковой длины");
-    }
+        if (quint64(cols) > Constants::MAX_COLS)
+            return tr("%1: число столбцов больше чем %2").arg(who).arg(Constants::MAX_COLS);
+        return QString();
+    };
 
-    if (quint64(cols) > Constants::MAX_COLS)
-        return tr("Число столбцов матрицы больше чем %1").arg(Constants::MAX_COLS);
-
+    const QString first = check(ui->matrixPTE->toStringList(), tr("Матрица"));
+    if (!first.isEmpty())
+        return first;
+    // Код произведения: компоненты проверяются каждая сама по себе, само
+    // произведение в памяти не строится, и его размер ничем не ограничен.
+    if (settings.algorithmType == ComputationSettings::ProductCode)
+        return check(matrix2PTE->toStringList(), tr("Матрица 2 (вторая компонента)"));
     return QString();
 }
 
@@ -477,6 +520,7 @@ void MainWindow::startComputation()
 
     emit setInterfaceEnabled(false);
     ui->matrixPTE->setReadOnly(true);
+    matrix2PTE->setReadOnly(true);
     ui->cancelPBN->setEnabled(true);
     matrixMenu->setActionsEnabled(false);
     statsPanel->showState(tr("Идёт расчёт"));
@@ -559,6 +603,7 @@ void MainWindow::on_exitPBN_clicked()
     emit setInterfaceEnabled(   true  );
     saveSettings();
     ui->matrixPTE->setReadOnly( false );
+    matrix2PTE->setReadOnly( false );
     qApp->exit();
 }
 
@@ -580,6 +625,7 @@ void MainWindow::on_cancelPBN_clicked()
 
     emit setInterfaceEnabled(   true  );
     ui->matrixPTE->setReadOnly( false );
+    matrix2PTE->setReadOnly( false );
     ui->cancelPBN->setEnabled(  false );
 }
 
@@ -630,6 +676,14 @@ void MainWindow::handleSearchEstimate(int weight, quint64 trialsDone, quint64 tr
     statsPanel->showSearch(weight, trialsDone, trialsTotal, missProbability);
     this->unseenByWeight = unseenByWeight;
     setSpectrumRows(lastSpectrum);
+}
+
+void MainWindow::handleProductPlan(const QString& text, int exactUpToWeight)
+{
+    statsPanel->showText(text);
+    // Спектр произведения показывается только точный, помечать нечего.
+    this->exactUpToWeight = -1;
+    Q_UNUSED(exactUpToWeight);
 }
 
 void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed,
@@ -709,6 +763,7 @@ void MainWindow::handleFinished(int elapsedSec)
     workerPtr->resume();
     emit setInterfaceEnabled(   true  );
     ui->matrixPTE->setReadOnly( false );
+    matrix2PTE->setReadOnly( false );
     ui->cancelPBN->setEnabled(  false );
     matrixMenu->setActionsEnabled(true);
 
@@ -756,7 +811,9 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 bool MainWindow::hasCheckpoint() const
 {
     AutosaveRecord record;
-    if (!autosave.load(settings.matrix, settings.algorithmType, record))
+    const Matrix key = settings.algorithmType == ComputationSettings::ProductCode
+                           ? settings.matrix + settings.matrix2 : settings.matrix;
+    if (!autosave.load(key, settings.algorithmType, record))
         return false;
 
     // Запись может оказаться непригодной: она ушла дальше, чем просят сейчас.
@@ -779,6 +836,7 @@ void MainWindow::saveSettings()
     QSettings s;
     s.setValue(SettingsKeys::WINDOW_STATE,    this->saveState(Constants::LAYOUT_VERSION));
     s.setValue(SettingsKeys::CODE_MATRIX,     ui->matrixPTE->toPlainText()   );
+    s.setValue(SettingsKeys::CODE_MATRIX2,    matrix2PTE->toPlainText()      );
     s.setValue(SettingsKeys::SPECTRUM_TEXT,   lastSpectrum.join(QLatin1Char('\n')) );
     s.setValue(SettingsKeys::WIDGET_GEOMETRY, this->saveGeometry()           );
     QVariantList values;
@@ -800,6 +858,7 @@ void MainWindow::loadSettings()
     setSpectrumRows( s.value(SettingsKeys::SPECTRUM_TEXT).toString()
                           .split(QLatin1Char('\n'), Qt::SkipEmptyParts) );
     ui->matrixPTE->setPlainText(              s.value(SettingsKeys::CODE_MATRIX                    ).toString()          );
+    matrix2PTE->setPlainText(                 s.value(SettingsKeys::CODE_MATRIX2                   ).toString()          );
     if (s.contains(SettingsKeys::SPECTRUM_VALUES)) {
         QVariantList values = s.value(SettingsKeys::SPECTRUM_VALUES).toList();
         SpectrumFloat spectrum;

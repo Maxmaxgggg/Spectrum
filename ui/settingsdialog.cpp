@@ -25,6 +25,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     algorithmBGP->addButton( ui->dualCodeRB,  Algorithm::DualCode  );
     algorithmBGP->addButton( ui->brouwerZimmermannRB, Algorithm::BrouwerZimmermann );
     algorithmBGP->addButton( ui->randomInfoSetsRB,    Algorithm::RandomInfoSets    );
+    algorithmBGP->addButton( ui->productCodeRB,       Algorithm::ProductCode       );
 
     // Степень десятки в данных пункта: так же, как интервалы.
     ui->leonMissCBX->setItemData(0, 3);
@@ -243,6 +244,7 @@ void SettingsDialog::updateEnumTypeControls()
     // Своя группа у Брауэра–Циммермана: там задаётся вес, а не число строк.
     ui->bzGBX->setEnabled(algorithmBGP->checkedId() == Algorithm::BrouwerZimmermann);
     ui->leonGBX->setEnabled(algorithmBGP->checkedId() == Algorithm::RandomInfoSets);
+    ui->productGBX->setEnabled(algorithmBGP->checkedId() == Algorithm::ProductCode);
 
     EnumerationType shown = EnumerationType::Full;
     if (forXor) {
@@ -326,6 +328,11 @@ void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int maxRows,
         ui->bzWeightSPB->setValue(bzWeight);
     if (algorithm == Algorithm::RandomInfoSets && bzWeight > 0)
         ui->leonWeightSPB->setValue(bzWeight);
+    if (algorithm == Algorithm::ProductCode) {
+        ui->productWeightSPB->setValue(bzWeight);
+        if (maxRows > 0)
+            ui->productRankSPB->setValue(qBound(1, maxRows, 4));
+    }
 
     updateEnumTypeControls();
 
@@ -334,6 +341,8 @@ void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int maxRows,
     settings.maxRows       = ui->maxRowsSPB->value();
     settings.bzWeight      = ui->bzWeightSPB->value();
     settings.leonWeight    = ui->leonWeightSPB->value();
+    settings.productWeight = ui->productWeightSPB->value();
+    settings.productRank   = ui->productRankSPB->value();
 
     emit sendSettingsToWidget(settings.toJson());
 }
@@ -518,6 +527,8 @@ void SettingsDialog::collectSettings()
     settings.bzWeight = ui->bzWeightSPB->value();
     settings.leonWeight = ui->leonWeightSPB->value();
     settings.leonMissExponent = ui->leonMissCBX->currentData().toInt();
+    settings.productWeight = ui->productWeightSPB->value();
+    settings.productRank = ui->productRankSPB->value();
     settings.compDev = static_cast<ComputeDevice>(computeDeviceBGP->checkedId());
 
     settings.compDevSet.threadsCpu = ui->threadsCpuSPB->value();
@@ -561,6 +572,8 @@ void SettingsDialog::loadSettings() {
         const int at = ui->leonMissCBX->findData(settings.leonMissExponent);
         ui->leonMissCBX->setCurrentIndex(at >= 0 ? at : 2);
     }
+    ui->productWeightSPB->setValue(settings.productWeight);
+    ui->productRankSPB->setValue(settings.productRank);
 
     updateEnumTypeControls();
 

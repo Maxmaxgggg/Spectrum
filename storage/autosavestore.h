@@ -57,6 +57,13 @@ struct AutosaveRecord
     int     leonMissExponent = 0;
     quint64 leonTrials       = 0;
 
+    // Код произведения: матрица записи — обе компоненты подряд, первые
+    // productRows1 строк — первая. Спектр точен до productExactUpTo.
+    int productWeight    = 0;
+    int productRank      = 0;
+    int productRows1     = 0;
+    int productExactUpTo = -1;
+
     QDateTime savedAt;
     RunState  state;
 

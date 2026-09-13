@@ -33,6 +33,8 @@ public:
     void showPlan(int sets, int rows, int exactUpToWeight);
     // Ход случайного поиска: попытки и вероятность пропуска.
     void showSearch(int weight, quint64 trialsDone, quint64 trialsTotal, double missProbability);
+    // Произвольная строка в «Гарантию» — код произведения пишет туда сам.
+    void showText(const QString& text);
     void showProgress(int elapsedSec, int minutesLeft, double speed,
                       quint64 doneOps, quint64 totalOps);
     // Расчёта нет: прочерки вместо цифр прошлого запуска.

@@ -31,10 +31,12 @@ struct ComputationSettings
 {
     // Порождающая матрица кода
     QStringList matrix;
+    // Вторая компонента кода произведения; matrix — первая.
+    QStringList matrix2;
     // Тип используемого алгоритма (Простой XOR, Код Грея, Дуальный код,
     // Брауэр–Циммерман, случайный поиск по информационным множествам)
     enum Algorithm { SimpleXor = 0, GrayCode = 1, DualCode = 2, BrouwerZimmermann = 3,
-                     RandomInfoSets = 4 };
+                     RandomInfoSets = 4, ProductCode = 5 };
     // Тип перебора (Полный, Частичный)
     enum EnumerationType { Full = 0, Partial = 1 };
     // Тип вычислителя (ЦП, ГП)
@@ -60,6 +62,10 @@ struct ComputationSettings
         for (int i = 0; i < leonMissExponent; ++i) miss /= 10.0;
         return miss;
     }
+    // Код произведения: до какого веса считать (0 — до границы, за которой
+    // начинаются слова следующего ранга) и до какого ранга слов идти.
+    int             productWeight = 0;
+    int             productRank   = 2;
 
     // Перебор идёт слоями по числу складываемых строк: простой XOR и
     // Брауэр–Циммерман. Код Грея и дуальный расчёт идут по маскам сплошь.
@@ -103,6 +109,8 @@ struct ComputationSettings
         , bzWeight(other.bzWeight)
         , leonWeight(other.leonWeight)
         , leonMissExponent(other.leonMissExponent)
+        , productWeight(other.productWeight)
+        , productRank(other.productRank)
         , compDev(other.compDev)
         , autoTuneGrid(other.autoTuneGrid)
         , maxPlotBars(other.maxPlotBars)
@@ -114,12 +122,15 @@ struct ComputationSettings
     {
         if (this == &other) return *this;
         matrix = other.matrix;
+        matrix2 = other.matrix2;
         algorithmType = other.algorithmType;
         enumType = other.enumType;
         maxRows = other.maxRows;
         bzWeight = other.bzWeight;
         leonWeight = other.leonWeight;
         leonMissExponent = other.leonMissExponent;
+        productWeight = other.productWeight;
+        productRank = other.productRank;
         compDev = other.compDev;
         autoTuneGrid = other.autoTuneGrid;
         maxPlotBars = other.maxPlotBars;
@@ -131,12 +142,15 @@ struct ComputationSettings
     {
         // Не сравниваем между собой настройки времени
         return matrix == other.matrix &&
+            matrix2 == other.matrix2 &&
             algorithmType == other.algorithmType &&
             enumType == other.enumType &&
             maxRows == other.maxRows &&
             bzWeight == other.bzWeight &&
             leonWeight == other.leonWeight &&
             leonMissExponent == other.leonMissExponent &&
+            productWeight == other.productWeight &&
+            productRank == other.productRank &&
             compDev == other.compDev &&
             autoTuneGrid == other.autoTuneGrid &&
             compDevSet.threadsCpu == other.compDevSet.threadsCpu &&
@@ -153,12 +167,20 @@ struct ComputationSettings
             }
             obj["matrix"] = arr;
         }
+        if (!matrix2.isEmpty()) {
+            QJsonArray arr;
+            for (const QString& str : matrix2)
+                arr.append(str);
+            obj["matrix2"] = arr;
+        }
         obj["algorithmType"] = static_cast<int>(algorithmType);
         obj["enumType"] = static_cast<int>(enumType);
         obj["maxRows"] = maxRows;
         obj["bzWeight"] = bzWeight;
         obj["leonWeight"] = leonWeight;
         obj["leonMissExponent"] = leonMissExponent;
+        obj["productWeight"] = productWeight;
+        obj["productRank"] = productRank;
         obj["compDev"] = static_cast<int>(compDev);
         obj["maxPlotBars"] = maxPlotBars;
         obj["autoTuneGrid"] = autoTuneGrid;
@@ -198,6 +220,10 @@ struct ComputationSettings
 
             s.matrix = list;
         }
+        if (obj.contains("matrix2") && obj["matrix2"].isArray()) {
+            for (const QJsonValue& val : obj["matrix2"].toArray())
+                s.matrix2.append(val.toString());
+        }
         s.algorithmType = static_cast<Algorithm>(obj["algorithmType"].toInt());
         s.enumType = static_cast<EnumerationType>(obj["enumType"].toInt());
         s.maxRows = obj["maxRows"].toInt();
@@ -208,6 +234,9 @@ struct ComputationSettings
             s.leonWeight = obj["leonWeight"].toInt();
         if (obj["leonMissExponent"].toInt() > 0)
             s.leonMissExponent = obj["leonMissExponent"].toInt();
+        s.productWeight = obj["productWeight"].toInt();
+        if (obj["productRank"].toInt() > 0)
+            s.productRank = obj["productRank"].toInt();
         s.compDev = static_cast<ComputeDevice>(obj["compDev"].toInt());
         // Ноль означает «ключа не было» — остаётся значение по умолчанию.
         if (obj["maxPlotBars"].toInt() > 0)
@@ -245,6 +274,9 @@ struct ComputationSettings
         seed = qHash(bzWeight, seed);
         seed = qHash(leonWeight, seed);
         seed = qHash(leonMissExponent, seed);
+        seed = qHash(matrix2, seed);
+        seed = qHash(productWeight, seed);
+        seed = qHash(productRank, seed);
         seed = qHash(static_cast<int>(compDev), seed);
 
         // autoTuneGrid в ключ не входит намеренно: спектр от сетки не зависит,

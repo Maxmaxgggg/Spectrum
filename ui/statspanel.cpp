@@ -23,6 +23,7 @@ QString algorithmName(ComputationSettings::Algorithm algorithm)
     case ComputationSettings::DualCode:          return QObject::tr("дуальный код");
     case ComputationSettings::BrouwerZimmermann: return QObject::tr("Брауэр–Циммерман");
     case ComputationSettings::RandomInfoSets:    return QObject::tr("случайный поиск");
+    case ComputationSettings::ProductCode:       return QObject::tr("код произведения");
     default:                                     return QObject::tr("простой XOR");
     }
 }
@@ -97,6 +98,10 @@ void StatsPanel::showTask(const ComputationSettings& settings)
     if (settings.algorithmType == ComputationSettings::RandomInfoSets)
         enumeration = tr("до веса %1, пропуск 10^-%2")
                           .arg(settings.leonWeight).arg(settings.leonMissExponent);
+    if (settings.algorithmType == ComputationSettings::ProductCode)
+        enumeration = settings.productWeight > 0
+                          ? tr("до веса %1, ранги до %2").arg(settings.productWeight).arg(settings.productRank)
+                          : tr("ранги до %1, до границы следующего").arg(settings.productRank);
     algorithmValue->setText(algorithmName(settings.algorithmType)
                             + QStringLiteral(", ") + enumeration);
     // План приходит позже, отдельным сигналом; до него — прочерк.
@@ -107,6 +112,11 @@ void StatsPanel::showPlan(int sets, int rows, int exactUpToWeight)
 {
     planValue->setText(tr("веса до %1 точно; множеств %2, до %3 строк")
                            .arg(exactUpToWeight).arg(sets).arg(rows));
+}
+
+void StatsPanel::showText(const QString& text)
+{
+    planValue->setText(text);
 }
 
 void StatsPanel::showSearch(int weight, quint64 trialsDone, quint64 trialsTotal,

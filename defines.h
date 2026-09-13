@@ -19,7 +19,7 @@ namespace Constants
 
     // Номер раскладки доков. Менять при добавлении или удалении панели:
     // сохранённая раскладка старого набора тогда просто не подхватится.
-    constexpr  int LAYOUT_VERSION = 3;   // 3: панель хода встала рядом с матрицей
+    constexpr  int LAYOUT_VERSION = 4;   // 4: вторая матрица вкладкой рядом с первой
 
     constexpr  int MAX_POSITIONS = 33;
     // Потолок кандидатов автоподбора: под столько нитей длинному пути надо
@@ -55,6 +55,7 @@ namespace SettingsKeys
     constexpr const char WINDOW_STATE[]             = "windowState";
     constexpr const char COMPUTATION_SETTINGS[]     = "computationSettings";
     constexpr const char CODE_MATRIX[]              = "matrix";
+    constexpr const char CODE_MATRIX2[]             = "matrix2";
     constexpr const char SPECTRUM_TEXT[]            = "spectrumText";
     constexpr const char SPECTRUM_VALUES[]          = "spectrumValues";
     constexpr const char MATRICES_JSON[]            = "matricesJson";
@@ -79,6 +80,8 @@ namespace DefaultValues
 
 namespace UIStrings
 {
+    // Вторая компонента кода произведения.
+    constexpr const char MATRIX2_TOOLTIP[]          = "Порождающая матрица второй компоненты кода произведения; первая — в панели «Матрица»";
     // Пометка строки спектра за пределами гарантии Брауэра–Циммермана.
     constexpr const char INCOMPLETE_SUFFIX[] = "   (неполно)";
 

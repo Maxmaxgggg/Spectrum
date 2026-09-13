@@ -17,6 +17,7 @@
 #include "binomtable.h"
 #include "infosets.h"
 #include "leonsearch.h"
+#include "productcode.h"
 // Переопределяет CUDA_CALL из .cuh: там макрос звал abort(), здесь бросает.
 #include "cudabuffers.h"
 #include "spectrumring.h"
@@ -113,6 +114,11 @@ public:
     // приложения. Тестам нужен свой каталог, чтобы не топтать пользовательский.
     void setAutosaveRoot(const QString& dir);
 
+    // Итог последнего завершённого расчёта: спектр и до какого веса он точен
+    // (для полного перебора — до длины кода).
+    const QVector<quint64>& finalSpectrum() const { return m_finalSpectrum; }
+    int finalExactUpTo() const { return m_finalExactUpTo; }
+
     // Порог, ниже которого подбор сетки не окупается и не проводится.
     // Тесты ставят ноль, чтобы гонять подбор на маленьких матрицах.
     void setGridTuningThreshold(double seconds);
@@ -171,6 +177,9 @@ signals:
     // модели и по весам — сколько слов, по оценке Чао, ещё не найдено.
     void searchEstimate( int weight, quint64 trialsDone, quint64 trialsTotal,
                          double missProbability, SpectrumFloat unseenByWeight );
+    // Код произведения: что сейчас происходит и до какого веса спектр точен
+    // (-1 — ещё считается).
+    void productPlan( const QString& text, int exactUpToWeight );
 private:
     /* Функции для работы с биноминальными коэффициентами */
     quint64   totalCombinations(quint64 k, quint64 maxComb) const;
@@ -205,6 +214,14 @@ private:
     void computeSpectrumCpuNoGrayLong (const CodeGeometry& g);
     // Случайный поиск по информационным множествам, CPU и GPU.
     void computeSpectrumLeon          (const CodeGeometry& g);
+    // Код произведения: низ спектра по компонентам.
+    void computeSpectrumProduct       (const CodeGeometry& g);
+    // Компонента произведения: спектр до weightUpTo (и слова, если k мал).
+    // Большую компоненту считает вложенный Worker Брауэром–Циммерманом.
+    Product::Component analyzeComponent(const QStringList& rows, int weightUpTo,
+                                        const QString& label);
+    // Матрица-ключ автосохранения: у произведения обе компоненты подряд.
+    QStringList autosaveKeyMatrix() const;
 
     /* Функции, посылающие сигнал для обновления интерфейса */
     void updateSpectrum(int numOfCols);
@@ -252,6 +269,16 @@ private:
     int                         activeMaxRows = 0;
     // Сделано попыток случайного поиска — тоже в запись.
     quint64                     activeTrials  = 0;
+    // Код произведения: до какого веса спектр точен — в запись.
+    int                         productExactUpTo = -1;
+
+    // Итог последнего расчёта — для вложенного использования: код
+    // произведения считает компоненты вложенным Worker и забирает отсюда.
+    QVector<quint64>            m_finalSpectrum;
+    int                         m_finalExactUpTo = -1;
+    // Вложенный расчёт, которому надо передать отмену и паузу.
+    std::atomic<Worker*>        activeSub { nullptr };
+    QString                     autosaveRootDir;
 
     bool                        exportSpectrum = false;
     // 0 — обычный режим; см. setCheckpointOpsPolicy

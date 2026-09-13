@@ -96,6 +96,7 @@ QString AutosaveDialog::describeAlgorithm(const AutosaveRecord& record)
         case ComputationSettings::BrouwerZimmermann: return tr("Брауэр–Циммерман, до веса %1").arg(record.bzWeight);
         case ComputationSettings::RandomInfoSets:    return tr("случайный поиск, до веса %1, пропуск 10^-%2")
                                                                 .arg(record.leonWeight).arg(record.leonMissExponent);
+        case ComputationSettings::ProductCode:       return tr("код произведения, ранги до %1").arg(record.productRank);
         default:                                     return tr("простой XOR");
     }
 }
@@ -111,6 +112,8 @@ QString AutosaveDialog::describeProgress(const AutosaveEntry& entry)
             return tr("готово");
         if (record.algorithm == ComputationSettings::RandomInfoSets)
             return tr("готово, попыток %1").arg(Format::count(record.leonTrials));
+        if (record.algorithm == ComputationSettings::ProductCode)
+            return tr("готово, точно до веса %1").arg(record.productExactUpTo);
         return tr("готово до %1 строк").arg(record.maxRows);
     }
 

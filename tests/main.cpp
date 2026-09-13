@@ -58,6 +58,9 @@ static int g_planSets = -1, g_planRows = -1, g_planExactUpTo = -1;
 static quint64 g_searchDone = 0, g_searchTotal = 0;
 static double  g_searchMiss = -1.0;
 static SpectrumFloat g_searchUnseen;
+// Последняя строка плана кода произведения и его точность.
+static QString g_productText;
+static int     g_productExactUpTo = -1;
 
 // ---------------------------------------------------------------- утилиты
 
@@ -108,6 +111,10 @@ struct RunConfig
     // Случайный поиск: до какого веса и с какой степенью пропуска.
     int         leonWeight = 0;
     int         leonMissExponent = 12;
+    // Код произведения: вторая компонента, вес (0 — до границы ранга), ранг.
+    QStringList matrix2;
+    int         productWeight = 0;
+    int         productRank   = 2;
 };
 
 static ComputationSettings makeSettings(const RunConfig& cfg)
@@ -120,6 +127,9 @@ static ComputationSettings makeSettings(const RunConfig& cfg)
     s.bzWeight      = cfg.bzWeight > 0 ? cfg.bzWeight : 8;
     s.leonWeight    = cfg.leonWeight > 0 ? cfg.leonWeight : 24;
     s.leonMissExponent = cfg.leonMissExponent;
+    s.matrix2       = cfg.matrix2;
+    s.productWeight = cfg.productWeight;
+    s.productRank   = cfg.productRank;
     s.compDev       = cfg.device;
     s.compDevSet.threadsCpu = cfg.threadsCpu;
     s.compDevSet.blocksGpu  = cfg.blocksGpu;
@@ -171,6 +181,12 @@ static Spectrum runWorker(const RunConfig& cfg,
                          g_planSets = sets; g_planRows = rows; g_planExactUpTo = exactUpTo;
                      });
     g_searchDone = g_searchTotal = 0; g_searchMiss = -1.0; g_searchUnseen.clear();
+    g_productText.clear(); g_productExactUpTo = -1;
+    QObject::connect(&worker, &Worker::productPlan,
+                     [](const QString& text, int exactUpTo) {
+                         g_productText = text;
+                         if (exactUpTo >= 0) g_productExactUpTo = exactUpTo;
+                     });
     QObject::connect(&worker, &Worker::searchEstimate,
                      [](int, quint64 done, quint64 total, double miss, SpectrumFloat unseen) {
                          g_searchDone = done; g_searchTotal = total;
@@ -2817,12 +2833,114 @@ static void testProductCode()
         }
     }
 
+    // Тот же расчёт через Worker: компоненты маленькие — полный перебор,
+    // все ранги; итог совпадает с полным перебором произведения до
+    // заявленной точности и попадает в запись автосохранения.
+    {
+        RunConfig cfg;
+        cfg.matrix      = Reference::extHamming8_4();
+        cfg.matrix2     = Reference::extHamming8_4();
+        cfg.algorithm   = Algorithm::ProductCode;
+        cfg.productRank = 4;
+        cfg.device      = ComputeDevice::CPU;
+        clearCheckpoints();
+        const Spectrum got   = runWorker(cfg);
+        const Spectrum exact = Reference::bruteForce(kronecker(cfg.matrix, cfg.matrix2));
+        const QVector<AutosaveEntry> entries = testStore().list();
+        clearCheckpoints();
+
+        bool ok = g_productExactUpTo >= 24 && !got.isEmpty();
+        QStringList problems;
+        for (auto it = exact.cbegin(); it != exact.cend(); ++it) {
+            const quint64 g = got.value(it.key(), 0);
+            if (it.key() <= g_productExactUpTo ? g != it.value() : g != 0) {
+                ok = false;
+                problems << QStringLiteral("вес %1: точно %2, получено %3").arg(it.key()).arg(it.value()).arg(g);
+            }
+        }
+        if (entries.isEmpty() || entries.first().record.algorithm != ComputationSettings::ProductCode
+            || entries.first().record.productExactUpTo != g_productExactUpTo)
+            { ok = false; problems << QStringLiteral("запись автосохранения не та"); }
+        expectLeon(QStringLiteral("Worker: eHamming(8,4)^2, ранги до 4 — %1").arg(g_productText),
+                   ok, problems.join(QStringLiteral("; ")));
+    }
+
+    // Большая компонента: порог полного перебора занижен, чтобы компоненты
+    // считались вложенным Брауэром–Циммерманом; тогда доступен только ранг 1,
+    // и спектр точен до границы Толхёйзена.
+    {
+        const int savedLimit = Product::bruteForceMaxK;
+        Product::bruteForceMaxK = 3;
+        RunConfig cfg;
+        cfg.matrix      = Reference::golay24_12();
+        cfg.matrix2     = Reference::hamming7_4();
+        cfg.algorithm   = Algorithm::ProductCode;
+        cfg.productRank = 3;
+        cfg.device      = ComputeDevice::CPU;
+        clearCheckpoints();
+        const Spectrum got = runWorker(cfg);
+        clearCheckpoints();
+        Product::bruteForceMaxK = savedLimit;
+
+        // Ранг 1 по точным спектрам компонент — независимая сверка.
+        const Spectrum sg = Reference::analyticGolay24_12();
+        const Spectrum sh = Reference::analyticHamming7_4();
+        Spectrum expected;
+        expected[0] = 1;
+        for (auto a = sg.cbegin(); a != sg.cend(); ++a)
+            for (auto b = sh.cbegin(); b != sh.cend(); ++b)
+                if (a.key() > 0 && b.key() > 0 && a.key() * b.key() <= g_productExactUpTo)
+                    expected[a.key() * b.key()] += a.value() * b.value();
+
+        const int tolhuizen = int(Product::rankWeightBound(8, 3, 2)) - 1;   // 24 + max(8*2, 3*4) - 1 = 39
+        expectLeon(QStringLiteral("Worker: Голей x Хэмминг, большие компоненты — %1").arg(g_productText),
+                   !got.isEmpty() && got == expected && g_productExactUpTo == tolhuizen,
+                   QStringLiteral("ожидалось до %1: %2; получено: %3")
+                       .arg(tolhuizen).arg(formatSpectrum(expected), formatSpectrum(got)));
+    }
+
     // Граница Толхёйзена для ранга 2 и порядок GL.
     expectLeon(QStringLiteral("|GL(2,2)| = 6, |GL(3,2)| = 168, |GL(4,2)| = 20160"),
                Product::generalLinearOrder(2) == 6 && Product::generalLinearOrder(3) == 168
                    && Product::generalLinearOrder(4) == 20160);
     expectLeon(QStringLiteral("граница ранга 2 для d = 4, 4: 24; для 3, 3: 15"),
                Product::rankWeightBound(4, 4, 2) == 24 && Product::rankWeightBound(3, 3, 2) == 15);
+}
+
+// Код произведения по двум матрицам из файлов.
+//
+// Запуск: SpectrumTests.exe --product-run <файл 1> <файл 2> [<вес>] [<ранг>] [cpu|gpu]
+static int productRun(const QString& path1, const QString& path2, int weight, int rank, const QString& device)
+{
+    RunConfig c1, c2;
+    if (!loadMatrixOrCase(path1, c1) || !loadMatrixOrCase(path2, c2))
+        return 2;
+    RunConfig cfg;
+    cfg.matrix        = c1.matrix;
+    cfg.matrix2       = c2.matrix;
+    cfg.algorithm     = Algorithm::ProductCode;
+    cfg.productWeight = weight;
+    cfg.productRank   = rank;
+    cfg.device        = device == QStringLiteral("gpu") ? ComputeDevice::GPU : ComputeDevice::CPU;
+    cfg.threadsCpu    = omp_get_num_procs();
+    cfg.autoTune      = cfg.device == ComputeDevice::GPU;
+
+    out << QStringLiteral("[%1,%2] x [%3,%4], вес %5, ранги до %6")
+               .arg(c1.matrix.first().length()).arg(c1.matrix.size())
+               .arg(c2.matrix.first().length()).arg(c2.matrix.size())
+               .arg(weight).arg(rank) << Qt::endl;
+    out.flush();
+
+    clearCheckpoints();
+    const auto t = std::chrono::steady_clock::now();
+    const Spectrum spectrum = runWorker(cfg);
+    const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
+    clearCheckpoints();
+
+    out << g_productText << QStringLiteral("; %1 с").arg(sec, 0, 'f', 1) << Qt::endl;
+    for (auto it = spectrum.cbegin(); it != spectrum.cend(); ++it)
+        out << QStringLiteral("   %1  %2").arg(it.key(), 6).arg(it.value(), 16) << Qt::endl;
+    return 0;
 }
 
 // Гарантия алгоритма: ниже границы совпадение с точным спектром обязано быть
@@ -2891,6 +3009,16 @@ int main(int argc, char* argv[])
         bzReport();
         out.flush();
         return 0;
+    }
+
+    const int productAt = args.indexOf(QStringLiteral("--product-run"));
+    if (productAt >= 0 && productAt + 2 < args.size()) {
+        const int weight = productAt + 3 < args.size() ? args.at(productAt + 3).toInt() : 0;
+        const int rank   = productAt + 4 < args.size() ? args.at(productAt + 4).toInt() : 2;
+        const QString device = productAt + 5 < args.size() ? args.at(productAt + 5).toLower() : QStringLiteral("cpu");
+        const int rc = productRun(args.at(productAt + 1), args.at(productAt + 2), weight, rank > 0 ? rank : 2, device);
+        out.flush();
+        return rc;
     }
 
     const int leonAt = args.indexOf(QStringLiteral("--leon-run"));
