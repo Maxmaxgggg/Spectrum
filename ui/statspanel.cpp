@@ -77,17 +77,15 @@ void StatsPanel::showTask(const ComputationSettings& settings)
 {
     grid.clear();
 
-    if (settings.compDev == ComputationSettings::GPU
-        && settings.algorithmType != ComputationSettings::RandomInfoSets) {
-        deviceText = tr("GPU, сетка %1 x %2")
-                         .arg(settings.compDevSet.blocksGpu)
-                         .arg(settings.compDevSet.threadsGpu);
+    if (settings.compDev == ComputationSettings::GPU) {
+        // У случайного поиска своя сетка: блок на попытку, 256 нитей.
+        deviceText = settings.algorithmType == ComputationSettings::RandomInfoSets
+                         ? tr("GPU, блок на попытку")
+                         : tr("GPU, сетка %1 x %2")
+                               .arg(settings.compDevSet.blocksGpu)
+                               .arg(settings.compDevSet.threadsGpu);
     } else {
         deviceText = tr("CPU, потоков: %1").arg(settings.compDevSet.threadsCpu);
-        // Случайный поиск пока только на процессоре, что бы ни стояло в
-        // настройках, — и здесь это должно быть видно.
-        if (settings.compDev == ComputationSettings::GPU)
-            deviceText += tr(" (поиск только на CPU)");
     }
     deviceValue->setText(deviceText);
 

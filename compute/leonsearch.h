@@ -42,9 +42,11 @@ double wordsPerTrial(int k, int rows);
 quint64 trialsFor(double catchProbability, double miss);
 
 // Цена попытки помимо перебора — приведение матрицы к систематическому виду,
-// в тех же единицах, что и слова перебора. Замерено: на 96x336 один Гаусс
-// стоит примерно столько же, сколько шесть тысяч слов, то есть k*k*words/8.
-double gaussCostInWords(int k, int wordsPerRow);
+// в тех же единицах, что и слова перебора. Замерено: на 96x336 один Гаусс на
+// процессоре стоит примерно столько же, сколько шесть тысяч слов, то есть
+// k*k*words/8. На видеокарте Гаусс идёт блоком с барьером на каждый опорный
+// столбец и относительно перебора обходится дороже.
+double gaussCostInWords(int k, int wordsPerRow, bool gpu);
 
 // Попыток, чтобы ни одно слово веса до weight не осталось непойманным с
 // вероятностью больше miss — уже с учётом того, сколько слов каждого веса
@@ -63,7 +65,7 @@ struct Plan
     double  wordsPerTrial = 0.0;   // слов перебирается за попытку
     double  costPerTrial  = 0.0;   // то же плюс цена Гаусса — для прогресса
 };
-Plan plan(int n, int k, int weight, double miss);
+Plan plan(int n, int k, int weight, double miss, bool gpu = false);
 
 // Таблица найденных слов: само слово, вес и сколько раз поймано.
 // Не потокобезопасна — добавления серийные.
@@ -86,12 +88,11 @@ public:
     // нижняя оценка — у слов разная вероятность поимки.
     std::vector<double> unseenByWeight() const;
 
-    // Слова, пойманные ровно один раз, по весам: f1 сами по себе — признак
-    // того, что до конца ещё далеко.
-    std::vector<quint64> singletonsByWeight() const;
+    // Слова, пойманные ровно один (f1) и ровно два (f2) раза, по весам —
+    // сырьё для оценки Чао, когда таблица разбита на части.
+    void hitCounts(std::vector<quint64>& f1, std::vector<quint64>& f2) const;
 
 private:
-    quint64 hashOf(const quint64* word) const;
     bool    equalAt(uint32_t index, const quint64* word) const;
     void    grow();
 
@@ -104,6 +105,43 @@ private:
     std::vector<uint32_t> m_table;    // индекс слова + 1; 0 — пусто
     std::vector<quint64>  m_byWeight;
     quint64               m_count = 0;
+};
+
+// Хеш слова — общий для таблицы и для раскладки по частям.
+quint64 hashWord(const quint64* word, int wordsPerRow);
+
+// Оценка Чао по f1 и f2: f1^2 / (2 f2), при f2 = 0 — f1 (f1 - 1) / 2.
+std::vector<double> chaoUnseen(const std::vector<quint64>& f1, const std::vector<quint64>& f2);
+
+// Таблица из нескольких независимых частей, по хешу слова. Части наполняются
+// параллельно, каждая своим потоком: так хост успевает разбирать находки
+// видеокарты, а потоки CPU-пути не толкаются на одном замке.
+class ShardedWordTable
+{
+public:
+    ShardedWordTable(int wordsPerRow, int maxWeight, int shards);
+    ~ShardedWordTable();
+    ShardedWordTable(const ShardedWordTable&)            = delete;
+    ShardedWordTable& operator=(const ShardedWordTable&) = delete;
+
+    // Одно слово, под замком своей части. Можно звать из разных потоков.
+    void add(const quint64* word, int weight);
+    // Пачка слов подряд, по wordsPerRow каждое: разбирается всеми потоками
+    // OpenMP сразу, вес считается здесь.
+    void addBatch(const quint64* words, size_t count);
+
+    quint64 size()  const;
+    quint64 bytes() const;
+    std::vector<quint64> countByWeight()  const;
+    std::vector<double>  unseenByWeight() const;
+
+private:
+    int shardOf(const quint64* word) const;
+
+    int m_words;
+    int m_maxWeight;
+    std::vector<WordTable> m_shards;
+    std::vector<void*>     m_locks;   // omp_lock_t, без заголовка OpenMP здесь
 };
 
 // Случайный порядок столбцов для попытки с этим номером. Детерминирован:

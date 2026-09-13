@@ -2456,6 +2456,29 @@ static void testLeonModel()
     // a поймано дважды, b трижды, c один раз: f1 = 1, f2 = 1 -> 0.5
     expectLeon(QStringLiteral("таблица слов: %1 слов, Чао %2").arg(table.size()).arg(unseen[4]),
                fresh && repeat && table.size() == 3 && std::abs(unseen[4] - 0.5) < 1e-9);
+
+    // Таблица по частям даёт то же, что и цельная: пачкой и по одному.
+    {
+        Leon::WordTable      whole(1, 8);
+        Leon::ShardedWordTable parts(1, 8, 4);
+        std::vector<quint64> batch;
+        for (quint64 i = 1; i <= 2000; ++i) {
+            const quint64 w = (i % 200) + 1;   // повторы: 200 разных слов, вес не выше 8
+            batch.push_back(w);
+        }
+        for (quint64 w : batch) {
+            int weight = 0; quint64 v = w; while (v) { weight += int(v & 1); v >>= 1; }
+            whole.add(&w, weight);
+            if (w % 2 == 0) parts.add(&w, weight);
+        }
+        std::vector<quint64> odd;
+        for (quint64 w : batch) if (w % 2 == 1) odd.push_back(w);
+        parts.addBatch(odd.data(), odd.size());
+        const bool same = whole.size() == parts.size()
+                       && whole.countByWeight() == parts.countByWeight()
+                       && whole.unseenByWeight() == parts.unseenByWeight();
+        expectLeon(QStringLiteral("таблица по частям: %1 слов, как цельная").arg(parts.size()), same);
+    }
 }
 
 // Поиск на кодах с известным спектром: до заданного веса он обязан совпасть
@@ -2472,16 +2495,21 @@ static void testLeonWorker()
         { QStringLiteral("случайный [60,20]"),       BZ::scramble(BZ::systematicRandom(20, 60, 3), 5),   15 },
         { QStringLiteral("случайный [96,24]"),       BZ::scramble(BZ::systematicRandom(24, 96, 9), 2),   20 },
     };
-    for (const Case& c : cases) {
-        const Spectrum exact = Reference::bruteForce(c.rows);
+    auto checkDevice = [&](const Case& c, const Spectrum& exact, ComputeDevice device) {
+        const QString who = device == ComputeDevice::CPU ? QStringLiteral("CPU") : QStringLiteral("GPU");
+        if (device == ComputeDevice::GPU && !g_gpuAvailable) {
+            out << QStringLiteral("  ПРОПУСК  ") << c.name << QStringLiteral(" GPU  (GPU недоступен)") << Qt::endl;
+            return;
+        }
         RunConfig cfg;
         cfg.matrix     = c.rows;
         cfg.algorithm  = Algorithm::RandomInfoSets;
         cfg.leonWeight = c.weight;
-        cfg.device     = ComputeDevice::CPU;
+        cfg.device     = device;
         clearCheckpoints();
         const Spectrum found = runWorker(cfg);
         const quint64 trials = g_searchTotal, done = g_searchDone;
+        const double  miss   = g_searchMiss;
         const Spectrum again = runWorker(cfg);
         clearCheckpoints();
 
@@ -2501,9 +2529,15 @@ static void testLeonWorker()
             if (found.value(it.key()) > exact.value(it.key(), 0)) { ok = false; problems << QStringLiteral("вес %1: лишние слова").arg(it.key()); }
         if (again != found) { ok = false; problems << QStringLiteral("повтор дал другой спектр"); }
 
-        expectLeon(QStringLiteral("%1, до веса %2: попыток %3, пропуск ~%4")
-                       .arg(c.name).arg(c.weight).arg(trials).arg(g_searchMiss, 0, 'g', 2),
+        expectLeon(QStringLiteral("%1 %2, до веса %3: попыток %4, пропуск ~%5")
+                       .arg(c.name).arg(who).arg(c.weight).arg(trials).arg(miss, 0, 'g', 2),
                    ok, problems.join(QStringLiteral("; ")));
+    };
+
+    for (const Case& c : cases) {
+        const Spectrum exact = Reference::bruteForce(c.rows);
+        checkDevice(c, exact, ComputeDevice::CPU);
+        checkDevice(c, exact, ComputeDevice::GPU);
     }
 
     // Длинный код: точного спектра нет, сверяемся с Брауэром–Циммерманом,
@@ -2519,32 +2553,76 @@ static void testLeonWorker()
         const Spectrum exact = runWorker(bz);
         const int exactUpTo = g_planExactUpTo;
 
-        RunConfig leon;
-        leon.matrix     = rows;
-        leon.algorithm  = Algorithm::RandomInfoSets;
-        leon.leonWeight = 8;
-        leon.device     = ComputeDevice::CPU;
-        clearCheckpoints();
-        const Spectrum found = runWorker(leon);
-        clearCheckpoints();
-
-        bool ok = exactUpTo >= 8 && !found.isEmpty();
-        QStringList problems;
-        for (int w = 1; w <= 8; ++w)
-            if (found.value(w, 0) != exact.value(w, 0)) {
-                ok = false;
-                problems << QStringLiteral("вес %1: БЦ %2, поиск %3").arg(w).arg(exact.value(w, 0)).arg(found.value(w, 0));
+        for (ComputeDevice device : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+            const bool gpu = device == ComputeDevice::GPU;
+            if (gpu && !g_gpuAvailable) {
+                out << QStringLiteral("  ПРОПУСК  [140,66] длинный GPU  (GPU недоступен)") << Qt::endl;
+                continue;
             }
-        const Leon::Plan plan = Leon::plan(140, 66, 8, 1e-12);
-        expectLeon(QStringLiteral("[140,66] длинный, до веса 8: попыток %1, %2 строк за попытку")
-                       .arg(g_searchTotal).arg(plan.rows), ok, problems.join(QStringLiteral("; ")));
+            RunConfig leon;
+            leon.matrix     = rows;
+            leon.algorithm  = Algorithm::RandomInfoSets;
+            leon.leonWeight = 8;
+            leon.device     = device;
+            clearCheckpoints();
+            const Spectrum found = runWorker(leon);
+            clearCheckpoints();
+
+            bool ok = exactUpTo >= 8 && !found.isEmpty();
+            QStringList problems;
+            for (int w = 1; w <= 8; ++w)
+                if (found.value(w, 0) != exact.value(w, 0)) {
+                    ok = false;
+                    problems << QStringLiteral("вес %1: БЦ %2, поиск %3").arg(w).arg(exact.value(w, 0)).arg(found.value(w, 0));
+                }
+            const Leon::Plan plan = Leon::plan(140, 66, 8, 1e-12, gpu);
+            expectLeon(QStringLiteral("[140,66] длинный %1, до веса 8: попыток %2, %3 строк за попытку")
+                           .arg(gpu ? QStringLiteral("GPU") : QStringLiteral("CPU"))
+                           .arg(g_searchTotal).arg(plan.rows), ok, problems.join(QStringLiteral("; ")));
+        }
+    }
+
+    // Одинаковые номера попыток дают одинаковые множества на обоих
+    // устройствах: при одной глубине перебора спектры обязаны совпасть
+    // побитово — не «оба точны», а именно совпасть, включая веса выше
+    // предела точности.
+    if (g_gpuAvailable) {
+        const QStringList rows = BZ::scramble(BZ::systematicRandom(30, 90, 17), 3);
+        const int weight = 30;
+        // Глубина у устройств может разойтись из-за разной цены Гаусса;
+        // сравнивать имеет смысл только при одинаковой.
+        const Leon::Plan cpuPlan = Leon::plan(90, 30, weight, 1e-12, false);
+        const Leon::Plan gpuPlan = Leon::plan(90, 30, weight, 1e-12, true);
+        if (cpuPlan.rows != gpuPlan.rows) {
+            out << QStringLiteral("  ПРОПУСК  CPU и GPU слово в слово: разная глубина (%1 и %2)")
+                       .arg(cpuPlan.rows).arg(gpuPlan.rows) << Qt::endl;
+        }
+        else {
+            RunConfig cfg;
+            cfg.matrix     = rows;
+            cfg.algorithm  = Algorithm::RandomInfoSets;
+            cfg.leonWeight = weight;
+            cfg.device     = ComputeDevice::CPU;
+            clearCheckpoints();
+            const Spectrum cpu = runWorker(cfg);
+            const quint64 cpuTrials = g_searchDone;
+            cfg.device = ComputeDevice::GPU;
+            clearCheckpoints();
+            const Spectrum gpu = runWorker(cfg);
+            const quint64 gpuTrials = g_searchDone;
+            clearCheckpoints();
+            expectLeon(QStringLiteral("[90,30] CPU и GPU слово в слово: попыток %1 и %2")
+                           .arg(cpuTrials).arg(gpuTrials),
+                       !cpu.isEmpty() && cpu == gpu && cpuTrials == gpuTrials,
+                       QStringLiteral("CPU: %1\n      GPU: %2").arg(formatSpectrum(cpu), formatSpectrum(gpu)));
+        }
     }
 }
 
 // Случайный поиск на матрице из файла.
 //
-// Запуск: SpectrumTests.exe --leon-run <файл матрицы> <вес> [<степень пропуска>]
-static int leonRun(const QString& path, int weight, int missExponent)
+// Запуск: SpectrumTests.exe --leon-run <файл матрицы> <вес> [<степень пропуска>] [cpu|gpu]
+static int leonRun(const QString& path, int weight, int missExponent, const QString& device)
 {
     RunConfig cfg;
     if (!loadMatrixOrCase(path, cfg))
@@ -2552,15 +2630,17 @@ static int leonRun(const QString& path, int weight, int missExponent)
     cfg.algorithm        = Algorithm::RandomInfoSets;
     cfg.leonWeight       = weight;
     cfg.leonMissExponent = missExponent;
-    cfg.device           = ComputeDevice::CPU;
+    cfg.device           = device == QStringLiteral("gpu") ? ComputeDevice::GPU : ComputeDevice::CPU;
     cfg.threadsCpu       = omp_get_num_procs();
 
     const int k = cfg.matrix.size();
     const int n = cfg.matrix.first().length();
-    const Leon::Plan plan = Leon::plan(n, k, weight, std::pow(10.0, -missExponent));
-    out << QStringLiteral("[%1,%2], все слова до веса %3, пропуск 10^-%4: %5 строк за попытку, попыток %6, слов %7")
+    const Leon::Plan plan = Leon::plan(n, k, weight, std::pow(10.0, -missExponent),
+                                       cfg.device == ComputeDevice::GPU);
+    out << QStringLiteral("[%1,%2], все слова до веса %3, пропуск 10^-%4, %8: %5 строк за попытку, попыток %6, слов %7")
                .arg(n).arg(k).arg(weight).arg(missExponent)
-               .arg(plan.rows).arg(plan.trials).arg(double(plan.trials) * plan.wordsPerTrial, 0, 'g', 3) << Qt::endl;
+               .arg(plan.rows).arg(plan.trials).arg(double(plan.trials) * plan.wordsPerTrial, 0, 'g', 3)
+               .arg(cfg.device == ComputeDevice::GPU ? QStringLiteral("GPU") : QStringLiteral("CPU")) << Qt::endl;
     out.flush();
 
     clearCheckpoints();
@@ -2651,7 +2731,8 @@ int main(int argc, char* argv[])
     const int leonAt = args.indexOf(QStringLiteral("--leon-run"));
     if (leonAt >= 0 && leonAt + 2 < args.size()) {
         const int missExp = leonAt + 3 < args.size() ? args.at(leonAt + 3).toInt() : 9;
-        const int rc = leonRun(args.at(leonAt + 1), args.at(leonAt + 2).toInt(), missExp > 0 ? missExp : 9);
+        const QString device = leonAt + 4 < args.size() ? args.at(leonAt + 4).toLower() : QStringLiteral("cpu");
+        const int rc = leonRun(args.at(leonAt + 1), args.at(leonAt + 2).toInt(), missExp > 0 ? missExp : 9, device);
         out.flush();
         return rc;
     }

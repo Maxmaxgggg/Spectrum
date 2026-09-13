@@ -1,5 +1,7 @@
 #include "leonsearch.h"
 
+#include <omp.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -88,9 +90,14 @@ quint64 trialsFor(double catchProbability, double miss)
     return quint64(std::ceil(std::max(1.0, t)));
 }
 
-double gaussCostInWords(int k, int wordsPerRow)
+double gaussCostInWords(int k, int wordsPerRow, bool gpu)
 {
-    return double(k) * double(k) * double(wordsPerRow) / 8.0;
+    const double cpu = double(k) * double(k) * double(wordsPerRow) / 8.0;
+    // Замер на 96x336: попытка с двумя строками (почти один Гаусс) — 7 мкс,
+    // с тремя — 34 мкс на 147 тысяч слов; Гаусс блока стоит как 38 тысяч
+    // слов, в пять с половиной раз дороже, чем на процессоре относительно
+    // перебора.
+    return gpu ? cpu * 5.5 : cpu;
 }
 
 quint64 trialsForAll(int n, int k, int weight, int rows, double miss,
@@ -105,11 +112,11 @@ quint64 trialsForAll(int n, int k, int weight, int rows, double miss,
     return needed;
 }
 
-Plan plan(int n, int k, int weight, double miss)
+Plan plan(int n, int k, int weight, double miss, bool gpu)
 {
     Plan best;
     double bestCost = 0.0;
-    const double gauss = gaussCostInWords(k, (n + 63) / 64);
+    const double gauss = gaussCostInWords(k, (n + 63) / 64, gpu);
     // Глубже четырёх строк за попытку не имеет смысла: столько уже дешевле
     // отдать Брауэру–Циммерману. Глубже k не бывает.
     for (int rows = 1; rows <= 4 && rows <= k; ++rows) {
@@ -138,10 +145,10 @@ WordTable::WordTable(int wordsPerRow, int maxWeight)
 {
 }
 
-quint64 WordTable::hashOf(const quint64* word) const
+quint64 hashWord(const quint64* word, int wordsPerRow)
 {
     quint64 h = 0x9E3779B97F4A7C15ULL;
-    for (int w = 0; w < m_words; ++w) {
+    for (int w = 0; w < wordsPerRow; ++w) {
         h ^= word[w];
         h *= 0xFF51AFD7ED558CCDULL;
         h ^= h >> 33;
@@ -162,7 +169,7 @@ void WordTable::grow()
     for (uint32_t slot : m_table) {
         if (slot == 0)
             continue;
-        quint64 pos = hashOf(m_store.data() + size_t(slot - 1) * m_words) & mask;
+        quint64 pos = hashWord(m_store.data() + size_t(slot - 1) * m_words, m_words) & mask;
         while (table[size_t(pos)] != 0)
             pos = (pos + 1) & mask;
         table[size_t(pos)] = slot;
@@ -173,7 +180,7 @@ void WordTable::grow()
 bool WordTable::add(const quint64* word, int weight)
 {
     const quint64 mask = m_table.size() - 1;
-    quint64 pos = hashOf(word) & mask;
+    quint64 pos = hashWord(word, m_words) & mask;
     for (;;) {
         const uint32_t slot = m_table[size_t(pos)];
         if (slot == 0)
@@ -210,25 +217,23 @@ quint64 WordTable::bytes() const
          + quint64(m_table.capacity()) * sizeof(uint32_t);
 }
 
-std::vector<quint64> WordTable::singletonsByWeight() const
+void WordTable::hitCounts(std::vector<quint64>& f1, std::vector<quint64>& f2) const
 {
-    std::vector<quint64> f1(size_t(m_maxWeight) + 1, 0ULL);
-    for (quint64 i = 0; i < m_count; ++i)
-        if (m_hits[size_t(i)] == 1u)
-            ++f1[m_weight[size_t(i)]];
-    return f1;
+    f1.assign(size_t(m_maxWeight) + 1, 0ULL);
+    f2.assign(size_t(m_maxWeight) + 1, 0ULL);
+    for (quint64 i = 0; i < m_count; ++i) {
+        const uint32_t hits   = m_hits[size_t(i)];
+        const uint16_t weight = m_weight[size_t(i)];
+        if (weight > m_maxWeight)
+            continue;
+        if (hits == 1u)      ++f1[weight];
+        else if (hits == 2u) ++f2[weight];
+    }
 }
 
-std::vector<double> WordTable::unseenByWeight() const
+std::vector<double> chaoUnseen(const std::vector<quint64>& f1, const std::vector<quint64>& f2)
 {
-    std::vector<quint64> f1(size_t(m_maxWeight) + 1, 0ULL);
-    std::vector<quint64> f2(size_t(m_maxWeight) + 1, 0ULL);
-    for (quint64 i = 0; i < m_count; ++i) {
-        const uint32_t hits = m_hits[size_t(i)];
-        if (hits == 1u)      ++f1[m_weight[size_t(i)]];
-        else if (hits == 2u) ++f2[m_weight[size_t(i)]];
-    }
-    std::vector<double> unseen(size_t(m_maxWeight) + 1, 0.0);
+    std::vector<double> unseen(f1.size(), 0.0);
     for (size_t w = 0; w < unseen.size(); ++w) {
         // Чао-1; при f2 = 0 — его же вариант со смещением.
         if (f2[w] > 0)
@@ -239,6 +244,125 @@ std::vector<double> WordTable::unseenByWeight() const
             unseen[w] = 0.0;
     }
     return unseen;
+}
+
+std::vector<double> WordTable::unseenByWeight() const
+{
+    std::vector<quint64> f1, f2;
+    hitCounts(f1, f2);
+    return chaoUnseen(f1, f2);
+}
+
+// ---------------------------------------------------------- части
+
+ShardedWordTable::ShardedWordTable(int wordsPerRow, int maxWeight, int shards)
+    : m_words(wordsPerRow)
+    , m_maxWeight(maxWeight)
+{
+    shards = std::max(1, shards);
+    m_shards.reserve(size_t(shards));
+    for (int i = 0; i < shards; ++i) {
+        m_shards.emplace_back(wordsPerRow, maxWeight);
+        omp_lock_t* lock = new omp_lock_t;
+        omp_init_lock(lock);
+        m_locks.push_back(lock);
+    }
+}
+
+ShardedWordTable::~ShardedWordTable()
+{
+    for (void* lock : m_locks) {
+        omp_destroy_lock(static_cast<omp_lock_t*>(lock));
+        delete static_cast<omp_lock_t*>(lock);
+    }
+}
+
+int ShardedWordTable::shardOf(const quint64* word) const
+{
+    // Старшие биты хеша: младшие раскладывают слова внутри части, и часть
+    // не должна от них зависеть — иначе в каждой части занята лишь доля ячеек.
+    return int((hashWord(word, m_words) >> 40) % quint64(m_shards.size()));
+}
+
+void ShardedWordTable::add(const quint64* word, int weight)
+{
+    const int j = shardOf(word);
+    omp_lock_t* lock = static_cast<omp_lock_t*>(m_locks[size_t(j)]);
+    omp_set_lock(lock);
+    m_shards[size_t(j)].add(word, weight);
+    omp_unset_lock(lock);
+}
+
+void ShardedWordTable::addBatch(const quint64* words, size_t count)
+{
+    if (count == 0)
+        return;
+    // Сначала номер части каждого слова, потом каждая часть проходит по
+    // пачке и берёт своё: хеш считается один раз, а не по разу на часть.
+    std::vector<uint8_t> shard(count);
+    const int shards = int(m_shards.size());
+
+    #pragma omp parallel
+    {
+        #pragma omp for schedule(static)
+        for (long long i = 0; i < (long long)count; ++i)
+            shard[size_t(i)] = uint8_t(shardOf(words + size_t(i) * m_words));
+
+        #pragma omp for schedule(dynamic, 1)
+        for (int j = 0; j < shards; ++j) {
+            WordTable& table = m_shards[size_t(j)];
+            for (size_t i = 0; i < count; ++i) {
+                if (shard[i] != j)
+                    continue;
+                const quint64* word = words + i * m_words;
+                int weight = 0;
+                for (int w = 0; w < m_words; ++w) {
+#ifdef _MSC_VER
+                    weight += int(__popcnt64(word[w]));
+#else
+                    weight += __builtin_popcountll(word[w]);
+#endif
+                }
+                table.add(word, weight);
+            }
+        }
+    }
+}
+
+quint64 ShardedWordTable::size() const
+{
+    quint64 total = 0;
+    for (const WordTable& t : m_shards) total += t.size();
+    return total;
+}
+
+quint64 ShardedWordTable::bytes() const
+{
+    quint64 total = 0;
+    for (const WordTable& t : m_shards) total += t.bytes();
+    return total;
+}
+
+std::vector<quint64> ShardedWordTable::countByWeight() const
+{
+    std::vector<quint64> total(size_t(m_maxWeight) + 1, 0ULL);
+    for (const WordTable& t : m_shards) {
+        const std::vector<quint64>& part = t.countByWeight();
+        for (size_t w = 0; w < total.size() && w < part.size(); ++w)
+            total[w] += part[w];
+    }
+    return total;
+}
+
+std::vector<double> ShardedWordTable::unseenByWeight() const
+{
+    std::vector<quint64> f1(size_t(m_maxWeight) + 1, 0ULL), f2(size_t(m_maxWeight) + 1, 0ULL);
+    std::vector<quint64> p1, p2;
+    for (const WordTable& t : m_shards) {
+        t.hitCounts(p1, p2);
+        for (size_t w = 0; w < f1.size(); ++w) { f1[w] += p1[w]; f2[w] += p2[w]; }
+    }
+    return chaoUnseen(f1, f2);
 }
 
 void shuffledColumns(int cols, quint64 trialIndex, std::vector<int>& order)

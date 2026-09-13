@@ -40,6 +40,7 @@
     <ClInclude Include="compute\gridtuner.h" />
     <ClInclude Include="compute\infosets.h" />
     <ClInclude Include="compute\leonsearch.h" />
+    <ClInclude Include="compute\leonkernel.cuh" />
     <ClInclude Include="compute\spectrumring.h" />
     <ClInclude Include="defines.h" />
     <ClInclude Include="storage\autosavestore.h" />
@@ -70,6 +71,7 @@
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="compute\computeSpectrumKernel.cu" />
+    <CudaCompile Include="compute\leonkernel.cu" />
   </ItemGroup>
   <ItemGroup>
     <QtRcc Include="q.qrc" />

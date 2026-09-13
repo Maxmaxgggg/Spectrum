@@ -27,6 +27,7 @@
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="..\compute\computeSpectrumKernel.cu" />
+    <CudaCompile Include="..\compute\leonkernel.cu" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{2F4C7A18-6D53-4B0E-9C21-8A5E3D7F1B44}</ProjectGuid>

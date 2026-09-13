@@ -1,5 +1,6 @@
 #include "worker.h"
 #include "gridtuner.h"
+#include "leonkernel.cuh"
 
 #include <algorithm>
 #include <cmath>
@@ -1206,14 +1207,21 @@ void Worker::computeSpectrumCpuNoGrayShort(const CodeGeometry& g)
 }
 // Случайный поиск по информационным множествам — см. leonsearch.h.
 //
-// Попытки независимы, поэтому раздаются потокам OpenMP пачками; найденные
-// слова складываются в общую таблицу под замком. Замок не мешает: слов веса
-// не выше заданного — доли процента от перебранных, остальные отсеиваются
-// по весу ещё до него.
+// Попытки независимы и нумерованы; номер задаёт порядок столбцов, поэтому
+// попытка с одним номером даёт одно и то же множество на CPU и на GPU, и оба
+// пути обязаны находить одни и те же слова. Найденное складывается в таблицу
+// на хосте: там считаются поимки, по ним — оценка ненайденного.
+//
+// CPU: пачка попыток раздаётся потокам OpenMP, слова кладутся в таблицу под
+// замком. Замок не мешает: слов нужного веса — доли процента от перебранных.
+//
+// GPU: блок нитей — попытка (leonkernel.cu), слова выкладываются в буфер, а
+// хост забирает их и вставляет в таблицу. Буферов два: пока хост разбирает
+// одну пачку, видеокарта считает следующую.
 //
 // Чекпоинтов по ходу нет: пришлось бы писать на диск всю таблицу, а поиск по
 // самой своей природе короткий — его предел ставит память под слова.
-void Worker::computeSpectrumCpuLeon(const CodeGeometry& g)
+void Worker::computeSpectrumLeon(const CodeGeometry& g)
 {
     const int rows  = int(g.numOfRows);
     const int cols  = int(g.numOfCols);
@@ -1225,7 +1233,19 @@ void Worker::computeSpectrumCpuLeon(const CodeGeometry& g)
     // перебор, и для него есть другие алгоритмы.
     constexpr quint64 kTableLimitBytes = 1ULL << 30;
 
-    Leon::WordTable table(words, maxWeight);
+    // Ранг проверяется один раз здесь: ядро молча даёт пустую попытку, а
+    // CPU-путь узнал бы об этом только внутри параллельной области.
+    {
+        std::vector<int> order;
+        Leon::shuffledColumns(cols, 0, order);
+        InfoSets::InfoSet set;
+        if (!InfoSets::systematize(h_matrix.get(), rows, cols, words, order, nullptr, set))
+            throw std::invalid_argument(
+                "строки матрицы зависимы: случайному поиску нужна матрица полного ранга");
+    }
+
+    // Частей — по числу потоков: каждая наполняется своим.
+    Leon::ShardedWordTable table(words, maxWeight, std::max(1, omp_get_max_threads()));
 
     // Прогресс считается в словах, как везде: скорость тогда сравнима.
     // Число попыток растёт по ходу: чем больше слов какого-то веса нашлось,
@@ -1233,13 +1253,26 @@ void Worker::computeSpectrumCpuLeon(const CodeGeometry& g)
     // с заданной вероятностью. План даёт нижнюю границу — на одно слово.
     quint64 target = g.leonTrials;
     auto opsFor = [&](quint64 trials) {
-        const double words = double(trials) * g.leonWordsPerTrial;
-        return words >= 1.8e19 ? std::numeric_limits<quint64>::max() : quint64(words);
+        const double ops = double(trials) * g.leonWordsPerTrial;
+        return ops >= 1.8e19 ? std::numeric_limits<quint64>::max() : quint64(ops);
     };
     progress.begin(opsFor(target), 0, 0);
 
-    auto publish = [&](quint64 done, bool force) {
-        const std::vector<quint64>& found = table.countByWeight();
+    quint64 launched  = 0;   // попыток начато
+    quint64 collected = 0;   // попыток, чьи слова уже в таблице
+
+    auto retarget = [&]() {
+        const quint64 needed = Leon::trialsForAll(cols, rows, maxWeight, depth,
+                                                  settings.leonMissProbability(),
+                                                  table.countByWeight());
+        if (needed > target) {
+            target = needed;
+            progress.setTotalOps(opsFor(target));
+        }
+    };
+
+    auto publish = [&](bool force) {
+        const std::vector<quint64> found = table.countByWeight();
         h_spectrum.fillZero();
         h_spectrum[0] = 1;
         for (size_t w = 1; w < found.size() && w < g.spectrumSize; ++w)
@@ -1262,70 +1295,252 @@ void Worker::computeSpectrumCpuLeon(const CodeGeometry& g)
             const std::vector<double> chao = table.unseenByWeight();
             for (int w = 1; w <= maxWeight && w <= cols; ++w) {
                 const double p = Leon::catchProbability(cols, rows, w, depth);
-                const double q = std::exp(double(done) * std::log1p(-p));   // (1-p)^done
+                const double q = std::exp(double(collected) * std::log1p(-p));   // (1-p)^collected
                 if (found[size_t(w)] > 0)
                     missTotal += double(found[size_t(w)]) * q / std::max(1.0 - q, 1e-300);
                 unseen[w] = float(chao[size_t(w)]);
             }
-            emit searchEstimate(maxWeight, done, target,
+            emit searchEstimate(maxWeight, collected, target,
                                 std::min(1.0, missTotal), unseen);
         }
     };
 
-    // Пачка попыток на один проход: достаточно мелкая, чтобы отмена и пауза
-    // отзывались быстро, и достаточно крупная, чтобы потоки не простаивали.
-    const quint64 batch = quint64(std::max(1, omp_get_max_threads())) * 16;
-    bool rankError = false;
-    quint64 done = 0;
-
-    while (done < target) {
-        if (!waitWhilePaused())
-            break;
-        const quint64 count = std::min(batch, target - done);
-
-        #pragma omp parallel for schedule(dynamic)
-        for (long long t = 0; t < (long long)count; ++t) {
-            const bool ok = Leon::trial(h_matrix.get(), rows, cols, words, depth, maxWeight,
-                                        done + quint64(t),
-                                        [&](const quint64* word, int weight) {
-                                            #pragma omp critical(leonTable)
-                                            table.add(word, weight);
-                                        });
-            if (!ok) {
-                #pragma omp critical(leonTable)
-                rankError = true;
-            }
-        }
-        if (rankError)
-            throw std::invalid_argument(
-                "строки матрицы зависимы: случайному поиску нужна матрица полного ранга");
-
-        done += count;
-        activeTrials = done;
-        progress.addOps(quint64(double(count) * g.leonWordsPerTrial));
-        runState.doneOps = progress.doneOps();
-
-        // Пересчёт объёма по найденному: цель только растёт.
-        const quint64 needed = Leon::trialsForAll(cols, rows, maxWeight, depth,
-                                                  settings.leonMissProbability(),
-                                                  table.countByWeight());
-        if (needed > target) {
-            target = needed;
-            progress.setTotalOps(opsFor(target));
-        }
-
+    auto checkMemory = [&]() {
         if (table.bytes() > kTableLimitBytes) {
-            publish(done, true);
+            publish(true);
             throw std::runtime_error(
                 "слишком много слов до заданного веса: таблица не помещается в память, "
                 "уменьшите вес");
         }
-        publish(done, false);
+    };
+
+    // ------------------------------------------------------------- CPU
+    if (!g.useGpu) {
+        // Пачка попыток на один проход: достаточно мелкая, чтобы отмена и
+        // пауза отзывались быстро, и достаточно крупная, чтобы потоки не
+        // простаивали.
+        const quint64 batch = quint64(std::max(1, omp_get_max_threads())) * 16;
+
+        while (launched < target) {
+            if (!waitWhilePaused())
+                break;
+            const quint64 count = std::min(batch, target - launched);
+
+            #pragma omp parallel for schedule(dynamic)
+            for (long long t = 0; t < (long long)count; ++t) {
+                Leon::trial(h_matrix.get(), rows, cols, words, depth, maxWeight,
+                            launched + quint64(t),
+                            [&](const quint64* word, int weight) {
+                                table.add(word, weight);
+                            });
+            }
+
+            launched  += count;
+            collected  = launched;
+            activeTrials = collected;
+            progress.addOps(quint64(double(count) * g.leonWordsPerTrial));
+            runState.doneOps = progress.doneOps();
+
+            retarget();
+            checkMemory();
+            publish(false);
+            if (cancelled.load())
+                break;
+        }
+        publish(true);
+        return;
+    }
+
+    // ------------------------------------------------------------- GPU
+    // Блок на попытку, 256 нитей: Гаусс идёт всем блоком по строкам, а
+    // перебор — по комбинациям; сетка из настроек тут ни при чём.
+    constexpr int     kThreads     = 256;
+    constexpr quint64 kBatchMax    = 8192;         // попыток на запуск, потолок
+    constexpr quint64 kCapacityMax = 8ULL << 20;   // слов в буфере, потолок
+    quint64           capacity     = 1ULL << 20;
+
+    DeviceBuffer<quint64> d_mat;
+    d_mat.allocate(size_t(rows) * words);
+    CUDA_CALL(cudaMemcpy(d_mat.get(), h_matrix.get(), size_t(rows) * words * sizeof(quint64),
+                         cudaMemcpyHostToDevice));
+
+    struct Slot
+    {
+        DeviceBuffer<quint64>  d_out;
+        DeviceBuffer<unsigned> d_count;
+        HostBuffer<quint64>    h_out;
+        HostBuffer<unsigned>   h_count;
+        CudaStream             stream;
+        quint64                first   = 0;
+        quint64                count   = 0;
+        bool                   pending = false;
+    };
+    Slot slot[2];
+    auto allocateOut = [&](Slot& s) {
+        s.d_out.allocate(size_t(capacity) * words);
+        s.h_out.allocate(size_t(capacity) * words, HostBuffer<quint64>::Kind::Pinned);
+    };
+    for (Slot& s : slot) {
+        allocateOut(s);
+        s.d_count.allocate(1);
+        s.h_count.allocate(1, HostBuffer<unsigned>::Kind::Pinned);
+        s.stream.create();
+    }
+
+    // Размер пачки подстраивается под плотность находок: у плотного кода
+    // слов нужного веса тысячи на попытку, у редкого — доли. Первая пачка
+    // маленькая — по ней и меряется.
+    quint64 batchTrials  = 256;
+    double  hitsPerTrial = 0.0;
+    auto adaptBatch = [&](quint64 found, quint64 count) {
+        if (count == 0)
+            return;
+        hitsPerTrial = std::max(hitsPerTrial, double(found) / double(count));
+        const double room = double(capacity) / 4.0 / std::max(1.0, hitsPerTrial);
+        batchTrials = quint64(std::min(double(kBatchMax), std::max(1.0, room)));
+    };
+
+    // Пачки, которые пришлось отложить: переполнившаяся делится пополам, и
+    // вторая половина ждёт своей очереди здесь.
+    std::vector<std::pair<quint64, quint64>> deferred;
+
+    auto launchBatch = [&](Slot& s, quint64 first, quint64 count) {
+        CUDA_CALL(cudaMemsetAsync(s.d_count.get(), 0, sizeof(unsigned), s.stream.get()));
+        LeonLaunch L;
+        L.matrix       = d_mat.get();
+        L.rows         = rows;
+        L.cols         = cols;
+        L.wordsPerRow  = words;
+        L.rowsPerTrial = depth;
+        L.maxWeight    = maxWeight;
+        L.firstTrial   = first;
+        L.trials       = int(count);
+        L.outWords     = s.d_out.get();
+        L.outCount     = s.d_count.get();
+        L.capacity     = unsigned(capacity);
+        launchLeonTrials(L, kThreads, s.stream.get());
+        CUDA_CALL(cudaMemcpyAsync(s.h_count.get(), s.d_count.get(), sizeof(unsigned),
+                                  cudaMemcpyDeviceToHost, s.stream.get()));
+        s.first = first; s.count = count; s.pending = true;
+    };
+
+    // Забирает слова пачки в таблицу. false — буфер оказался мал: слова
+    // сверх него потеряны, пачку надо повторить.
+    auto collectBatch = [&](Slot& s) -> bool {
+        CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
+        const unsigned found = s.h_count[0];
+        if (quint64(found) > capacity)
+            return false;
+        if (found > 0) {
+            CUDA_CALL(cudaMemcpy(s.h_out.get(), s.d_out.get(),
+                                 size_t(found) * words * sizeof(quint64), cudaMemcpyDeviceToHost));
+            table.addBatch(s.h_out.get(), found);
+        }
+        adaptBatch(found, s.count);
+        s.pending  = false;
+        collected += s.count;
+        return true;
+    };
+
+    // Переполнение. Пока буфер можно увеличить — увеличивается (оба сразу,
+    // они одного размера); упёрлись в потолок — пачка делится пополам, и
+    // вторая половина откладывается. Чужую пачку сначала забрать: иначе её
+    // слова пропадут вместе со старым буфером; не влезла и она — повторится
+    // тем же порядком.
+    auto shrinkOrGrow = [&](Slot& s, quint64 need) {
+        // Счётчик ядра считает все находки, и за пределами буфера тоже, —
+        // плотность по нему честная.
+        adaptBatch(need, s.count);
+        if (need <= kCapacityMax && capacity < kCapacityMax) {
+            capacity = std::min(kCapacityMax, std::max(capacity * 2, need + need / 4 + 1024));
+            return;
+        }
+        if (s.count <= 1)
+            throw std::runtime_error(
+                "одна попытка даёт больше восьми миллионов слов до заданного веса: уменьшите вес");
+        const quint64 half = s.count / 2;
+        deferred.push_back({ s.first + half, s.count - half });
+        s.count = half;
+    };
+    auto collectOrRetry = [&](Slot& s) {
+        while (!collectBatch(s)) {
+            const quint64 before = capacity;
+            Slot& other = (&s == &slot[0]) ? slot[1] : slot[0];
+            bool rerunOther = false;
+            if (other.pending && !collectBatch(other)) {
+                rerunOther = true;
+                shrinkOrGrow(other, other.h_count[0]);
+            }
+            shrinkOrGrow(s, s.h_count[0]);
+            if (capacity != before) {
+                allocateOut(slot[0]);
+                allocateOut(slot[1]);
+            }
+            if (rerunOther)
+                launchBatch(other, other.first, other.count);
+            launchBatch(s, s.first, s.count);
+        }
+    };
+
+    // Следующий кусок работы: сначала отложенное, потом новые попытки.
+    auto takeRange = [&](quint64& first, quint64& count) -> bool {
+        if (!deferred.empty()) {
+            const std::pair<quint64, quint64> range = deferred.back();
+            deferred.pop_back();
+            first = range.first;
+            count = std::min(range.second, batchTrials);
+            if (range.second > count)
+                deferred.push_back({ first + count, range.second - count });
+            return true;
+        }
+        if (launched >= target)
+            return false;
+        first = launched;
+        count = std::min(batchTrials, target - launched);
+        launched += count;
+        progress.addOps(quint64(double(count) * g.leonWordsPerTrial));
+        runState.doneOps = progress.doneOps();
+        return true;
+    };
+
+    int cur = 0;
+    for (;;) {
+        quint64 first = 0, count = 0;
+        if (!takeRange(first, count)) {
+            // Всё запущено — дождаться хвоста и решить, не нужно ли ещё.
+            for (Slot& s : slot)
+                if (s.pending)
+                    collectOrRetry(s);
+            activeTrials = collected;
+            retarget();
+            checkMemory();
+            if (deferred.empty() && launched >= target)
+                break;
+            continue;
+        }
+        if (!waitWhilePaused())
+            break;
+
+        Slot& s = slot[cur];
+        if (s.pending)
+            collectOrRetry(s);
+        launchBatch(s, first, count);
+        activeTrials = collected;
+
+        retarget();
+        checkMemory();
+        publish(false);
+        cur ^= 1;
         if (cancelled.load())
             break;
     }
 
-    publish(done, true);
+    // Буферы освобождаются деструкторами; ядра к этому моменту должны
+    // закончиться — иначе они писали бы в уже отданную память.
+    for (Slot& s : slot)
+        CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
+    activeTrials = collected;
+    publish(true);
 }
 
 void Worker::updateSpectrum(int numOfCols)
@@ -1537,10 +1752,16 @@ CodeGeometry Worker::describeTask() const
         planInfoSets(g);
 
     if (settings.algorithmType == ComputationSettings::RandomInfoSets) {
-        // Пока только на CPU: таблица найденных слов живёт на хосте.
-        g.useGpu = false;
+        // На видеокарте блок держит матрицу в разделяемой памяти, а слова
+        // комбинаций — в регистрах: строка не длиннее восьми слов и матрица
+        // не больше 40 КБ. Что не влезло — считается на процессоре.
+        if (g.useGpu && leonSharedBytes(int(g.numOfRows), int(g.numOfCols), int(g.wordsPerRow)) == 0)
+            throw std::invalid_argument(
+                "случайный поиск на видеокарте: строка длиннее 512 бит или матрица не "
+                "помещается в разделяемую память — выберите CPU");
         const Leon::Plan plan = Leon::plan(int(g.numOfCols), int(g.numOfRows),
-                                           settings.leonWeight, settings.leonMissProbability());
+                                           settings.leonWeight, settings.leonMissProbability(),
+                                           g.useGpu);
         g.maxRows           = quint64(plan.rows);
         g.leonTrials        = plan.trials;
         g.leonWordsPerTrial = plan.costPerTrial;
@@ -1808,7 +2029,7 @@ void Worker::dispatchComputation(const CodeGeometry& g)
             "код Грея неприменим: больше 63 строк не помещается в маску");
 
     if (settings.algorithmType == ComputationSettings::RandomInfoSets)
-        computeSpectrumCpuLeon(g);
+        computeSpectrumLeon(g);
     else if (gray)
         g.useGpu ? computeSpectrumGpuGrayShort(g)
                  : computeSpectrumCpuGrayShort(g);

@@ -203,8 +203,8 @@ private:
     void computeSpectrumCpuGrayShort  (const CodeGeometry& g);
     void computeSpectrumCpuNoGrayShort(const CodeGeometry& g);
     void computeSpectrumCpuNoGrayLong (const CodeGeometry& g);
-    // Случайный поиск по информационным множествам. Пока только на CPU.
-    void computeSpectrumCpuLeon       (const CodeGeometry& g);
+    // Случайный поиск по информационным множествам, CPU и GPU.
+    void computeSpectrumLeon          (const CodeGeometry& g);
 
     /* Функции, посылающие сигнал для обновления интерфейса */
     void updateSpectrum(int numOfCols);
