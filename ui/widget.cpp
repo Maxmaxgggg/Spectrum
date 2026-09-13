@@ -272,6 +272,9 @@ void MainWindow::setupDocks()
                             UIStrings::MATRIX_TOOLTIP,   "matrixDock");
     matrix2PTE   = new FilterPlainTextEdit(this);
     matrix2PTE->setFont(ui->matrixPTE->font());
+    // Как у первой: строка матрицы не переносится, а уходит за край с
+    // прокруткой — перенесённая строка нулей и единиц нечитаема.
+    matrix2PTE->setLineWrapMode(ui->matrixPTE->lineWrapMode());
     matrix2Dock  = makeDock(matrix2PTE, tr("Матрица 2"),
                             UIStrings::MATRIX2_TOOLTIP,  "matrix2Dock");
     connect(matrix2PTE, &FilterPlainTextEdit::textChanged, this, [this]() { updateMatrixTitles(); });
