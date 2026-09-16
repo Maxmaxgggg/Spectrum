@@ -94,7 +94,7 @@ QString AutosaveDialog::describeAlgorithm(const AutosaveRecord& record)
         case ComputationSettings::GrayCode:          return tr("код Грея");
         case ComputationSettings::DualCode:          return tr("дуальный код");
         case ComputationSettings::BrouwerZimmermann: return tr("Брауэр–Циммерман, до веса %1").arg(record.bzWeight);
-        case ComputationSettings::RandomInfoSets:    return tr("случайный поиск, до веса %1, в-ть пропуска %2")
+        case ComputationSettings::RandomInfoSets:    return tr("стохастический, до веса %1, в-ть пропуска %2")
                                                                 .arg(record.leonWeight)
                                                                 .arg(Format::powerOfTen(-record.leonMissExponent));
         case ComputationSettings::ProductCode:       return tr("код произведения, ранги до %1").arg(record.productRank);

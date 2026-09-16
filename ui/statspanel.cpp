@@ -22,7 +22,7 @@ QString algorithmName(ComputationSettings::Algorithm algorithm)
     case ComputationSettings::GrayCode:          return QObject::tr("Код Грея");
     case ComputationSettings::DualCode:          return QObject::tr("Дуальный код");
     case ComputationSettings::BrouwerZimmermann: return QObject::tr("Брауэр–Циммерман");
-    case ComputationSettings::RandomInfoSets:    return QObject::tr("Случайный поиск");
+    case ComputationSettings::RandomInfoSets:    return QObject::tr("Стохастический");
     case ComputationSettings::ProductCode:       return QObject::tr("Код произведения");
     default:                                     return QObject::tr("Простой XOR");
     }
@@ -103,7 +103,7 @@ void StatsPanel::showTask(const ComputationSettings& settings)
                           ? tr("компоненты весом до %1, ранги до %2").arg(settings.productWeight).arg(settings.productRank)
                           : tr("ранги до %1").arg(settings.productRank);
         enumeration += settings.productAlgorithm == int(ComputationSettings::RandomInfoSets)
-                          ? tr("; компоненты кода — случайным поиском, в-ть пропуска %1")
+                          ? tr("; компоненты кода — стохастическим поиском, в-ть пропуска %1")
                                 .arg(Format::powerOfTen(-settings.leonMissExponent, true))
                           : tr("; компоненты кода — Брауэром–Циммерманом");
     }

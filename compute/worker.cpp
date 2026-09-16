@@ -1282,7 +1282,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         InfoSets::InfoSet set;
         if (!InfoSets::systematize(h_matrix.get(), rows, cols, words, order, nullptr, set))
             throw std::invalid_argument(
-                "строки матрицы зависимы: случайному поиску нужна матрица полного ранга");
+                "строки матрицы зависимы: стохастическому поиску нужна матрица полного ранга");
     }
 
     // Частей — по числу потоков: каждая наполняется своим.
@@ -1631,7 +1631,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     }
 
     if (wantWords)
-        emit productPlan(tr("%1: случайный поиск до веса %2, в-ть пропуска 10^-%3…")
+        emit productPlan(tr("%1: стохастический поиск до веса %2, в-ть пропуска 10^-%3…")
                              .arg(label).arg(weightUpTo).arg(settings.leonMissExponent), -1);
     else
         emit productPlan(tr("%1: Брауэр–Циммерман до веса %2…").arg(label).arg(weightUpTo), -1);
@@ -1814,7 +1814,7 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
         h_spectrum[w] = total[w];
 
     if (productMissExponent > 0)
-        notes.prepend(tr("компоненты %1 — случайным поиском, в-ть пропуска до 10^-%2")
+        notes.prepend(tr("компоненты %1 — стохастическим поиском, в-ть пропуска до 10^-%2")
                           .arg(c1.probabilistic && c2.probabilistic ? QStringLiteral("1 и 2")
                                : c1.probabilistic ? QStringLiteral("1") : QStringLiteral("2"))
                           .arg(productMissExponent));
@@ -2077,7 +2077,7 @@ CodeGeometry Worker::describeTask() const
         // длинная — в глобальной; ядро умеет строки до MAX_BLOCKWORDS слов.
         if (g.useGpu && leonSharedBytes(int(g.numOfRows), int(g.numOfCols), int(g.wordsPerRow)) == 0)
             throw std::invalid_argument(
-                "случайный поиск на видеокарте: строка длиннее, чем умеет ядро — выберите CPU");
+                "стохастический поиск на видеокарте: строка длиннее, чем умеет ядро — выберите CPU");
         const Leon::Plan plan = Leon::plan(int(g.numOfCols), int(g.numOfRows),
                                            settings.leonWeight, settings.leonMissProbability(),
                                            g.useGpu);
