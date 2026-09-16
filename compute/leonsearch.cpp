@@ -177,6 +177,20 @@ void WordTable::grow()
     m_table.swap(table);
 }
 
+bool WordTable::contains(const quint64* word) const
+{
+    const quint64 mask = m_table.size() - 1;
+    quint64 pos = hashWord(word, m_words) & mask;
+    for (;;) {
+        const uint32_t slot = m_table[size_t(pos)];
+        if (slot == 0)
+            return false;
+        if (equalAt(slot - 1, word))
+            return true;
+        pos = (pos + 1) & mask;
+    }
+}
+
 bool WordTable::add(const quint64* word, int weight)
 {
     const quint64 mask = m_table.size() - 1;

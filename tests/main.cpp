@@ -32,6 +32,7 @@
 #include "ui/axisticks.h"
 #include "ui/updateintervals.h"
 #include "bz.h"
+#include "isd.h"
 #include "leonkernel.cuh"
 #include "productcode.h"
 
@@ -3060,6 +3061,32 @@ int main(int argc, char* argv[])
         const int rank   = productAt + 4 < args.size() ? args.at(productAt + 4).toInt() : 2;
         const QString device = productAt + 5 < args.size() ? args.at(productAt + 5).toLower() : QStringLiteral("cpu");
         const int rc = productRun(args.at(productAt + 1), args.at(productAt + 2), weight, rank > 0 ? rank : 2, device);
+        out.flush();
+        return rc;
+    }
+
+    // --isd <файл|random:n,k[,seed]> <вес> [степень пропуска] [прогонов] [p Штерна] [l Штерна]
+    const int isdAt = args.indexOf(QStringLiteral("--isd"));
+    if (isdAt >= 0 && isdAt + 2 < args.size()) {
+        const QString which = args.at(isdAt + 1);
+        Isd::Code code;
+        if (which.startsWith(QStringLiteral("random:"))) {
+            const QStringList parts = which.mid(7).split(QLatin1Char(','));
+            const int n = parts.value(0).toInt(), k = parts.value(1).toInt();
+            const quint64 seed = parts.size() > 2 ? parts.at(2).toULongLong() : 1ULL;
+            if (n <= 0 || k <= 0 || k >= n) { out << QStringLiteral("random:n,k — нужно 0 < k < n") << Qt::endl; return 2; }
+            code = Isd::randomCode(n, k, seed);
+        } else {
+            RunConfig cfg;
+            if (!loadMatrixOrCase(which, cfg)) return 2;
+            code = Isd::fromRows(cfg.matrix);
+        }
+        const int W      = args.at(isdAt + 2).toInt();
+        const int missE  = isdAt + 3 < args.size() ? args.at(isdAt + 3).toInt() : 9;
+        const int runs   = isdAt + 4 < args.size() ? args.at(isdAt + 4).toInt() : 3;
+        const int sternP = isdAt + 5 < args.size() ? args.at(isdAt + 5).toInt() : 0;
+        const int sternL = isdAt + 6 < args.size() ? args.at(isdAt + 6).toInt() : 0;
+        const int rc = Isd::compare(out, code, W, missE > 0 ? missE : 9, runs > 0 ? runs : 3, sternP, sternL);
         out.flush();
         return rc;
     }

@@ -76,6 +76,8 @@ public:
 
     // true — слово новое.
     bool add(const quint64* word, int weight);
+    // Есть ли слово в таблице; поимки не считает.
+    bool contains(const quint64* word) const;
 
     quint64 size()  const { return m_count; }
     quint64 bytes() const;
