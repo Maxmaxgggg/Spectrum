@@ -1,6 +1,9 @@
 #include "settingsdialog.h"
 #include "ui_settingsdialog.h"
 #include "updateintervals.h"
+#include "leonsearch.h"
+
+#include <algorithm>
 
 #include <QSettings>
 #include <QStandardItemModel>
@@ -105,7 +108,10 @@ SettingsDialog::SettingsDialog(QWidget *parent)
         this, [this](int value) {
             if (!updatingControls)
                 weightFor(currentAlgorithm()) = value;
+            applyMemoryCap();
         });
+    connect(ui->leonMemorySPB, QOverload<int>::of(&QSpinBox::valueChanged),
+        this, [this](int) { applyMemoryCap(); });
     connect(computeDeviceBGP, &QButtonGroup::idClicked,
         this, [=](int id) {
             Q_UNUSED(id);
@@ -241,9 +247,53 @@ void SettingsDialog::updateComputationControls()
     ui->leonMemorySPB->setVisible(leon);
     ui->productRankLBL->setVisible(product);
     ui->productRankSPB->setVisible(product);
-
+    applyMemoryCap();
 
     updatingControls = false;
+}
+
+void SettingsDialog::applyMemoryCap()
+{
+    const bool product = codeKindBGP->checkedId() == ProductCode;
+    const bool full    = enumeratorBGP->checkedId() == EnumerationType::Full;
+    const bool leon    = !product && !full && partialAlgorithm == Algorithm::RandomInfoSets;
+    if (!leon || matrixCols <= 0 || matrixRows <= 0) {
+        ui->weightMemoryLBL->setVisible(false);
+        return;
+    }
+    const int     n     = matrixCols, k = matrixRows;
+    const quint64 limit = ui->leonMemorySPB->value() > 0
+        ? quint64(ui->leonMemorySPB->value()) << 20
+        : std::max<quint64>(256ULL << 20, Leon::physicalMemoryBytes() / 2);
+    const int cap = Leon::maxWeightForMemory(n, k, limit);
+
+    // Потолок поля — по памяти; текущее значение подрезается, если вылезло.
+    const bool wasUpdating = updatingControls;
+    updatingControls = true;
+    ui->weightSPB->setMaximum(cap);
+    updatingControls = wasUpdating;
+    if (ui->weightSPB->value() > cap) {
+        ui->weightSPB->setValue(cap);
+        weightFor(Algorithm::RandomInfoSets) = cap;
+    }
+
+    // Ожидаемый размер таблицы при этом весе.
+    const double bytes = Leon::expectedWordsUpTo(n, k, ui->weightSPB->value())
+                       * Leon::tableBytesPerWord((n + 63) / 64);
+    QString size;
+    if (bytes < (1 << 20))
+        size = tr("< 1 МБ");
+    else if (bytes < (1ULL << 30))
+        size = tr("≈ %1 МБ").arg(qRound(bytes / (1 << 20)));
+    else
+        size = tr("≈ %1 ГБ").arg(bytes / (1ULL << 30), 0, 'f', 1);
+    ui->weightMemoryLBL->setText(size);
+    ui->weightMemoryLBL->setVisible(true);
+    ui->weightMemoryLBL->setToolTip(
+        tr("Ожидаемый размер таблицы найденных слов, как у случайного [%1,%2]-кода; "
+           "предел веса — по памяти в настройках поиска. У кода со структурой лёгких слов "
+           "больше, и таблица может не поместиться раньше")
+            .arg(n).arg(k));
 }
 
 // ------------------------------------------------------------ замер потолка

@@ -1,5 +1,14 @@
 #include "leonsearch.h"
 
+#ifdef Q_OS_WIN
+    #ifndef NOMINMAX
+        #define NOMINMAX   // иначе windows.h подменяет std::min/max макросами
+    #endif
+    #include <windows.h>
+#else
+    #include <unistd.h>
+#endif
+
 #include <omp.h>
 
 #include <algorithm>
@@ -75,6 +84,56 @@ double wordsPerTrial(int k, int rows)
         total += term;
     }
     return total;
+}
+
+double expectedWordsUpTo(int n, int k, int weight)
+{
+    if (n <= 0 || k <= 0 || weight <= 0)
+        return 0.0;
+    const double redundancy = double(n - k) * std::log(2.0);
+    double total = 0.0;
+    for (int w = 1; w <= weight && w <= n; ++w) {
+        const double t = logBinom(n, w) - redundancy;
+        if (std::isfinite(t))
+            total += std::exp(t);
+    }
+    return total;
+}
+
+double tableBytesPerWord(int wordsPerRow)
+{
+    // Слово, поимки (4), вес (2) — векторы растут с запасом; индекс — от
+    // двух до четырёх ячеек по 4 байта на слово (заполнение не выше 0,5).
+    return 1.5 * (8.0 * std::max(1, wordsPerRow) + 6.0) + 12.0;
+}
+
+int maxWeightForMemory(int n, int k, quint64 limitBytes)
+{
+    if (n <= 0)
+        return 1;
+    const double perWord = tableBytesPerWord((n + 63) / 64);
+    int best = 1;
+    for (int w = 1; w <= n; ++w) {
+        if (expectedWordsUpTo(n, k, w) * perWord > double(limitBytes))
+            break;
+        best = w;
+    }
+    return best;
+}
+
+quint64 physicalMemoryBytes()
+{
+#ifdef Q_OS_WIN
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status))
+        return quint64(status.ullTotalPhys);
+    return 0;
+#else
+    const long pages = sysconf(_SC_PHYS_PAGES);
+    const long size  = sysconf(_SC_PAGE_SIZE);
+    return pages > 0 && size > 0 ? quint64(pages) * quint64(size) : 0;
+#endif
 }
 
 quint64 trialsFor(double catchProbability, double miss)

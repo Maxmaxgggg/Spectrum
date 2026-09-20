@@ -129,17 +129,7 @@ static inline quint64 reverseLowBits(quint64 v, quint64 k)
 // Сколько физической памяти у машины; 0 — не узнать.
 static quint64 physicalMemoryBytes()
 {
-#ifdef Q_OS_WIN
-    MEMORYSTATUSEX status;
-    status.dwLength = sizeof(status);
-    if (GlobalMemoryStatusEx(&status))
-        return quint64(status.ullTotalPhys);
-    return 0;
-#else
-    const long pages = sysconf(_SC_PHYS_PAGES);
-    const long size  = sysconf(_SC_PAGE_SIZE);
-    return pages > 0 && size > 0 ? quint64(pages) * quint64(size) : 0;
-#endif
+    return Leon::physicalMemoryBytes();
 }
 
 // Кусок слоя, уходящий в один запуск ядра или один параллельный проход.

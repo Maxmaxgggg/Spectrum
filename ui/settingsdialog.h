@@ -71,6 +71,9 @@ private:
     void updateComputationControls();
     // Алгоритм, который следует из положения переключателей.
     ComputationSettings::Algorithm currentAlgorithm() const;
+    // Стохастический поиск по произвольному коду: потолок веса — по памяти
+    // под таблицу слов, рядом с полем — ожидаемый размер таблицы.
+    void applyMemoryCap();
     // Вес для текущего алгоритма — они хранятся отдельно, поле одно.
     int& weightFor(ComputationSettings::Algorithm algorithm);
     bool isGpuAvailable();
