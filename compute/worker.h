@@ -226,6 +226,12 @@ private:
     // Маленькую перебирает целиком; большую считает вложенный Worker —
     // Брауэром–Циммерманом, если слова не нужны (сертификат, только счёт),
     // или случайным поиском, если нужны (список слов, но без гарантии).
+    // Каким алгоритмом считать компоненту произведения: по оценке числа
+    // слов перебора — полный перебор (Грей по k или дуальный по n − k),
+    // Брауэр–Циммерман до предела или стохастический поиск, если нужны
+    // списки слов. Возвращает алгоритм и оценку в словах.
+    struct ComponentPlan { ComputationSettings::Algorithm algorithm; double words; QString what; };
+    ComponentPlan planComponent(const QStringList& rows, int weightUpTo, bool wantWords) const;
     Product::Component analyzeComponent(const QStringList& rows, int weightUpTo,
                                         const QString& label, bool wantWords);
     // Матрица-ключ автосохранения: у произведения обе компоненты подряд.

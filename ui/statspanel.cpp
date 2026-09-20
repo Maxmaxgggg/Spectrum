@@ -102,10 +102,8 @@ void StatsPanel::showTask(const ComputationSettings& settings)
         enumeration = settings.productWeight > 0
                           ? tr("компоненты весом до %1, ранги до %2").arg(settings.productWeight).arg(settings.productRank)
                           : tr("ранги до %1").arg(settings.productRank);
-        enumeration += settings.productAlgorithm == int(ComputationSettings::RandomInfoSets)
-                          ? tr("; компоненты кода — стохастическим поиском, в-ть пропуска %1")
-                                .arg(Format::powerOfTen(-settings.leonMissExponent, true))
-                          : tr("; компоненты кода — Брауэром–Циммерманом");
+        if (settings.productRank >= 2)
+            enumeration += tr(", в-ть пропуска %1").arg(Format::powerOfTen(-settings.leonMissExponent, true));
     }
     algorithmValue->setText(algorithmName(settings.algorithmType)
                             + QStringLiteral(", ") + enumeration);

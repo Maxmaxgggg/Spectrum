@@ -1750,6 +1750,59 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
 // мала — все слова до этого веса. Маленькая компонента перебирается целиком
 // (код Грея), большая — Брауэром–Циммерманом во вложенном Worker: он
 // сертифицирует спектр до нужного веса и отдаёт итог через finalSpectrum().
+Worker::ComponentPlan Worker::planComponent(const QStringList& rows, int weightUpTo, bool wantWords) const
+{
+    const int k     = rows.size();
+    const int n     = rows.first().length();
+    const int words = (n + 63) / 64;
+    const int limit = std::min(std::max(weightUpTo, 1), n);
+    ComponentPlan best{ ComputationSettings::GrayCode, std::numeric_limits<double>::infinity(), QString() };
+    auto consider = [&](ComputationSettings::Algorithm a, double cost, const QString& what) {
+        if (cost < best.words) best = ComponentPlan{ a, cost, what };
+    };
+
+    // Спискам слов (ранги выше первого) полный перебор не помощник: слова
+    // собирает только стохастический поиск; маленькую компоненту перебирает
+    // Product::bruteForce сам, до planComponent дело не доходит.
+    if (wantWords) {
+        const Leon::Plan p = Leon::plan(n, k, limit, settings.leonMissProbability(),
+                                       settings.compDev == ComputationSettings::ComputeDevice::GPU);
+        return ComponentPlan{ ComputationSettings::RandomInfoSets, double(p.trials) * p.costPerTrial,
+                              tr("стохастический поиск до веса %1, в-ть пропуска 10^-%2")
+                                  .arg(limit).arg(settings.leonMissExponent) };
+    }
+
+    // Полный перебор: 2^k слов по k строкам или 2^(n−k) по проверочной
+    // матрице. Даёт весь спектр, поэтому при равной цене он предпочтительнее.
+    if (k <= 63)
+        consider(ComputationSettings::GrayCode, std::ldexp(1.0, k), tr("полный перебор, 2^%1 слов").arg(k));
+    if (n - k <= 63)
+        consider(ComputationSettings::DualCode, std::ldexp(1.0, n - k), tr("дуальный перебор, 2^%1 слов").arg(n - k));
+
+    // Брауэр–Циммерман до предела: множества ищутся здесь же (это дёшево),
+    // цена — множества × комбинации до нужной глубины.
+    if (weightUpTo > 0) {
+        int packedWords = 0;
+        const std::vector<quint64> packed = InfoSets::packRows(rows, packedWords);
+        const int fit     = std::max(1, Constants::MAX_CONST_WORDS / std::max(1, k * packedWords));
+        const int maxSets = std::min(Constants::MAX_INFO_SETS, fit);
+        const std::vector<InfoSets::InfoSet> sets = InfoSets::find(packed.data(), k, n, packedWords, maxSets);
+        if (!sets.empty()) {
+            std::vector<int> overlaps;
+            for (const InfoSets::InfoSet& set : sets) overlaps.push_back(set.overlap);
+            const int m = InfoSets::setsForWeight(overlaps, limit, k, n);
+            const int r = InfoSets::rowsForWeight(overlaps, limit, k, n);
+            if (r < k) {
+                const double cost = double(m) * Leon::wordsPerTrial(k, r);
+                consider(ComputationSettings::BrouwerZimmermann, cost * 1.001,   // при равенстве — полный
+                         tr("Брауэр–Циммерман до веса %1 (%2 множ., до %3 строк)").arg(limit).arg(m).arg(r));
+            }
+        }
+    }
+    Q_UNUSED(words);
+    return best;
+}
+
 Product::Component Worker::analyzeComponent(const QStringList& rows, int weightUpTo,
                                             const QString& label, bool wantWords)
 {
@@ -1770,11 +1823,13 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
         return c;
     }
 
-    if (wantWords)
-        emit productPlan(tr("%1: стохастический поиск до веса %2, в-ть пропуска 10^-%3…")
-                             .arg(label).arg(weightUpTo).arg(settings.leonMissExponent), -1);
-    else
-        emit productPlan(tr("%1: Брауэр–Циммерман до веса %2…").arg(label).arg(weightUpTo), -1);
+    // Алгоритм — по размеру: что дешевле по числу слов перебора. Предел
+    // веса 0 (ищем минимальный вес) полный перебор закрывает целиком, а
+    // Брауэру–Циммерману нужен предел — его подставляет вызывающий.
+    const ComponentPlan plan = planComponent(rows, weightUpTo, wantWords);
+    const bool full = plan.algorithm == ComputationSettings::GrayCode
+                   || plan.algorithm == ComputationSettings::DualCode;
+    emit productPlan(tr("%1: %2…").arg(label, plan.what), -1);
 
     Worker sub;
     sub.setAutosaveRoot(autosaveRootDir);
@@ -1784,10 +1839,11 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     ComputationSettings cs = settings;
     cs.matrix        = rows;
     cs.matrix2.clear();
-    cs.algorithmType = wantWords ? ComputationSettings::RandomInfoSets
-                                 : ComputationSettings::BrouwerZimmermann;
-    cs.bzWeight      = std::min(weightUpTo, n);
-    cs.leonWeight    = std::min(weightUpTo, n);
+    cs.algorithmType = plan.algorithm;
+    cs.enumType      = full ? ComputationSettings::EnumerationType::Full
+                            : ComputationSettings::EnumerationType::Partial;
+    cs.bzWeight      = std::min(std::max(weightUpTo, 1), n);
+    cs.leonWeight    = std::min(std::max(weightUpTo, 1), n);
     sub.setSettings(cs.toJson());
     sub.initializeRunState(LoadMode::Reset);
 
@@ -1812,7 +1868,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
 
     std::vector<quint64> spectrum(sub.finalSpectrum().begin(), sub.finalSpectrum().end());
     if (!wantWords)
-        return Product::fromSpectrum(n, k, spectrum, sub.finalExactUpTo());
+        return Product::fromSpectrum(n, k, spectrum, full ? n : sub.finalExactUpTo());
 
     // Случайный поиск: слова до предела найдены все — с вероятностью пропуска
     // из настроек поиска. Спектр компоненты в этих пределах — счёт найденного.
@@ -1843,8 +1899,7 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     productMissExponent = 0;
     // Ранги выше первого строятся из списков слов; для большой компоненты
     // их даёт только случайный поиск — без сертификата, зато со списком.
-    const bool wantWords = maxRank >= 2
-                        && settings.productAlgorithm == int(ComputationSettings::RandomInfoSets);
+    const bool wantWords = maxRank >= 2;
 
     // Шаг 1. Минимальные веса. У маленькой компоненты — из полного перебора,
     // у большой — Брауэром–Циммерманом с удвоением предела, пока слово не
@@ -1858,7 +1913,7 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
         }
         for (int t = 8; ; t = std::min(n, t * 2)) {
             out = analyzeComponent(rows, t, label, wantWords);
-            if (out.d > 0 || t >= n)
+            if (out.d > 0 || t >= n || out.exactUpTo >= n)
                 return;
         }
     };
@@ -2552,7 +2607,11 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
     makeCheckpoint(int(g.numOfCols), true);
 
     // Итог — на случай, если этот расчёт вложенный (компонента произведения).
-    m_finalSpectrum  = runState.spectrum;
+    // У дуального пути runState хранит спектр проверочной матрицы — итог
+    // сразу переводится в спектр исходного кода.
+    m_finalSpectrum  = settings.algorithmType == ComputationSettings::Algorithm::DualCode
+                         ? spectrumFromDual(runState.spectrum.constData(), int(g.numOfCols), int(g.numOfRows))
+                         : runState.spectrum;
     m_finalExactUpTo = g.guaranteedBelow > 0 ? g.guaranteedBelow - 1
                      : settings.algorithmType == ComputationSettings::ProductCode ? productExactUpTo
                      : int(g.numOfCols);

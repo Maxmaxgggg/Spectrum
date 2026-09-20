@@ -2,6 +2,8 @@
 
 #include "dualcode.h"
 
+#include <limits>
+
 // Функция для генерации дуальной матрицы (писал GPT)
 Matrix generatorToParity(const Matrix& gen)
 {
@@ -93,6 +95,45 @@ static mpz_class krawtchouk(const std::vector<std::vector<mpz_class>>& C, int n,
         if ((t & 1) != 0) s -= term; else s += term;
     }
     return s;
+}
+
+static std::vector<mpz_class> macWilliams(const quint64* dualSpectrum, int numOfCols, int numOfRows)
+{
+    // numOfRows — строк проверочной матрицы; 2^numOfRows — её слов.
+    std::vector<mpz_class> B(numOfCols + 1);
+    for (int j = 0; j <= numOfCols; ++j)
+        B[j] = mpz_class(std::to_string(dualSpectrum[j]));
+    auto C = buildBinomTable(numOfCols);
+    const mpz_class scale = mpz_class(1) << numOfRows;
+    std::vector<mpz_class> A(numOfCols + 1);
+    for (int i = 0; i <= numOfCols; ++i) {
+        mpz_class s = 0;
+        for (int j = 0; j <= numOfCols; ++j) {
+            if (B[j] == 0) continue;
+            s += B[j] * krawtchouk(C, numOfCols, j, i);
+        }
+        A[i] = s / scale;
+    }
+    return A;
+}
+
+QVector<quint64> spectrumFromDual(const quint64* dualSpectrum, int numOfCols, int numOfRows)
+{
+    const std::vector<mpz_class> A = macWilliams(dualSpectrum, numOfCols, numOfRows);
+    QVector<quint64> out(numOfCols + 1, 0ULL);
+    for (int i = 0; i <= numOfCols; ++i) {
+        // unsigned long на Windows 32-битный, поэтому не mpz_get_ui, а export.
+        if (A[i] == 0)
+            continue;
+        if (mpz_sizeinbase(A[i].get_mpz_t(), 2) > 64) {
+            out[i] = std::numeric_limits<quint64>::max();
+            continue;
+        }
+        quint64 v = 0;
+        mpz_export(&v, nullptr, -1, sizeof(v), 0, 0, A[i].get_mpz_t());
+        out[i] = v;
+    }
+    return out;
 }
 
 // Функция, которая рассчитывает спектр из дуального и записывает его в QStringList

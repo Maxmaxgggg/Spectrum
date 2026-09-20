@@ -112,6 +112,10 @@ SettingsDialog::SettingsDialog(QWidget *parent)
         });
     connect(ui->leonMemorySPB, QOverload<int>::of(&QSpinBox::valueChanged),
         this, [this](int) { applyMemoryCap(); });
+    // Ранг выше первого — компоненты считает стохастический поиск, и его
+    // настройки надо показать.
+    connect(ui->productRankSPB, QOverload<int>::of(&QSpinBox::valueChanged),
+        this, [this](int) { if (!updatingControls) updateComputationControls(); });
     connect(computeDeviceBGP, &QButtonGroup::idClicked,
         this, [=](int id) {
             Q_UNUSED(id);
@@ -222,6 +226,13 @@ void SettingsDialog::updateComputationControls()
 
     const Algorithm algorithm = currentAlgorithm();
     const bool leon = partialAlgorithm == Algorithm::RandomInfoSets && !full;
+    // У произведения алгоритм для компонент программа выбирает сама (по
+    // размеру); переключатели не показываются, а настройки стохастического
+    // поиска нужны только при рангах выше первого.
+    ui->grayCodeRB->setVisible(full && !product);
+    ui->dualCodeRB->setVisible(full && !product);
+    ui->brouwerZimmermannRB->setVisible(!full && !product);
+    ui->randomInfoSetsRB->setVisible(!full && !product);
 
     // Поле веса: у полного перебора его нет, у произведения ноль — «до
     // границы ранга».
@@ -243,10 +254,11 @@ void SettingsDialog::updateComputationControls()
                      "число строк перебора программа выведет сама"));
 
     // Настройки Леона и произведения.
-    ui->leonMissLBL->setVisible(leon);
-    ui->leonMissCBX->setVisible(leon);
-    ui->leonMemoryLBL->setVisible(leon);
-    ui->leonMemorySPB->setVisible(leon);
+    const bool leonSettings = leon || (product && ui->productRankSPB->value() >= 2);
+    ui->leonMissLBL->setVisible(leonSettings);
+    ui->leonMissCBX->setVisible(leonSettings);
+    ui->leonMemoryLBL->setVisible(leonSettings);
+    ui->leonMemorySPB->setVisible(leonSettings);
     ui->productRankLBL->setVisible(product);
     ui->productRankSPB->setVisible(product);
     applyMemoryCap();
