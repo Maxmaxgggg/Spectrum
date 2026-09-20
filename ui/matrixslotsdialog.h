@@ -39,6 +39,8 @@ private:
     void showName(int slot);
     void accept() override;
     void removeSelected();
+    // Режим Load: имя в поле изменили — переименовать выбранную ячейку.
+    void renameSelected();
 
     Mode          mode;
     QString       matrixText;

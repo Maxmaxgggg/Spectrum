@@ -12,7 +12,7 @@
 #include <QVBoxLayout>
 
 namespace {
-constexpr int CELL_PX = 58;
+constexpr int CELL_PX = 64;
 }
 
 MatrixSlotsDialog::MatrixSlotsDialog(Mode mode, const QString& matrixText, QWidget* parent)
@@ -28,6 +28,10 @@ MatrixSlotsDialog::MatrixSlotsDialog(Mode mode, const QString& matrixText, QWidg
     for (int slot = 0; slot < MatrixLibrary::SLOTS; ++slot) {
         auto* const cell = new QToolButton(this);
         cell->setFixedSize(CELL_PX, CELL_PX);
+        // «(1000,997)» в ячейку обычным кеглем не влезает.
+        QFont small = cell->font();
+        small.setPointSizeF(small.pointSizeF() * 0.85);
+        cell->setFont(small);
         cell->setCheckable(true);
         cell->setAutoExclusive(true);
         cell->setAutoRaise(false);
@@ -42,8 +46,11 @@ MatrixSlotsDialog::MatrixSlotsDialog(Mode mode, const QString& matrixText, QWidg
 
     auto* const nameRow = new QHBoxLayout;
     nameEdit = new QLineEdit(this);
-    nameEdit->setReadOnly(mode == Mode::Load);
-    nameEdit->setPlaceholderText(mode == Mode::Load ? QString() : tr("Название"));
+    nameEdit->setPlaceholderText(tr("Название"));
+    // При загрузке поле тоже редактируется: так матрицу можно переименовать,
+    // не пересохраняя. Применяется по Enter или уходу фокуса.
+    if (mode == Mode::Load)
+        connect(nameEdit, &QLineEdit::editingFinished, this, &MatrixSlotsDialog::renameSelected);
     sizeLabel = new QLabel(this);
     sizeLabel->setMinimumWidth(80);
     nameRow->addWidget(nameEdit, 1);
@@ -97,8 +104,11 @@ bool MatrixSlotsDialog::eventFilter(QObject* watched, QEvent* event)
 
 void MatrixSlotsDialog::showName(int slot)
 {
+    // Пока пользователь печатает в поле, наведение его не трогает.
+    if (nameEdit->hasFocus())
+        return;
     if (mode == Mode::Save && slot == selected) {
-        // В поле — то, что пользователь печатает; не затирать.
+        // В поле — то, что пользователь напечатал; не затирать.
         return;
     }
     const MatrixLibrary::Entry entry = slot >= 0 ? library.at(slot) : MatrixLibrary::Entry();
@@ -113,6 +123,10 @@ void MatrixSlotsDialog::showName(int slot)
 
 void MatrixSlotsDialog::select(int slot)
 {
+    // Щелчок по ячейке — конец правки имени прежней: применить и показать
+    // имя новой.
+    if (nameEdit->hasFocus())
+        nameEdit->clearFocus();
     selected = slot;
     cells[slot]->setChecked(true);
     if (mode == Mode::Load) {
@@ -126,10 +140,25 @@ void MatrixSlotsDialog::select(int slot)
         removeButton->setEnabled(library.has(slot));
 }
 
+void MatrixSlotsDialog::renameSelected()
+{
+    if (mode != Mode::Load || selected < 0)
+        return;
+    library.load();
+    const MatrixLibrary::Entry entry = library.at(selected);
+    const QString name = nameEdit->text().trimmed();
+    if (entry.slot < 0 || name.isEmpty() || name == entry.name)
+        return;
+    library.save(selected, name, entry.matrix);
+    cells[selected]->setToolTip(name);
+}
+
 void MatrixSlotsDialog::accept()
 {
     if (selected < 0)
         return;
+    if (mode == Mode::Load)
+        renameSelected();
     library.load();
     if (mode == Mode::Load) {
         const MatrixLibrary::Entry entry = library.at(selected);
