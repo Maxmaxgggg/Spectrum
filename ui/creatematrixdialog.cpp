@@ -276,8 +276,7 @@ void CreateMatrixDialog::accept()
 {
     const int tab = tabs->currentIndex();
     if (tab == parityTab) {
-        result     = Parity::build(parityK->value()).join(QLatin1Char('
-'));
+        result     = Parity::build(parityK->value()).join(QLatin1Char('\n'));
         resultName = tr("Чётность (%1,%2)").arg(parityK->value() + 1).arg(parityK->value());
         QDialog::accept();
         return;
