@@ -86,7 +86,7 @@ namespace DefaultValues
 namespace UIStrings
 {
     // Вторая компонента кода произведения.
-    constexpr const char MATRIX2_TOOLTIP[]          = "Порождающая матрица второй компоненты кода произведения; первая — в панели «Матрица»";
+    constexpr const char MATRIX2_TOOLTIP[]          = "Порождающая матрица второй компоненты кода-произведения; первая — в панели «Матрица»";
 
     constexpr const char PAUSE_TEXT[]               = "Пауза";
     constexpr const char CONTINUE_TEXT[]            = "Продолжить";

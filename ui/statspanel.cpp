@@ -23,7 +23,7 @@ QString algorithmName(ComputationSettings::Algorithm algorithm)
     case ComputationSettings::DualCode:          return QObject::tr("Дуальный код");
     case ComputationSettings::BrouwerZimmermann: return QObject::tr("Брауэр–Циммерман");
     case ComputationSettings::RandomInfoSets:    return QObject::tr("Стохастический");
-    case ComputationSettings::ProductCode:       return QObject::tr("Код произведения");
+    case ComputationSettings::ProductCode:       return QObject::tr("Код-произведение");
     default:                                     return QObject::tr("Простой XOR");
     }
 }

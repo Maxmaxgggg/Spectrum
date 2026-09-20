@@ -2293,7 +2293,7 @@ CodeGeometry Worker::describeTask() const
     if (settings.algorithmType == ComputationSettings::ProductCode) {
         // Самого произведения в памяти нет — только его размеры, под спектр.
         if (settings.matrix2.isEmpty())
-            throw std::invalid_argument("код произведения: не задана вторая компонента");
+            throw std::invalid_argument("код-произведение: не задана вторая компонента");
         const quint64 n1 = quint64(settings.matrix.first().length());
         const quint64 n2 = quint64(settings.matrix2.first().length());
         g.numOfRows    = quint64(settings.matrix.size()) * quint64(settings.matrix2.size());

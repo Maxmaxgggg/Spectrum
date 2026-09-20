@@ -97,7 +97,7 @@ QString AutosaveDialog::describeAlgorithm(const AutosaveRecord& record)
         case ComputationSettings::RandomInfoSets:    return tr("стохастический, до веса %1, в-ть пропуска %2")
                                                                 .arg(record.leonWeight)
                                                                 .arg(Format::powerOfTen(-record.leonMissExponent));
-        case ComputationSettings::ProductCode:       return tr("код произведения");
+        case ComputationSettings::ProductCode:       return tr("код-произведение");
         default:                                     return tr("простой XOR");
     }
 }
