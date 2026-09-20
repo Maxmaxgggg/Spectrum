@@ -243,24 +243,26 @@ void SettingsDialog::updateComputationControls()
     ui->weightSPB->setMinimum(product ? 0 : 1);
     ui->weightSPB->setMaximum(product ? 10000000 : matrixCols > 0 ? matrixCols : 2048);
     ui->weightSPB->setValue(qBound(ui->weightSPB->minimum(), weightFor(algorithm), ui->weightSPB->maximum()));
-    ui->weightLBL->setText(product ? tr("До веса (0 — до границы ранга): ") : tr("До веса: "));
+    ui->weightLBL->setText(product ? tr("До веса (0 — до границы Толхёйзена): ") : tr("До веса: "));
     // Пояснения — только во всплывающей подсказке, не на вкладке.
     ui->weightSPB->setToolTip(
-        product ? tr("Слова произведения не тяжелее этого веса; ноль — до веса, с которого "
-                     "начинаются слова следующего ранга")
+        product ? tr("Слова произведения не тяжелее этого веса; ноль — до границы Толхёйзена "
+                     "d₁d₂ + max(d₁⌈d₂/2⌉, d₂⌈d₁/2⌉) − 1, ниже которой спектр произведения "
+                     "точно выражается через спектры компонент")
         : leon  ? tr("Все слова не тяжелее этого веса будут найдены, если не случится "
                      "события заданной вероятности; тяжелее — не собираются")
                 : tr("Все слова не тяжелее этого веса будут найдены и посчитаны точно; "
                      "число строк перебора программа выведет сама"));
 
     // Настройки Леона и произведения.
-    const bool leonSettings = leon || (product && ui->productRankSPB->value() >= 2);
+    const bool leonSettings = leon;
     ui->leonMissLBL->setVisible(leonSettings);
     ui->leonMissCBX->setVisible(leonSettings);
     ui->leonMemoryLBL->setVisible(leonSettings);
     ui->leonMemorySPB->setVisible(leonSettings);
-    ui->productRankLBL->setVisible(product);
-    ui->productRankSPB->setVisible(product);
+    // Ранги выше первого пока не считаются: только граница Толхёйзена.
+    ui->productRankLBL->setVisible(false);
+    ui->productRankSPB->setVisible(false);
     applyMemoryCap();
 
     updatingControls = false;
@@ -595,7 +597,7 @@ void SettingsDialog::collectSettings()
     settings.productAlgorithm = partialAlgorithm;
     settings.leonMissExponent = ui->leonMissCBX->currentData().toInt();
     settings.leonMemoryMb = ui->leonMemorySPB->value();
-    settings.productRank = ui->productRankSPB->value();
+    settings.productRank = 1;
     settings.compDev = static_cast<ComputeDevice>(computeDeviceBGP->checkedId());
 
     settings.compDevSet.threadsCpu = ui->threadsCpuSPB->value();

@@ -100,10 +100,8 @@ void StatsPanel::showTask(const ComputationSettings& settings)
                           .arg(settings.leonWeight).arg(Format::powerOfTen(-settings.leonMissExponent, true));
     if (settings.algorithmType == ComputationSettings::ProductCode) {
         enumeration = settings.productWeight > 0
-                          ? tr("компоненты весом до %1, ранги до %2").arg(settings.productWeight).arg(settings.productRank)
-                          : tr("ранги до %1").arg(settings.productRank);
-        if (settings.productRank >= 2)
-            enumeration += tr(", в-ть пропуска %1").arg(Format::powerOfTen(-settings.leonMissExponent, true));
+                          ? tr("компоненты весом до %1").arg(settings.productWeight)
+                          : tr("до границы Толхёйзена");
     }
     algorithmValue->setText(algorithmName(settings.algorithmType)
                             + QStringLiteral(", ") + enumeration);
