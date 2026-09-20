@@ -15,6 +15,7 @@
     <ClCompile Include="compute\gridtuner.cpp" />
     <ClCompile Include="compute\infosets.cpp" />
     <ClCompile Include="compute\bchcode.cpp" />
+    <ClCompile Include="compute\hammingcode.cpp" />
     <ClCompile Include="compute\leonsearch.cpp" />
     <ClCompile Include="compute\productcode.cpp" />
     <ClCompile Include="compute\worker.cpp" />

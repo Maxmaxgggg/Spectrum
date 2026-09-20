@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bchcode.h"
+#include "hammingcode.h"
 
 #include <QDialog>
 #include <QVector>
@@ -12,8 +13,8 @@ class QSpinBox;
 class QTableWidget;
 class QTabWidget;
 
-// «Создать матрицу»: вкладки по семействам кодов. Пока живая только БЧХ;
-// остальные (РС, Хэмминг, Рид–Маллер) — заготовки.
+// «Создать матрицу»: вкладки по семействам кодов. Живые — БЧХ и Хэмминг;
+// РС и Рид–Маллер — заготовки.
 //
 // Вкладка БЧХ — таблица минимальных многочленов (восьмеричных): столбцы —
 // m, строки — представители циклотомических классов, как в справочнике.
@@ -37,6 +38,9 @@ protected:
 
 private:
     void buildBchTab();
+    void buildHammingTab();
+    // Доступность «Создать» по текущей вкладке.
+    void updateCreateButton();
     // Подсветка столбца до строки включительно и показ размеров; row = -1 —
     // снять подсветку и показать закреплённый выбор.
     void highlight(int row, int column);
@@ -46,11 +50,22 @@ private:
     void accept() override;
 
     QTabWidget*   tabs       = nullptr;
+    QPushButton*  createButton = nullptr;
+    int           bchTab     = -1;
+    int           hammingTab = -1;
+
+    // Вкладка БЧХ.
     QTableWidget* table      = nullptr;
     QLabel*       codeLabel  = nullptr;
     QCheckBox*    extendBox  = nullptr;
     QSpinBox*     shortenBox = nullptr;
-    QPushButton*  createButton = nullptr;
+
+    // Вкладка Хэмминга.
+    QSpinBox*     hammingR       = nullptr;
+    QLabel*       hammingLabel   = nullptr;
+    QCheckBox*    hammingExtend  = nullptr;
+    QSpinBox*     hammingShorten = nullptr;
+    void showHamming();
 
     // Строки таблицы — представители всех полей, объединённые; в ячейке
     // (строка, m) — сколько классов поля m взято до этой строки включительно,

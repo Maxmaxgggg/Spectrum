@@ -38,6 +38,7 @@
 #include "leonsearch.h"
 #include "productcode.h"
 #include "bchcode.h"
+#include "hammingcode.h"
 
 #ifdef Q_OS_WIN
     #define NOMINMAX
@@ -2911,6 +2912,30 @@ static void testBchCode()
                    && r4.k == 1 && r4.designedDistance == 15);
 }
 
+static void testHammingCode()
+{
+    out << Qt::endl << QStringLiteral("Коды Хэмминга") << Qt::endl;
+    const Hamming::Code h7  = Hamming::build(3, false, 0);
+    const Hamming::Code h8  = Hamming::build(3, true, 0);
+    const Hamming::Code h15 = Hamming::build(4, false, 0);
+    const Hamming::Code h12 = Hamming::build(4, false, 3);
+    const Spectrum s7 = Reference::bruteForce(h7.rows), s8 = Reference::bruteForce(h8.rows),
+                   s15 = Reference::bruteForce(h15.rows), s12 = Reference::bruteForce(h12.rows);
+    expectLeon(QStringLiteral("[7,4,3]: A_3 = %1, A_4 = %2, A_7 = %3").arg(s7.value(3)).arg(s7.value(4)).arg(s7.value(7)),
+               h7.n == 7 && h7.k == 4 && s7.value(3) == 7 && s7.value(4) == 7 && s7.value(7) == 1
+                   && h7.rows.first() == QStringLiteral("1000110"));
+    expectLeon(QStringLiteral("[8,4,4] расширенный: A_4 = %1, A_8 = %2").arg(s8.value(4)).arg(s8.value(8)),
+               h8.n == 8 && h8.d == 4 && s8.value(3, 0) == 0 && s8.value(4) == 14 && s8.value(8) == 1);
+    expectLeon(QStringLiteral("[15,11,3]: A_3 = %1, A_4 = %2").arg(s15.value(3)).arg(s15.value(4)),
+               h15.n == 15 && h15.k == 11 && s15.value(3) == 35 && s15.value(4) == 105);
+    expectLeon(QStringLiteral("[12,8] укороченный на 3: d = %1").arg(s12.isEmpty() ? 0 : s12.firstKey() == 0 ? (s12.size() > 1 ? (s12.constBegin() + 1).key() : 0) : s12.firstKey()),
+               h12.n == 12 && h12.k == 8 && h12.rows.size() == 8 && h12.rows.first().length() == 12
+                   && s12.value(1, 0) == 0 && s12.value(2, 0) == 0 && s12.value(3, 0) > 0);
+    expectLeon(QStringLiteral("r = 11: [2047,2036], расширенный [2048,2036]"),
+               Hamming::describe(11, false, 0).n == 2047 && Hamming::describe(11, true, 0).n == 2048
+                   && Hamming::describe(11, false, 0).k == 2036);
+}
+
 static void testProductCode()
 {
     out << Qt::endl << QStringLiteral("Коды произведения: низ спектра по компонентам") << Qt::endl;
@@ -3342,6 +3367,7 @@ int main(int argc, char* argv[])
     testLeonModel();
     testLeonWorker();
     testBchCode();
+    testHammingCode();
     testProductCode();
 
     testAutosaveStore();

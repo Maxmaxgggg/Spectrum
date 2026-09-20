@@ -32,19 +32,79 @@ CreateMatrixDialog::CreateMatrixDialog(QWidget* parent)
     layout->addWidget(tabs, 1);
 
     buildBchTab();
-    for (const QString& name : { tr("РС-код"), tr("Код Хэмминга"), tr("Код Рида–Маллера") }) {
+    {
         auto* const page = new QWidget(this);
-        const int index = tabs->addTab(page, name);
-        tabs->setTabEnabled(index, false);
+        tabs->setTabEnabled(tabs->addTab(page, tr("РС-код")), false);
+    }
+    buildHammingTab();
+    {
+        auto* const page = new QWidget(this);
+        tabs->setTabEnabled(tabs->addTab(page, tr("Код Рида–Маллера")), false);
     }
 
     auto* const buttons = new QDialogButtonBox(this);
     createButton = buttons->addButton(tr("Создать"), QDialogButtonBox::AcceptRole);
-    createButton->setEnabled(false);
     buttons->addButton(QDialogButtonBox::Cancel);
     connect(buttons, &QDialogButtonBox::accepted, this, &CreateMatrixDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &CreateMatrixDialog::reject);
     layout->addWidget(buttons);
+    connect(tabs, &QTabWidget::currentChanged, this, [this](int) { updateCreateButton(); });
+    updateCreateButton();
+}
+
+void CreateMatrixDialog::updateCreateButton()
+{
+    const int tab = tabs->currentIndex();
+    bool ok = false;
+    if (tab == bchTab)
+        ok = selectedReps > 0 && current().n > 0;
+    else if (tab == hammingTab)
+        ok = Hamming::describe(hammingR->value(), hammingExtend->isChecked(), hammingShorten->value()).n > 0;
+    createButton->setEnabled(ok);
+}
+
+void CreateMatrixDialog::buildHammingTab()
+{
+    auto* const page   = new QWidget(this);
+    auto* const column = new QVBoxLayout(page);
+
+    auto* const row = new QHBoxLayout;
+    row->addWidget(new QLabel(tr("Проверочных символов r:"), page));
+    hammingR = new QSpinBox(page);
+    hammingR->setRange(Hamming::MIN_R, Hamming::MAX_R);
+    hammingR->setValue(3);
+    hammingR->setToolTip(tr("Код [2^r − 1, 2^r − 1 − r, 3]; расширенный — [2^r, 2^r − 1 − r, 4]"));
+    row->addWidget(hammingR);
+    row->addStretch(1);
+    column->addLayout(row);
+
+    auto* const options = new QHBoxLayout;
+    hammingLabel = new QLabel(page);
+    hammingLabel->setMinimumWidth(200);
+    hammingExtend  = new QCheckBox(tr("Расширить"), page);
+    hammingShorten = new QSpinBox(page);
+    hammingShorten->setRange(0, 2046);
+    options->addWidget(hammingLabel, 1);
+    options->addWidget(hammingExtend);
+    options->addWidget(new QLabel(tr("Укоротить на:"), page));
+    options->addWidget(hammingShorten);
+    column->addLayout(options);
+    column->addStretch(1);
+
+    connect(hammingR, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int) { showHamming(); });
+    connect(hammingExtend, &QCheckBox::toggled, this, [this](bool) { showHamming(); });
+    connect(hammingShorten, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int) { showHamming(); });
+
+    hammingTab = tabs->addTab(page, tr("Код Хэмминга"));
+    showHamming();
+}
+
+void CreateMatrixDialog::showHamming()
+{
+    const Hamming::Code code = Hamming::describe(hammingR->value(), hammingExtend->isChecked(), hammingShorten->value());
+    hammingLabel->setText(code.n == 0 ? tr("укорочение больше k")
+                                      : tr("n = %1, k = %2, d = %3").arg(code.n).arg(code.k).arg(code.d));
+    updateCreateButton();
 }
 
 void CreateMatrixDialog::buildBchTab()
@@ -104,7 +164,7 @@ void CreateMatrixDialog::buildBchTab()
         selectedM    = Bch::MIN_M + col;
         selectedReps = repsUpTo[col][row];
         highlight(row, col);
-        createButton->setEnabled(true);
+        updateCreateButton();
     });
     column->addWidget(table, 1);
 
@@ -120,10 +180,10 @@ void CreateMatrixDialog::buildBchTab()
     options->addWidget(shortenLabel);
     options->addWidget(shortenBox);
     column->addLayout(options);
-    connect(extendBox, &QCheckBox::toggled, this, [this](bool) { showCode(selectedM, selectedReps); });
-    connect(shortenBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int) { showCode(selectedM, selectedReps); });
+    connect(extendBox, &QCheckBox::toggled, this, [this](bool) { showCode(selectedM, selectedReps); updateCreateButton(); });
+    connect(shortenBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int) { showCode(selectedM, selectedReps); updateCreateButton(); });
 
-    tabs->addTab(page, tr("БЧХ-код"));
+    bchTab = tabs->addTab(page, tr("БЧХ-код"));
 }
 
 bool CreateMatrixDialog::eventFilter(QObject* watched, QEvent* event)
@@ -186,6 +246,16 @@ Bch::Code CreateMatrixDialog::current() const
 
 void CreateMatrixDialog::accept()
 {
+    const int tab = tabs->currentIndex();
+    if (tab == hammingTab) {
+        const Hamming::Code code = Hamming::build(hammingR->value(), hammingExtend->isChecked(), hammingShorten->value());
+        if (code.n == 0)
+            return;
+        result     = code.rows.join(QLatin1Char('\n'));
+        resultName = tr("Хэмминг (%1,%2)").arg(code.n).arg(code.k);
+        QDialog::accept();
+        return;
+    }
     const Bch::Code code = current();
     if (code.n == 0)
         return;
