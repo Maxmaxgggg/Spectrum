@@ -2612,6 +2612,42 @@ static void testLeonWorker()
         }
     }
 
+    // Плотный код: слов до веса 9 почти семь миллионов, первая пачка
+    // переполняет выходной буфер. С таблицей виденных слов на видеокарте
+    // отброшенная пачка теряла слова (они уже сидели в таблице и при
+    // повторе не выкладывались): Макс получил 6 слов веса 6 вместо 18270,
+    // и от запуска к запуску по-разному. Эталон — дуальный перебор.
+    if (g_gpuAvailable) {
+        const QStringList rows = BZ::systematicRandom(51, 63, 63);
+        RunConfig dual;
+        dual.matrix    = rows;
+        dual.algorithm = Algorithm::DualCode;
+        dual.device    = ComputeDevice::CPU;
+        clearCheckpoints();
+        const Spectrum exact = runWorker(dual);
+
+        RunConfig leon;
+        leon.matrix     = rows;
+        leon.algorithm  = Algorithm::RandomInfoSets;
+        leon.leonWeight = 9;
+        leon.device     = ComputeDevice::GPU;
+        clearCheckpoints();
+        const Spectrum found = runWorker(leon);
+        const Spectrum again = runWorker(leon);
+        clearCheckpoints();
+
+        bool ok = !found.isEmpty() && !exact.isEmpty();
+        QStringList problems;
+        for (int w = 1; w <= 9; ++w)
+            if (found.value(w, 0) != exact.value(w, 0)) {
+                ok = false;
+                problems << QStringLiteral("вес %1: точно %2, найдено %3").arg(w).arg(exact.value(w, 0)).arg(found.value(w, 0));
+            }
+        if (again != found) { ok = false; problems << QStringLiteral("повтор дал другой спектр"); }
+        expectLeon(QStringLiteral("[63,51] плотный GPU, до веса 9: буфер переполняется, слова целы"),
+                   ok, problems.join(QStringLiteral("; ")));
+    }
+
     // Подбор сетки включён, устройство GPU: подбор обязан промолчать (у
     // поиска своё ядро), а итог — попасть в запись автосохранения. Раньше
     // подбор лез в пустую таблицу биномов, а финал затирал спектр нулями из

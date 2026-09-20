@@ -1511,19 +1511,23 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
             return;
         for (Slot& s : slot)
             CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
-        Seen bigger;
-        if (!bigger.allocate(seen.capacity * 2)) {
-            seen.canGrow = false;
-            return;
+        // Одна плотная пачка может забить таблицу с запасом — удваивать до
+        // тех пор, пока занято не меньше 0,6, а не по разу.
+        while (seen.inserted * 10 > seen.capacity * 6) {
+            Seen bigger;
+            if (!bigger.allocate(seen.capacity * 2)) {
+                seen.canGrow = false;
+                return;
+            }
+            launchSeenRehash(seen.fp.get(), seen.hits.get(), seen.weight.get(), seen.capacity,
+                             bigger.fp.get(), bigger.hits.get(), bigger.weight.get(), bigger.capacity - 1,
+                             slot[0].stream.get());
+            CUDA_CALL(cudaStreamSynchronize(slot[0].stream.get()));
+            seen.fp = std::move(bigger.fp);
+            seen.hits = std::move(bigger.hits);
+            seen.weight = std::move(bigger.weight);
+            seen.capacity = bigger.capacity;
         }
-        launchSeenRehash(seen.fp.get(), seen.hits.get(), seen.weight.get(), seen.capacity,
-                         bigger.fp.get(), bigger.hits.get(), bigger.weight.get(), bigger.capacity - 1,
-                         slot[0].stream.get());
-        CUDA_CALL(cudaStreamSynchronize(slot[0].stream.get()));
-        seen.fp = std::move(bigger.fp);
-        seen.hits = std::move(bigger.hits);
-        seen.weight = std::move(bigger.weight);
-        seen.capacity = bigger.capacity;
     };
 
     // f1/f2 по весам из таблицы видеокарты: счётчики и веса скачиваются
@@ -1613,22 +1617,29 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
                                       cudaMemcpyDeviceToHost, s.stream.get()));
         CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
         const unsigned found = s.h_count[0];
-        if (quint64(found) > capacity)
-            return false;
         if (seen.capacity > 0)
             seen.inserted = seen.h_count[0];
-        if (found > 0) {
+        // Переполнение. Без таблицы пачка отбрасывается целиком и идёт
+        // заново. С таблицей так нельзя: слова, что поместились, уже
+        // записаны в таблицу и при повторе пачки хосту не выложатся —
+        // поэтому поместившаяся часть (она целая: место занимается до
+        // записи) забирается сейчас, а повтор доложит остальное.
+        const bool     overflow = quint64(found) > capacity;
+        const unsigned usable   = overflow ? (seen.capacity > 0 ? unsigned(capacity) : 0u) : found;
+        if (usable > 0) {
             // В потоке пачки, не в нулевом: синхронный cudaMemcpy ждал бы
             // и ядро соседней пачки.
             CUDA_CALL(cudaMemcpyAsync(s.h_out.get(), s.d_out.get(),
-                                      size_t(found) * words * sizeof(quint64),
+                                      size_t(usable) * words * sizeof(quint64),
                                       cudaMemcpyDeviceToHost, s.stream.get()));
             CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
             // С таблицей на видеокарте поимки посчитаны там; здесь слово
             // только хранится.
-            table.addBatch(s.h_out.get(), found, seen.capacity == 0);
+            table.addBatch(s.h_out.get(), usable, seen.capacity == 0);
         }
         adaptBatch(found, s.count);
+        if (overflow)
+            return false;
         s.pending  = false;
         collected += s.count;
         return true;
@@ -1647,9 +1658,14 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
             capacity = std::min(kCapacityMax, std::max(capacity * 2, need + need / 4 + 1024));
             return;
         }
-        if (s.count <= 1)
+        if (s.count <= 1) {
+            // С таблицей повтор выложит только то, чего в ней ещё нет, —
+            // с каждым разом меньше; без таблицы повтор даст то же самое.
+            if (seen.capacity > 0 && seen.canGrow)
+                return;
             throw std::runtime_error(
                 "одна попытка даёт больше восьми миллионов слов до заданного веса: уменьшите вес");
+        }
         const quint64 half = s.count / 2;
         deferred.push_back({ s.first + half, s.count - half });
         s.count = half;
