@@ -11,6 +11,11 @@ namespace {
 // восьми (512 бит), в глобальной — до MAX_BLOCKWORDS.
 constexpr int SHARED_MAX_WORDS = 8;
 
+// Шаг строки в рабочей копии — слов. Нечётный: 64-битные обращения варпа
+// к соседним строкам тогда попадают в разные банки разделяемой памяти, а с
+// чётным шагом (6 слов = 48 байт) половина обращений сталкивалась.
+__host__ __device__ constexpr int rowStride(int words) { return (words & 1) ? words : words + 1; }
+
 // Генератор порядка столбцов. Обязан совпадать с Leon::shuffledColumns на
 // хосте бит в бит: тогда попытка с одним номером даёт одно и то же множество
 // на CPU и на GPU, и результаты двух путей сравнимы напрямую — этим и
@@ -118,6 +123,7 @@ __device__ __forceinline__ bool light(int weight, const LeonLaunch& P)
 template <int WORDS, bool GLOBAL>
 __global__ void leonTrialsKernel(LeonLaunch P)
 {
+    constexpr int STRIDE = rowStride(WORDS);
     extern __shared__ uint64_t s_mem[];
     const int k = P.rows;
     const int n = P.cols;
@@ -125,156 +131,231 @@ __global__ void leonTrialsKernel(LeonLaunch P)
     uint64_t* m;
     uint16_t* order;
     if (GLOBAL) {
-        m     = P.scratch + size_t(blockIdx.x) * size_t(k) * WORDS;
+        m     = P.scratch + size_t(blockIdx.x) * size_t(k) * STRIDE;
         order = reinterpret_cast<uint16_t*>(s_mem);
     } else {
         m     = s_mem;
-        order = reinterpret_cast<uint16_t*>(m + size_t(k) * WORDS);
+        order = reinterpret_cast<uint16_t*>(m + size_t(k) * STRIDE);
     }
-    uint8_t* const flag = reinterpret_cast<uint8_t*>(order + n);
-    __shared__ int s_src;
-    __shared__ int s_pivotRow;
+    uint8_t* const flag = reinterpret_cast<uint8_t*>(order + n);   // строка уже опорная
 
     const int tid = threadIdx.x;
     const int B   = blockDim.x;
 
-    // 1. Копия матрицы; слова за wordsPerRow — нули.
+    // 1. Копия матрицы; слова за wordsPerRow — нули. Флаги опорных строк — нули.
     for (int e = tid; e < k * WORDS; e += B) {
         const int r = e / WORDS, w = e % WORDS;
-        m[e] = (w < P.wordsPerRow) ? P.matrix[size_t(r) * P.wordsPerRow + w] : 0ULL;
+        m[size_t(r) * STRIDE + w] = (w < P.wordsPerRow) ? P.matrix[size_t(r) * P.wordsPerRow + w] : 0ULL;
     }
+    for (int r = tid; r < k; r += B)
+        flag[r] = 0;
     // 2. Случайный порядок столбцов — Фишер–Йетс одной нитью, n обменов.
     if (tid == 0) {
         for (int c = 0; c < n; ++c) order[c] = uint16_t(c);
         uint64_t state = seedFor(P.firstTrial + blockIdx.x) | 1ULL;
         for (int c = n - 1; c > 0; --c) {
-            const int j = int(xorshiftNext(state) % uint64_t(c + 1));
+            const int j = int(__umul64hi(xorshiftNext(state), uint64_t(c + 1)));
             const uint16_t t = order[c]; order[c] = order[j]; order[j] = t;
         }
-        s_pivotRow = 0;
     }
     __syncthreads();
 
     // 3. Гаусс: опорные столбцы берутся в случайном порядке, первый
-    //    подходящий. То же правило, что и на хосте.
-    for (int idx = 0; idx < n; ++idx) {
-        const int pivotRow = s_pivotRow;
-        if (pivotRow >= k)
-            break;
+    //    подходящий — то же правило, что и на хосте. Строки не
+    //    переставляются: опорная строка помечается использованной и в
+    //    дальнейшем поиске не участвует; перебору порядок строк безразличен.
+    //    Нить ведёт свои строки целиком (tid, tid + B, …): бит опорного
+    //    столбца читается из своей строки до её изменения, и флаги не нужны.
+    //    На столбец два барьера вместо пяти: после поиска опоры и после
+    //    исключения.
+    __shared__ int s_src[2];   // опорная строка столбца; по чётности столбца, чтобы
+                               // нулевой варп мог писать следующую, пока остальные читают эту
+    int found = 0;             // опорных строк найдено — у всех нитей одно и то же
+    for (int idx = 0; idx < n && found < k; ++idx) {
         const int c = order[idx];
 
-        if (tid == 0) s_src = 0x7fffffff;
+        // Поиск — одним варпом: у лэйна строки lane, lane + 32, … по
+        // возрастанию, первая подходящая и есть его минимум; минимум по
+        // варпу — обменами. Остальные варпы ждут у барьера, им тут нечего
+        // считать.
+        if (tid < 32) {
+            int best = 0x7fffffff;
+            for (int r = tid; r < k; r += 32)
+                if (!flag[r] && bitAt(m + size_t(r) * STRIDE, c)) { best = r; break; }
+            #pragma unroll
+            for (int off = 16; off > 0; off >>= 1)
+                best = min(best, __shfl_xor_sync(0xffffffffu, best, off));
+            if (tid == 0) s_src[idx & 1] = best;
+        }
         __syncthreads();
-        for (int r = pivotRow + tid; r < k; r += B)
-            if (bitAt(m + size_t(r) * WORDS, c))
-                atomicMin(&s_src, r);
-        __syncthreads();
-        const int src = s_src;
-        // Барьер до continue: иначе нить 0 успеет обнулить s_src для
-        // следующего столбца раньше, чем остальные его прочитают.
-        __syncthreads();
+        const int src = s_src[idx & 1];
         if (src == 0x7fffffff)
-            continue;
+            continue;   // столбец зависим от прежних
 
-        if (src != pivotRow && tid < WORDS) {
-            const uint64_t t = m[size_t(src) * WORDS + tid];
-            m[size_t(src) * WORDS + tid]      = m[size_t(pivotRow) * WORDS + tid];
-            m[size_t(pivotRow) * WORDS + tid] = t;
+        // Исключение: все прочие строки с единицей в c складываются с
+        // опорной. Опорная строка не меняется, её читают все.
+        const uint64_t* pivot = m + size_t(src) * STRIDE;
+        for (int r = tid; r < k; r += B) {
+            if (r == src) {
+                flag[r] = 1;
+                continue;
+            }
+            uint64_t* row = m + size_t(r) * STRIDE;
+            if (bitAt(row, c)) {
+                #pragma unroll
+                for (int w = 0; w < WORDS; ++w) row[w] ^= pivot[w];
+            }
         }
-        __syncthreads();
-
-        // Флаги отдельно от исключения: иначе нить, стирающая бит c в слове
-        // строки, обгоняла бы соседей, читающих этот бит для той же строки.
-        for (int r = tid; r < k; r += B)
-            flag[r] = (r != pivotRow) && bitAt(m + size_t(r) * WORDS, c);
-        __syncthreads();
-        for (int e = tid; e < k * WORDS; e += B) {
-            const int r = e / WORDS, w = e % WORDS;
-            if (flag[r])
-                m[e] ^= m[size_t(pivotRow) * WORDS + w];
-        }
-        if (tid == 0) s_pivotRow = pivotRow + 1;
+        ++found;
         __syncthreads();
     }
     // Ранг проверен хостом заранее; если что — попытка просто пустая.
-    if (s_pivotRow < k)
+    if (found < k)
         return;
 
-    // 4. Перебор комбинаций до p строк. В регистрах держатся только префиксы;
-    //    вес последнего уровня считается на лету, слово собирается заново
-    //    лишь при выкладке.
-    const int p = P.rowsPerTrial;
+    // 4. Перебор комбинаций до p строк. Единица работы — варп, а не нить:
+    //    у 32 лэйнов либо общий префикс в регистрах и свои хвосты подряд
+    //    (строки читаются соседние — без конфликтов банков при нечётном
+    //    шаге), либо свои префиксы и общий хвост (строка читается
+    //    широковещательно). В обоих случаях лэйны делают одинаковое число
+    //    шагов: раньше у каждой нити был свой хвост своей длины, и в варпе
+    //    работало в среднем 8 лэйнов из 32.
+    const int p     = P.rowsPerTrial;
+    const int lane  = tid & 31;
+    const int warp  = tid >> 5;
+    const int warps = B >> 5;
     uint64_t acc[WORDS], acc2[WORDS];
 
-    for (int i = tid; i < k; i += B) {
-        const uint64_t* row = m + size_t(i) * WORDS;
-        int weight = 0;
+    auto rowAt = [&](int r) { return m + size_t(r) * STRIDE; };
+    auto load = [&](uint64_t* dst, const uint64_t* row) {
         #pragma unroll
-        for (int w = 0; w < WORDS; ++w) weight += __popcll(row[w]);
+        for (int w = 0; w < WORDS; ++w) dst[w] = row[w];
+    };
+    auto weightXor = [&](const uint64_t* a, const uint64_t* b) {
+        int wt = 0;
+        #pragma unroll
+        for (int w = 0; w < WORDS; ++w) wt += __popcll(a[w] ^ b[w]);
+        return wt;
+    };
+    auto weightOf = [&](const uint64_t* a) {
+        int wt = 0;
+        #pragma unroll
+        for (int w = 0; w < WORDS; ++w) wt += __popcll(a[w]);
+        return wt;
+    };
+
+    // Одиночные строки — по нитям.
+    for (int i = tid; i < k; i += B) {
+        const uint64_t* row = rowAt(i);
+        const int weight = weightOf(row);
         if (light(weight, P))
             emitWord<WORDS>(P, row, nullptr, weight);
     }
+    if (p < 2)
+        return;
+
     if (p == 2) {
-        // Пар мало, перекос между нитями роли не играет — Гаусс дороже.
-        for (int i = tid; i < k - 1; i += B) {
-            #pragma unroll
-            for (int w = 0; w < WORDS; ++w) acc[w] = m[size_t(i) * WORDS + w];
-            for (int j = i + 1; j < k; ++j) {
-                const uint64_t* row = m + size_t(j) * WORDS;
-                int weight = 0;
-                #pragma unroll
-                for (int w = 0; w < WORDS; ++w) weight += __popcll(acc[w] ^ row[w]);
-                if (light(weight, P))
-                    emitWord<WORDS>(P, acc, row, weight);
-            }
-        }
-    }
-    else if (p >= 3) {
-        // Пара (i, j) — префикс, нити берут их вперемежку: у каждой набор из
-        // больших и малых j, и работа выравнивается. Разбор номера пары стоит
-        // O(k), но размазан по внутреннему циклу.
-        const int npairs = k * (k - 1) / 2;
-        for (int idx = tid; idx < npairs; idx += B) {
-            int i = 0, rem = idx;
-            while (rem >= k - 1 - i) { rem -= k - 1 - i; ++i; }
-            const int j = i + 1 + rem;
-            int weight = 0;
-            #pragma unroll
-            for (int w = 0; w < WORDS; ++w) {
-                acc[w] = m[size_t(i) * WORDS + w] ^ m[size_t(j) * WORDS + w];
-                weight += __popcll(acc[w]);
-            }
-            if (light(weight, P))
-                emitWord<WORDS>(P, acc, nullptr, weight);
-            for (int l = j + 1; l < k; ++l) {
-                const uint64_t* rowL = m + size_t(l) * WORDS;
-                if (p == 3) {
-                    int wt = 0;
-                    #pragma unroll
-                    for (int w = 0; w < WORDS; ++w) wt += __popcll(acc[w] ^ rowL[w]);
-                    if (light(wt, P))
-                        emitWord<WORDS>(P, acc, rowL, wt);
-                    continue;
-                }
-                int wt = 0;
-                #pragma unroll
-                for (int w = 0; w < WORDS; ++w) {
-                    acc2[w] = acc[w] ^ rowL[w];
-                    wt += __popcll(acc2[w]);
-                }
+        // Варп берёт строку i, лэйны — j > i подряд.
+        for (int i = warp; i < k - 1; i += warps) {
+            load(acc, rowAt(i));
+            for (int j = i + 1 + lane; j < k; j += 32) {
+                const uint64_t* row = rowAt(j);
+                const int wt = weightXor(acc, row);
                 if (light(wt, P))
-                    emitWord<WORDS>(P, acc2, nullptr, wt);
-                for (int q = l + 1; q < k; ++q) {
-                    const uint64_t* rowQ = m + size_t(q) * WORDS;
-                    int wq = 0;
+                    emitWord<WORDS>(P, acc, row, wt);
+            }
+        }
+        return;
+    }
+
+    if (p == 3) {
+        // Пары (i, j) с длинным хвостом (j < 32): варп берёт пару, лэйны —
+        // l > j подряд. С коротким (j >= 32): варп берёт j и до 32 строк i,
+        // лэйн — своё i, хвост l > j у всех общий. И там и там варп
+        // заполнен не меньше чем на две трети; раздача единиц по варпам —
+        // круговая, счёт единиц у всех варпов один и тот же.
+        const int split = k < 32 ? k : 32;
+        int unit = 0;
+        for (int j = 1; j < split; ++j)
+            for (int i = 0; i < j; ++i) {
+                if ((unit++ % warps) != warp)
+                    continue;
+                const uint64_t* rj = rowAt(j);
+                load(acc, rowAt(i));
+                #pragma unroll
+                for (int w = 0; w < WORDS; ++w) acc[w] ^= rj[w];
+                if (lane == 0) {
+                    const int wt = weightOf(acc);
+                    if (light(wt, P))
+                        emitWord<WORDS>(P, acc, nullptr, wt);
+                }
+                for (int l = j + 1 + lane; l < k; l += 32) {
+                    const uint64_t* row = rowAt(l);
+                    const int wt = weightXor(acc, row);
+                    if (light(wt, P))
+                        emitWord<WORDS>(P, acc, row, wt);
+                }
+            }
+        for (int j = split; j < k; ++j)
+            for (int c = 0; c < j; c += 32) {
+                if ((unit++ % warps) != warp)
+                    continue;
+                const int  i    = c + lane;
+                const bool mine = i < j;
+                const uint64_t* rj = rowAt(j);
+                if (mine) {
+                    load(acc, rowAt(i));
                     #pragma unroll
-                    for (int w = 0; w < WORDS; ++w) wq += __popcll(acc2[w] ^ rowQ[w]);
-                    if (light(wq, P))
-                        emitWord<WORDS>(P, acc2, rowQ, wq);
+                    for (int w = 0; w < WORDS; ++w) acc[w] ^= rj[w];
+                    const int wt = weightOf(acc);
+                    if (light(wt, P))
+                        emitWord<WORDS>(P, acc, nullptr, wt);
+                }
+                for (int l = j + 1; l < k; ++l) {
+                    const uint64_t* row = rowAt(l);
+                    if (mine) {
+                        const int wt = weightXor(acc, row);
+                        if (light(wt, P))
+                            emitWord<WORDS>(P, acc, row, wt);
+                    }
+                }
+            }
+        return;
+    }
+
+    // p == 4: варп берёт пару (i, j), хвост l у всех общий, а четвёртая
+    // строка q > l — по лэйнам подряд.
+    int unit = 0;
+    for (int j = 1; j < k; ++j)
+        for (int i = 0; i < j; ++i) {
+            if ((unit++ % warps) != warp)
+                continue;
+            const uint64_t* rj = rowAt(j);
+            load(acc, rowAt(i));
+            #pragma unroll
+            for (int w = 0; w < WORDS; ++w) acc[w] ^= rj[w];
+            if (lane == 0) {
+                const int wt = weightOf(acc);
+                if (light(wt, P))
+                    emitWord<WORDS>(P, acc, nullptr, wt);
+            }
+            for (int l = j + 1; l < k; ++l) {
+                const uint64_t* rl = rowAt(l);
+                #pragma unroll
+                for (int w = 0; w < WORDS; ++w) acc2[w] = acc[w] ^ rl[w];
+                if (lane == 0) {
+                    const int wt = weightOf(acc2);
+                    if (light(wt, P))
+                        emitWord<WORDS>(P, acc2, nullptr, wt);
+                }
+                for (int q = l + 1 + lane; q < k; q += 32) {
+                    const uint64_t* row = rowAt(q);
+                    const int wt = weightXor(acc2, row);
+                    if (light(wt, P))
+                        emitWord<WORDS>(P, acc2, row, wt);
                 }
             }
         }
-    }
 }
 
 __global__ void seenRehashKernel(const uint64_t* oldFp, const unsigned* oldHits, const uint16_t* oldWeight,
@@ -305,7 +386,7 @@ size_t sharedBytesFor(int rows, int cols, int words, bool global)
 {
     size_t bytes = size_t(cols) * sizeof(uint16_t) + size_t(rows);
     if (!global)
-        bytes += size_t(rows) * words * sizeof(uint64_t);
+        bytes += size_t(rows) * rowStride(words) * sizeof(uint64_t);
     return bytes;
 }
 
@@ -317,6 +398,12 @@ int leonPaddedWords(int wordsPerRow)
     for (int candidate : sizes)
         if (candidate >= wordsPerRow) return candidate;
     return 0;
+}
+
+int leonRowStride(int wordsPerRow)
+{
+    const int padded = leonPaddedWords(wordsPerRow);
+    return padded == 0 ? 0 : rowStride(padded);
 }
 
 bool leonFitsShared(int rows, int cols, int wordsPerRow)

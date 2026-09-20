@@ -1427,7 +1427,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     // Матрица, не влезшая в разделяемую память, у каждого блока своя — в
     // рабочем буфере. Буфер на слот не больше 128 МБ, им и ограничена пачка.
     const bool   global       = !leonFitsShared(rows, cols, words);
-    const size_t scratchWords = global ? size_t(rows) * size_t(leonPaddedWords(words)) : 0;
+    const size_t scratchWords = global ? size_t(rows) * size_t(leonRowStride(words)) : 0;
     quint64      blocksMax    = kBatchMax;
     if (global)
         blocksMax = std::max<quint64>(1, std::min<quint64>(kBatchMax,

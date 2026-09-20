@@ -61,6 +61,11 @@ struct LeonLaunch
 // ядро умеет (MAX_BLOCKWORDS).
 int leonPaddedWords(int wordsPerRow);
 
+// Слов на строку в рабочем буфере (с учётом шага: нечётное число слов,
+// чтобы строки не сталкивались в банках разделяемой памяти). Ноль — как у
+// leonPaddedWords.
+int leonRowStride(int wordsPerRow);
+
 // true — матрица помещается в разделяемую память блока и рабочий буфер в
 // глобальной не нужен.
 bool leonFitsShared(int rows, int cols, int wordsPerRow);

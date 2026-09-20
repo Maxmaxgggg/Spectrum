@@ -406,13 +406,26 @@ std::vector<double> ShardedWordTable::unseenByWeight() const
     return chaoUnseen(f1, f2);
 }
 
+// Случайный индекс из [0, range): старшие 64 бита произведения — без
+// деления. На видеокарте 64-битный остаток — сотни инструкций, и тасование
+// одной нитью стоило как весь Гаусс блока; здесь та же формула, чтобы
+// порядок столбцов совпадал с ядром бит в бит.
+static inline quint64 belowRange(quint64 random, quint64 range)
+{
+#ifdef _MSC_VER
+    return __umulh(random, range);
+#else
+    return quint64((unsigned __int128(random) * range) >> 64);
+#endif
+}
+
 void shuffledColumns(int cols, quint64 trialIndex, std::vector<int>& order)
 {
     order.resize(size_t(cols));
     std::iota(order.begin(), order.end(), 0);
     Xorshift rng{ seedFor(trialIndex) | 1ULL };
     for (int c = cols - 1; c > 0; --c)
-        std::swap(order[size_t(c)], order[size_t(rng.next() % quint64(c + 1))]);
+        std::swap(order[size_t(c)], order[size_t(belowRange(rng.next(), quint64(c + 1)))]);
 }
 
 } // namespace Leon
