@@ -37,6 +37,7 @@
 #include "leonkernel.cuh"
 #include "leonsearch.h"
 #include "productcode.h"
+#include "bchcode.h"
 
 #ifdef Q_OS_WIN
     #define NOMINMAX
@@ -2831,6 +2832,85 @@ static Spectrum productSpectrum(const QStringList& g1, const QStringList& g2,
     return spec;
 }
 
+// БЧХ-конструктор: минимальные многочлены против справочной таблицы,
+// порождающий многочлен из примера Макса, матрица [63,51] из его библиотеки.
+static void testBchCode()
+{
+    out << Qt::endl << QStringLiteral("БЧХ-коды") << Qt::endl;
+
+    // Справочные значения (восьмеричные) для представителей классов.
+    struct Known { int m; int exponent; const char* octal; };
+    const Known known[] = {
+        // В печатной таблице после первого совпадения классов номер строки —
+        // просто порядковый: у m=5 строка «11» — это m_15, у m=6 строка «23» — m_31.
+        { 2, 1, "7" },   { 3, 3, "15" },  { 4, 5, "7" },   { 4, 7, "31" },   { 5, 15, "51" },
+        { 6, 9, "15" },  { 6, 31, "141" }, { 7, 9, "277" }, { 7, 19, "313" }, { 7, 63, "221" },
+        { 8, 1, "435" }, { 8, 13, "453" }, { 9, 55, "1275" }, { 10, 33, "75" }, { 10, 57, "3121" },
+    };
+    bool tableOk = true;
+    QStringList wrong;
+    for (const Known& kn : known) {
+        const auto table = Bch::minimalPolynomials(kn.m);
+        const auto it = std::find_if(table.begin(), table.end(),
+                                     [&](const Bch::MinimalPolynomial& p) { return p.exponent == kn.exponent; });
+        const QString got = it == table.end() ? QStringLiteral("нет") : it->octal;
+        if (got != QLatin1String(kn.octal)) { tableOk = false; wrong << QStringLiteral("m=%1 i=%2: %3, ждали %4").arg(kn.m).arg(kn.exponent).arg(got).arg(kn.octal); }
+    }
+    expectLeon(QStringLiteral("минимальные многочлены совпадают со справочником"), tableOk, wrong.join(QStringLiteral("; ")));
+
+    // Число классов (без нулевого): m=7 — 18, m=10 — 106.
+    expectLeon(QStringLiteral("представителей классов: m=7 — %1, m=10 — %2")
+                   .arg(Bch::minimalPolynomials(7).size()).arg(Bch::minimalPolynomials(10).size()),
+               Bch::minimalPolynomials(7).size() == 18 && Bch::minimalPolynomials(10).size() == 106);
+
+    // Пример: 211·217·235·367·277.
+    const Bch::Code c127 = Bch::build(7, 5, false, 0);
+    expectLeon(QStringLiteral("[127,92]: g = 211·217·235·367·277, δ = 11"),
+               c127.n == 127 && c127.k == 92 && c127.designedDistance == 11 && c127.corrects == 5
+                   && c127.generator == QStringLiteral("110010100111011000000010010011010111")
+                   && c127.rows.size() == 92 && c127.rows.first().length() == 127,
+               c127.generator);
+
+    // Матрица [63,51] — как в библиотеке Макса (I | P, x^{n-k+i} mod g от младшей степени).
+    const Bch::Code c63 = Bch::build(6, 2, false, 0);
+    const QStringList expect63 = {
+        QStringLiteral("100000000000000000000000000000000000000000000000000100111001010"),
+        QStringLiteral("010000000000000000000000000000000000000000000000000010011100101"),
+        QStringLiteral("001000000000000000000000000000000000000000000000000101110111000"),
+    };
+    expectLeon(QStringLiteral("[63,51]: первые строки как у сохранённой матрицы"),
+               c63.n == 63 && c63.k == 51 && c63.designedDistance == 5
+                   && c63.rows.mid(0, 3) == expect63,
+               c63.rows.value(0));
+
+    // Каждая строка — кодовое слово: делится на g. Проверка через спектр:
+    // у [15,7,5] (m=4, два класса) точный спектр A_5 = 18, A_6 = 30.
+    const Bch::Code c15 = Bch::build(4, 2, false, 0);
+    const Spectrum s15 = Reference::bruteForce(c15.rows);
+    expectLeon(QStringLiteral("[15,7,5]: A_5 = %1, A_6 = %2").arg(s15.value(5)).arg(s15.value(6)),
+               c15.k == 7 && s15.value(5) == 18 && s15.value(6) == 30 && s15.value(4, 0) == 0);
+
+    // Расширение: [16,7,6]; укорочение на 2: [13,5]; и то и другое: [14,5].
+    const Bch::Code ext = Bch::build(4, 2, true, 0);
+    const Bch::Code sh  = Bch::build(4, 2, false, 2);
+    const Bch::Code both = Bch::build(4, 2, true, 2);
+    const Spectrum sExt = Reference::bruteForce(ext.rows);
+    expectLeon(QStringLiteral("расширение и укорочение: [16,7,6] (A_5 = 0, A_6 = %1), [13,5], [14,5]").arg(sExt.value(6)),
+               ext.n == 16 && ext.k == 7 && ext.designedDistance == 6 && sExt.value(5, 0) == 0 && sExt.value(6) == 48
+                   && sh.n == 13 && sh.k == 5 && both.n == 14 && both.k == 5
+                   && sh.rows.size() == 5 && sh.rows.first().length() == 13);
+
+    // Конструктивное расстояние учитывает пропуск: m=7, 8 классов (до 15) —
+    // корни α^1…α^18, δ = 19; m=4, 3 класса — [15,5,7]; 4 класса — [15,1,15].
+    const Bch::Code c8 = Bch::describe(7, 8, false, 0);
+    const Bch::Code r3 = Bch::describe(4, 3, false, 0);
+    const Bch::Code r4 = Bch::describe(4, 4, false, 0);
+    expectLeon(QStringLiteral("δ по границе БЧХ: m=7/8 классов — [127,%1,δ=%2]; m=4 — [15,%3,%4], [15,%5,%6]")
+                   .arg(c8.k).arg(c8.designedDistance).arg(r3.k).arg(r3.designedDistance).arg(r4.k).arg(r4.designedDistance),
+               c8.k == 71 && c8.designedDistance == 19 && r3.k == 5 && r3.designedDistance == 7
+                   && r4.k == 1 && r4.designedDistance == 15);
+}
+
 static void testProductCode()
 {
     out << Qt::endl << QStringLiteral("Коды произведения: низ спектра по компонентам") << Qt::endl;
@@ -3261,6 +3341,7 @@ int main(int argc, char* argv[])
     testBrouwerZimmermannWorker();
     testLeonModel();
     testLeonWorker();
+    testBchCode();
     testProductCode();
 
     testAutosaveStore();

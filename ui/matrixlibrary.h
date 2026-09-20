@@ -3,35 +3,50 @@
 #include <QJsonArray>
 #include <QString>
 #include <QStringList>
+#include <QVector>
 
-// Именованные матрицы, сохранённые пользователем.
+// Матрицы, сохранённые пользователем, — в сетке ячеек 10 x 10.
 //
 // Хранилище — QSettings (реестр), один ключ с JSON-массивом объектов
-// { "matrixName": ..., "matrix": ... }. Формат оставлен как был: в реестре
-// у пользователя уже лежат записи, и менять их разбор без миграции нельзя.
+// { "matrixName": …, "matrix": …, "slot": … }. Первые два ключа — как были:
+// в реестре у пользователя уже лежат записи. Записи без "slot" (старые)
+// при чтении раскладываются по свободным ячейкам подряд и так же
+// сохраняются обратно.
 //
-// Класс отвечает только за хранение. Ни имя по умолчанию, ни пункты меню
-// сюда не относятся: то и другое выводится из текущего состояния интерфейса.
+// Класс отвечает только за хранение; окно с сеткой — MatrixSlotsDialog.
 class MatrixLibrary
 {
 public:
-    // Перечитывает массив из хранилища. Вызывается перед каждой операцией
-    // изменения: настройки мог поменять второй запущенный экземпляр.
+    static constexpr int ROWS  = 10;
+    static constexpr int COLS  = 10;
+    static constexpr int SLOTS = ROWS * COLS;
+
+    struct Entry
+    {
+        int     slot = -1;   // 0..SLOTS-1, построчно
+        QString name;
+        QString matrix;
+    };
+
+    // Перечитывает массив из хранилища. Вызывается перед каждой операцией:
+    // настройки мог поменять второй запущенный экземпляр.
     void load();
 
-    bool        isEmpty() const;
-    bool        contains(const QString& name) const;
-    QStringList names() const;
-    // Пустая строка, если матрицы с таким именем нет.
-    QString     matrix(const QString& name) const;
+    bool  isEmpty() const;
+    bool  has(int slot) const;
+    Entry at(int slot) const;   // пустая запись (slot == -1), если ячейка свободна
+    QVector<Entry> entries() const;
 
-    // Добавляет матрицу или заменяет одноимённую. Сразу пишет в хранилище.
-    void save(const QString& name, const QString& matrixText);
-    // false, если удалять было нечего.
-    bool remove(const QString& name);
+    // Кладёт матрицу в ячейку, заменяя то, что там было. Сразу пишет в хранилище.
+    void save(int slot, const QString& name, const QString& matrixText);
+    // false, если ячейка была пуста.
+    bool remove(int slot);
+
+    // «(n,k)» по тексту матрицы — подпись ячейки; пусто для пустого текста.
+    static QString dimensions(const QString& matrixText);
 
 private:
-    int  indexOf(const QString& name) const;
+    int  indexOf(int slot) const;
     void flush() const;
 
     QJsonArray matrices;

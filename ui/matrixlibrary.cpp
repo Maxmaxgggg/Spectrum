@@ -7,9 +7,10 @@
 #include <QSettings>
 
 namespace {
-// Ключи объектов в JSON. Совпадают с тем, что уже лежит в реестре.
+// Ключи объектов в JSON. Первые два совпадают с тем, что уже лежит в реестре.
 inline QString keyName() { return QStringLiteral("matrixName"); }
 inline QString keyBody() { return QStringLiteral("matrix"); }
+inline QString keySlot() { return QStringLiteral("slot"); }
 } // namespace
 
 void MatrixLibrary::load()
@@ -25,7 +26,32 @@ void MatrixLibrary::load()
     if (!doc.isArray())
         return;
 
-    matrices = doc.array();
+    // Старые записи без ячейки — по свободным ячейкам подряд, в порядке
+    // следования; занятые ячейки уже раскиданных записей обходятся.
+    QJsonArray raw = doc.array();
+    QVector<bool> taken(SLOTS, false);
+    for (const QJsonValue& value : raw) {
+        if (!value.isObject()) continue;
+        const int slot = value.toObject().value(keySlot()).toInt(-1);
+        if (slot >= 0 && slot < SLOTS) taken[slot] = true;
+    }
+    bool migrated = false;
+    for (const QJsonValue& value : raw) {
+        if (!value.isObject()) continue;
+        QJsonObject object = value.toObject();
+        int slot = object.value(keySlot()).toInt(-1);
+        if (slot < 0 || slot >= SLOTS) {
+            slot = 0;
+            while (slot < SLOTS && taken[slot]) ++slot;
+            if (slot >= SLOTS) continue;   // больше ста старых записей — лишние теряем
+            taken[slot] = true;
+            object.insert(keySlot(), slot);
+            migrated = true;
+        }
+        matrices.append(object);
+    }
+    if (migrated)
+        flush();
 }
 
 void MatrixLibrary::flush() const
@@ -41,66 +67,77 @@ bool MatrixLibrary::isEmpty() const
     return matrices.isEmpty();
 }
 
-int MatrixLibrary::indexOf(const QString& name) const
+int MatrixLibrary::indexOf(int slot) const
 {
-    for (int i = 0; i < matrices.size(); ++i) {
-        if (!matrices.at(i).isObject())
-            continue;
-        if (matrices.at(i).toObject().value(keyName()).toString() == name)
+    for (int i = 0; i < matrices.size(); ++i)
+        if (matrices.at(i).isObject() && matrices.at(i).toObject().value(keySlot()).toInt(-1) == slot)
             return i;
-    }
     return -1;
 }
 
-bool MatrixLibrary::contains(const QString& name) const
+bool MatrixLibrary::has(int slot) const
 {
-    return indexOf(name) >= 0;
+    return indexOf(slot) >= 0;
 }
 
-QStringList MatrixLibrary::names() const
+MatrixLibrary::Entry MatrixLibrary::at(int slot) const
 {
-    QStringList out;
-    for (const QJsonValue& value : matrices) {
-        if (!value.isObject())
-            continue;
-        out << value.toObject().value(keyName()).toString();
-    }
+    Entry entry;
+    const int idx = indexOf(slot);
+    if (idx < 0)
+        return entry;
+    const QJsonObject object = matrices.at(idx).toObject();
+    entry.slot   = slot;
+    entry.name   = object.value(keyName()).toString();
+    entry.matrix = object.value(keyBody()).toString();
+    return entry;
+}
+
+QVector<MatrixLibrary::Entry> MatrixLibrary::entries() const
+{
+    QVector<Entry> out;
+    for (int slot = 0; slot < SLOTS; ++slot)
+        if (has(slot)) out.append(at(slot));
     return out;
 }
 
-QString MatrixLibrary::matrix(const QString& name) const
+void MatrixLibrary::save(int slot, const QString& name, const QString& matrixText)
 {
-    const int idx = indexOf(name);
-    if (idx < 0)
-        return QString();
-    return matrices.at(idx).toObject().value(keyBody()).toString();
-}
-
-void MatrixLibrary::save(const QString& name, const QString& matrixText)
-{
-    if (name.isEmpty())
+    if (slot < 0 || slot >= SLOTS)
         return;
+    QJsonObject object;
+    object.insert(keyName(), name);
+    object.insert(keyBody(), matrixText);
+    object.insert(keySlot(), slot);
 
-    QJsonObject entry;
-    entry[keyName()] = name;
-    entry[keyBody()] = matrixText;
-
-    const int idx = indexOf(name);
+    const int idx = indexOf(slot);
     if (idx >= 0)
-        matrices[idx] = entry;
+        matrices.replace(idx, object);
     else
-        matrices.append(entry);
-
+        matrices.append(object);
     flush();
 }
 
-bool MatrixLibrary::remove(const QString& name)
+bool MatrixLibrary::remove(int slot)
 {
-    const int idx = indexOf(name);
+    const int idx = indexOf(slot);
     if (idx < 0)
         return false;
-
     matrices.removeAt(idx);
     flush();
     return true;
+}
+
+QString MatrixLibrary::dimensions(const QString& matrixText)
+{
+    int rows = 0, cols = 0;
+    for (const QString& line : matrixText.split(QLatin1Char('\n'))) {
+        const QString row = line.trimmed();
+        if (row.isEmpty()) continue;
+        ++rows;
+        cols = qMax(cols, row.length());
+    }
+    if (rows == 0)
+        return QString();
+    return QStringLiteral("(%1,%2)").arg(cols).arg(rows);
 }

@@ -102,10 +102,16 @@ MainWindow::~MainWindow()
 void MainWindow::setMatrixMenu()
 {
 
-    matrixMenu = new MatrixMenu(ui->matrixMNU, ui->deleteMatrixMNU, ui->addMatrixACN, this);
-    matrixMenu->setMatrixSource([this]() { return ui->matrixPTE->toPlainText(); });
-    connect(matrixMenu, &MatrixMenu::matrixChosen, this, [this](const QString& text) {
-        ui->matrixPTE->setPlainText(text);
+    matrixMenu = new MatrixMenu(ui->loadMatrixACN, ui->saveMatrixACN, ui->createMatrixACN, this);
+    // Загрузка и сохранение — в ту матрицу, чья вкладка открыта: у кода
+    // произведения их две.
+    auto currentEditor = [this]() -> QPlainTextEdit* {
+        return (matrixPages && matrixPages->currentIndex() == 1) ? static_cast<QPlainTextEdit*>(matrix2PTE)
+                                                                  : static_cast<QPlainTextEdit*>(ui->matrixPTE);
+    };
+    matrixMenu->setMatrixSource([currentEditor]() { return currentEditor()->toPlainText(); });
+    connect(matrixMenu, &MatrixMenu::matrixChosen, this, [currentEditor](const QString& text) {
+        currentEditor()->setPlainText(text);
     });
 }
 
