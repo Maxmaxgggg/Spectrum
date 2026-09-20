@@ -109,6 +109,13 @@ std::vector<int> unpackProfile(const ProfileKey& key, int cellCount);
 // иначе по одному на множество. Перебор с отсечкой по объединению;
 // workLimit — потолок числа рассмотренных кандидатов, при превышении
 // возвращает false (профили неполные — использовать нельзя).
+// Сколько кандидатов просмотрит profiles() при r = 2 (для r >= 3 — оценка
+// снизу): по каждому первому слову — все слова веса не выше потолка, который
+// оставляет ему отсечка. Считается по спектру компоненты мгновенно — ещё до
+// того, как собирать списки слов: чтобы не начинать перебор, которому не
+// хватит и недели.
+double estimatedProfileWork(const Component& c, int r, int unionLimit);
+
 bool profiles(const Component& c, int r, int unionLimit, quint64 workLimit,
               ProfileMap& out, bool ordered, const std::function<bool()>& cancelled = {},
               const Progress& progress = {});

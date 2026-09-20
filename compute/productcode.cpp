@@ -333,6 +333,34 @@ struct ProfileWalker
 
 } // namespace
 
+double estimatedProfileWork(const Component& c, int r, int unionLimit)
+{
+    if (r < 2 || c.d <= 0 || c.spectrum.empty())
+        return 0.0;
+    const int limit = std::min({ unionLimit, c.n, c.exactUpTo });
+    if (limit < c.d)
+        return 0.0;
+    // Гистограмма весов кандидатов (по спектру) и её накопленная сумма.
+    std::vector<double> count(size_t(limit) + 1, 0.0);
+    for (int w = 1; w <= limit; ++w)
+        count[size_t(w)] = double(c.spectrum[size_t(w)]);
+    std::vector<double> upTo(size_t(limit) + 1, 0.0);
+    for (int w = 0; w <= limit; ++w)
+        upTo[size_t(w)] = (w > 0 ? upTo[size_t(w) - 1] : 0.0) + count[size_t(w)];
+    // Как в ProfileWalker::go на глубине 1: после первого слова веса w1
+    // потолок второго — budget − w1 − (комбинаций впереди)·d.
+    const long long budget  = (1LL << (r - 1)) * limit;
+    const long long pending = (1LL << r) - 2 - 1;
+    double work = 0.0;
+    for (int w1 = 1; w1 <= limit; ++w1) {
+        if (count[size_t(w1)] == 0.0) continue;
+        const long long maxWeight = budget - w1 - pending * c.d;
+        if (maxWeight < c.d) continue;
+        work += count[size_t(w1)] * upTo[size_t(std::min<long long>(maxWeight, limit))];
+    }
+    return work;
+}
+
 bool profiles(const Component& c, int r, int unionLimit, quint64 workLimit,
               ProfileMap& out, bool ordered, const std::function<bool()>& cancelled,
               const Progress& progress)

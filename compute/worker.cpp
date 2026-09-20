@@ -1897,8 +1897,9 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     progress.begin(1, 0, 0);
     productExactUpTo    = -1;
     productMissExponent = 0;
-    // Ранги выше первого строятся из списков слов; для большой компоненты
-    // их даёт только случайный поиск — без сертификата, зато со списком.
+    // Ранги выше первого строятся из списков слов; маленькая компонента
+    // отдаёт их с перебором, большой — только случайный поиск, и лишь если
+    // наборы посильны (шаг 2).
     const bool wantWords = maxRank >= 2;
 
     // Шаг 1. Минимальные веса. У маленькой компоненты — из полного перебора,
@@ -1911,8 +1912,10 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
             out = analyzeComponent(rows, 0, label, wantWords);
             return;
         }
+        // Списки слов здесь не собираются: сперва спектр, по нему решится,
+        // посильны ли ранги выше первого (шаг 2).
         for (int t = 8; ; t = std::min(n, t * 2)) {
-            out = analyzeComponent(rows, t, label, wantWords);
+            out = analyzeComponent(rows, t, label, false);
             if (out.d > 0 || t >= n || out.exactUpTo >= n)
                 return;
         }
@@ -1936,10 +1939,34 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     // слов веса <= target/d другой компоненты.
     const int limit1 = int(std::min<quint64>(target / quint64(c2.d), quint64(n1)));
     const int limit2 = int(std::min<quint64>(target / quint64(c1.d), quint64(n2)));
-    if (c1.exactUpTo < limit1 || (wantWords && c1.wordsUpTo < limit1))
-        c1 = analyzeComponent(g1, limit1, tr("компонента 1"), wantWords);
-    if (c2.exactUpTo < limit2 || (wantWords && c2.wordsUpTo < limit2))
-        c2 = analyzeComponent(g2, limit2, tr("компонента 2"), wantWords);
+    QStringList notes;
+    constexpr quint64 kWorkLimit = 20ULL << 30;
+    // Спектры до предела — без списков слов: их даёт дешёвый путь (полный
+    // перебор, дуальный, БЦ). Списки нужны только рангам выше первого, а
+    // стоят они дорого (миллионы слов в памяти) — сначала по спектру
+    // прикидывается, посильны ли наборы; нет — ранги выше первого
+    // отменяются сразу, и слова не собираются.
+    if (c1.exactUpTo < limit1)
+        c1 = analyzeComponent(g1, limit1, tr("компонента 1"), false);
+    if (c2.exactUpTo < limit2)
+        c2 = analyzeComponent(g2, limit2, tr("компонента 2"), false);
+    bool ranksFeasible = maxRank >= 2;
+    if (ranksFeasible) {
+        const double work1 = Product::estimatedProfileWork(c1, 2, limit1);
+        const double work2 = Product::estimatedProfileWork(c2, 2, limit2);
+        if (work1 > double(kWorkLimit) || work2 > double(kWorkLimit)) {
+            ranksFeasible = false;
+            notes << tr("ранг 2 и выше не считался: наборов слишком много (≈%1 проверок у компоненты %2, предел %3)")
+                         .arg(QString::number(std::max(work1, work2), 'g', 2))
+                         .arg(work1 > work2 ? 1 : 2).arg(QString::number(double(kWorkLimit), 'g', 2));
+        }
+    }
+    if (ranksFeasible) {
+        if (!c1.hasWords || c1.wordsUpTo < limit1)
+            c1 = analyzeComponent(g1, limit1, tr("компонента 1"), true);
+        if (!c2.hasWords || c2.wordsUpTo < limit2)
+            c2 = analyzeComponent(g2, limit2, tr("компонента 2"), true);
+    }
     if (c1.probabilistic || c2.probabilistic)
         productMissExponent = settings.leonMissExponent;
 
@@ -1958,7 +1985,6 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     // перебора наборов единица работы — первое слово набора, у свёртки —
     // профиль первой компоненты.
     std::vector<quint64> total = Product::rankOne(c1, c2, target);
-    QStringList notes;
     auto cancelledPoll = [this]() { return cancelled.load() != 0; };
     auto onProgress    = [this](quint64 done, quint64 all) { reportStageProgress(done, all); };
     auto lightWords    = [](const Product::Component& c, int limit) {
@@ -1966,13 +1992,25 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
         for (int w : c.weights) if (w <= limit) ++count;
         return count;
     };
-    for (int r = 2; r <= maxRank; ++r) {
+    for (int r = 2; r <= maxRank && ranksFeasible; ++r) {
         if (!c1.hasWords || !c2.hasWords) {
             notes << tr("ранг %1 и выше не считался: у большой компоненты нет списка слов").arg(r);
             break;
         }
         Product::ProfileMap p1, p2;
-        constexpr quint64 kWorkLimit = 20ULL << 30;
+
+        // Для рангов выше второго та же прикидка (по второму рангу она
+        // оценка снизу).
+        if (r > 2) {
+            const double work1 = Product::estimatedProfileWork(c1, r, limit1);
+            const double work2 = Product::estimatedProfileWork(c2, r, limit2);
+            if (work1 > double(kWorkLimit) || work2 > double(kWorkLimit)) {
+                notes << tr("ранг %1 и выше не считался: наборов слишком много (≈%2 проверок у компоненты %3, предел %4)")
+                             .arg(r).arg(QString::number(std::max(work1, work2), 'g', 2))
+                             .arg(work1 > work2 ? 1 : 2).arg(QString::number(double(kWorkLimit), 'g', 2));
+                break;
+            }
+        }
 
         const quint64 words1 = lightWords(c1, limit1);
         emit productPlan(tr("ранг %1: наборы компоненты 1 (%2 слов веса до %3)…")
