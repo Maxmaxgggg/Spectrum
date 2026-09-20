@@ -36,6 +36,7 @@ CreateMatrixDialog::CreateMatrixDialog(QWidget* parent)
 
     buildBchTab();
     buildHammingTab();
+    buildParityTab();
 
     auto* const buttons = new QDialogButtonBox(this);
     createButton = buttons->addButton(tr("Создать"), QDialogButtonBox::AcceptRole);
@@ -58,7 +59,36 @@ void CreateMatrixDialog::updateCreateButton()
         ok = selectedReps > 0 && current().n > 0;
     else if (tab == hammingTab)
         ok = Hamming::describe(hammingR->value(), hammingExtend->isChecked(), hammingShorten->value()).n > 0;
+    else if (tab == parityTab)
+        ok = true;
     createButton->setEnabled(ok);
+}
+
+void CreateMatrixDialog::buildParityTab()
+{
+    auto* const page   = new QWidget(this);
+    auto* const column = new QVBoxLayout(page);
+
+    auto* const row = new QHBoxLayout;
+    row->addWidget(new QLabel(tr("Информационных символов k:"), page));
+    parityK = new QSpinBox(page);
+    parityK->setRange(Parity::MIN_K, Parity::MAX_K);
+    parityK->setValue(7);
+    parityK->setToolTip(tr("Код [k + 1, k, 2]: единичная матрица и столбец единиц справа"));
+    row->addWidget(parityK);
+    row->addStretch(1);
+    column->addLayout(row);
+
+    parityLabel = new QLabel(page);
+    column->addWidget(parityLabel);
+    column->addStretch(1);
+
+    auto show = [this]() {
+        parityLabel->setText(tr("n = %1, k = %2, d = 2").arg(parityK->value() + 1).arg(parityK->value()));
+    };
+    connect(parityK, QOverload<int>::of(&QSpinBox::valueChanged), this, [show](int) { show(); });
+    parityTab = tabs->addTab(page, tr("Код чётности"));
+    show();
 }
 
 void CreateMatrixDialog::buildHammingTab()
@@ -245,6 +275,13 @@ Bch::Code CreateMatrixDialog::current() const
 void CreateMatrixDialog::accept()
 {
     const int tab = tabs->currentIndex();
+    if (tab == parityTab) {
+        result     = Parity::build(parityK->value()).join(QLatin1Char('
+'));
+        resultName = tr("Чётность (%1,%2)").arg(parityK->value() + 1).arg(parityK->value());
+        QDialog::accept();
+        return;
+    }
     if (tab == hammingTab) {
         const Hamming::Code code = Hamming::build(hammingR->value(), hammingExtend->isChecked(), hammingShorten->value());
         if (code.n == 0)

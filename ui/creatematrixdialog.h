@@ -2,6 +2,7 @@
 
 #include "bchcode.h"
 #include "hammingcode.h"
+#include "paritycode.h"
 
 #include <QDialog>
 #include <QVector>
@@ -13,7 +14,7 @@ class QSpinBox;
 class QTableWidget;
 class QTabWidget;
 
-// «Создать матрицу»: вкладки по семействам кодов — БЧХ и Хэмминг.
+// «Создать матрицу»: вкладки по семействам кодов — БЧХ, Хэмминг, чётность.
 //
 // Вкладка БЧХ — таблица минимальных многочленов (восьмеричных): столбцы —
 // m, строки — представители циклотомических классов, как в справочнике.
@@ -38,6 +39,7 @@ protected:
 private:
     void buildBchTab();
     void buildHammingTab();
+    void buildParityTab();
     // Доступность «Создать» по текущей вкладке.
     void updateCreateButton();
     // Подсветка столбца до строки включительно и показ размеров; row = -1 —
@@ -52,6 +54,7 @@ private:
     QPushButton*  createButton = nullptr;
     int           bchTab     = -1;
     int           hammingTab = -1;
+    int           parityTab  = -1;
 
     // Вкладка БЧХ.
     QTableWidget* table      = nullptr;
@@ -65,6 +68,10 @@ private:
     QCheckBox*    hammingExtend  = nullptr;
     QSpinBox*     hammingShorten = nullptr;
     void showHamming();
+
+    // Вкладка чётности.
+    QSpinBox*     parityK     = nullptr;
+    QLabel*       parityLabel = nullptr;
 
     // Строки таблицы — представители всех полей, объединённые; в ячейке
     // (строка, m) — сколько классов поля m взято до этой строки включительно,

@@ -39,6 +39,7 @@
 #include "productcode.h"
 #include "bchcode.h"
 #include "hammingcode.h"
+#include "paritycode.h"
 
 #ifdef Q_OS_WIN
     #define NOMINMAX
@@ -2932,6 +2933,11 @@ static void testHammingCode()
     expectLeon(QStringLiteral("[12,8] укороченный на 3: d = %1").arg(s12.isEmpty() ? 0 : s12.firstKey() == 0 ? (s12.size() > 1 ? (s12.constBegin() + 1).key() : 0) : s12.firstKey()),
                h12.n == 12 && h12.k == 8 && h12.rows.size() == 8 && h12.rows.first().length() == 12
                    && s12.value(1, 0) == 0 && s12.value(2, 0) == 0 && s12.value(3, 0) > 0);
+    const QStringList parity = Parity::build(4);
+    const Spectrum sp = Reference::bruteForce(parity);
+    expectLeon(QStringLiteral("чётность [5,4,2]: A_2 = %1, A_4 = %2").arg(sp.value(2)).arg(sp.value(4)),
+               parity.size() == 4 && parity.first() == QStringLiteral("10001") && parity.last() == QStringLiteral("00011")
+                   && sp.value(2) == 10 && sp.value(4) == 5 && sp.value(1, 0) == 0 && sp.value(3, 0) == 0);
     expectLeon(QStringLiteral("r = 11: [2047,2036], расширенный [2048,2036]"),
                Hamming::describe(11, false, 0).n == 2047 && Hamming::describe(11, true, 0).n == 2048
                    && Hamming::describe(11, false, 0).k == 2036);
