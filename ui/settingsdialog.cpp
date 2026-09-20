@@ -189,8 +189,10 @@ void SettingsDialog::updateComputationControls()
     const bool product = codeKindBGP->checkedId() == ProductCode;
 
     // Тип перебора. У произведения он всегда частичный — по рангам; у
-    // произвольного кода полный перебор возможен только до 63 строк.
-    const bool fullPossible = !product && codeLength == Length::Short;
+    // произвольного кода полный перебор возможен, пока хотя бы одна из
+    // матриц — порождающая или проверочная — не длиннее 63 строк: код Грея
+    // перебирает первую, дуальный расчёт — вторую.
+    const bool fullPossible = !product && (codeLength == Length::Short || dualCodeLength == Length::Short);
     ui->fullEnumRB->setEnabled(fullPossible);
     ui->enumTypeGBX->setEnabled(!product);
     EnumerationType shown = product ? EnumerationType::Partial : singleEnumType;
