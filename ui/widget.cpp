@@ -1,6 +1,7 @@
 #include "widget.h"
 #include "infosets.h"
 #include "filterplaintextedit.h"
+#include "spectrumtextedit.h"
 #include "tabswapbutton.h"
 
 #include <QStackedWidget>
@@ -239,17 +240,27 @@ void MainWindow::setSpectrumRows(const SpectrumText& lines)
     QScrollBar* const bar = ui->spectrumPTE->verticalScrollBar();
     const int scroll = bar->value();
 
-    SpectrumText shown = lines;
-    // Случайный поиск: у весов, где по словам, пойманным по одному разу,
-    // видно недобор, дописывается оценка — сколько ещё не найдено.
-    if (!unseenByWeight.isEmpty()) {
-        for (QString& line : shown) {
-            const int weight = line.section(QStringLiteral(" - "), 0, 0).toInt();
+    // Числа — с разбивкой по три цифры; копируются они без неё
+    // (SpectrumTextEdit), в lastSpectrum лежат сырые строки.
+    SpectrumText shown;
+    shown.reserve(lines.size());
+    for (const QString& raw : lines) {
+        const QString weightText = raw.section(QStringLiteral(" - "), 0, 0);
+        const QString countText  = raw.section(QStringLiteral(" - "), 1);
+        QString line = countText.isEmpty()
+            ? raw
+            : weightText + QStringLiteral(" - ") + SpectrumTextEdit::grouped(countText);
+        // Случайный поиск: у весов, где по словам, пойманным по одному разу,
+        // видно недобор, дописывается оценка — сколько ещё не найдено.
+        if (!unseenByWeight.isEmpty()) {
+            const int weight = weightText.toInt();
             if (weight >= 0 && weight < unseenByWeight.size()
                 && unseenByWeight.at(weight) >= 0.5f)
                 line += tr("   (осталось ≈%1)")
-                            .arg(qRound64(double(unseenByWeight.at(weight))));
+                            .arg(SpectrumTextEdit::grouped(
+                                QString::number(qRound64(double(unseenByWeight.at(weight))))));
         }
+        shown.append(line);
     }
 
     ui->spectrumPTE->setPlainText(shown.join(QLatin1Char('\n')));

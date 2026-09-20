@@ -21,6 +21,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="qcustomplot.cpp" />
     <ClCompile Include="ui\filterplaintextedit.cpp" />
+    <ClCompile Include="ui\spectrumtextedit.cpp" />
     <ClCompile Include="ui\settingsdialog.cpp" />
     <ClCompile Include="storage\autosavestore.cpp" />
     <ClCompile Include="ui\autosavedialog.cpp" />
@@ -65,6 +66,7 @@
     <QtMoc Include="compute\worker.h" />
     <ClInclude Include="helpers\workwithmatrix.h" />
     <QtMoc Include="ui\filterplaintextedit.h" />
+    <QtMoc Include="ui\spectrumtextedit.h" />
     <QtMoc Include="ui\settingsdialog.h" />
     <QtMoc Include="qcustomplot.h" />
     <QtMoc Include="ui\widget.h" />

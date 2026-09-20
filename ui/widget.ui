@@ -27,7 +27,7 @@
      </widget>
     </item>
     <item>
-     <widget class="QPlainTextEdit" name="spectrumPTE">
+     <widget class="SpectrumTextEdit" name="spectrumPTE">
       <property name="lineWrapMode">
        <enum>QPlainTextEdit::NoWrap</enum>
       </property>
@@ -163,6 +163,11 @@
    <class>FilterPlainTextEdit</class>
    <extends>QPlainTextEdit</extends>
    <header>filterplaintextedit.h</header>
+  </customwidget>
+  <customwidget>
+   <class>SpectrumTextEdit</class>
+   <extends>QPlainTextEdit</extends>
+   <header>spectrumtextedit.h</header>
   </customwidget>
  </customwidgets>
  <resources>
