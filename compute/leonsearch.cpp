@@ -191,7 +191,7 @@ bool WordTable::contains(const quint64* word) const
     }
 }
 
-bool WordTable::add(const quint64* word, int weight)
+bool WordTable::add(const quint64* word, int weight, bool countHit)
 {
     const quint64 mask = m_table.size() - 1;
     quint64 pos = hashWord(word, m_words) & mask;
@@ -200,7 +200,8 @@ bool WordTable::add(const quint64* word, int weight)
         if (slot == 0)
             break;
         if (equalAt(slot - 1, word)) {
-            ++m_hits[size_t(slot - 1)];
+            if (countHit)
+                ++m_hits[size_t(slot - 1)];
             return false;
         }
         pos = (pos + 1) & mask;
@@ -210,11 +211,11 @@ bool WordTable::add(const quint64* word, int weight)
     // пробирование при большем начинает ходить кругами.
     if ((m_count + 1) * 2 > m_table.size()) {
         grow();
-        return add(word, weight);
+        return add(word, weight, countHit);
     }
 
     m_store.insert(m_store.end(), word, word + m_words);
-    m_hits.push_back(1u);
+    m_hits.push_back(countHit ? 1u : 0u);
     m_weight.push_back(uint16_t(weight));
     m_table[size_t(pos)] = uint32_t(m_count + 1);
     ++m_count;
@@ -313,7 +314,7 @@ void ShardedWordTable::add(const quint64* word, int weight)
     omp_unset_lock(lock);
 }
 
-void ShardedWordTable::addBatch(const quint64* words, size_t count)
+void ShardedWordTable::addBatch(const quint64* words, size_t count, bool countHits)
 {
     if (count == 0)
         return;
@@ -343,8 +344,22 @@ void ShardedWordTable::addBatch(const quint64* words, size_t count)
                     weight += __builtin_popcountll(word[w]);
 #endif
                 }
-                table.add(word, weight);
+                table.add(word, weight, countHits);
             }
+        }
+    }
+}
+
+void ShardedWordTable::hitCounts(std::vector<quint64>& f1, std::vector<quint64>& f2) const
+{
+    f1.assign(size_t(m_maxWeight) + 1, 0ULL);
+    f2.assign(size_t(m_maxWeight) + 1, 0ULL);
+    std::vector<quint64> p1, p2;
+    for (const WordTable& t : m_shards) {
+        t.hitCounts(p1, p2);
+        for (size_t w = 0; w < f1.size() && w < p1.size(); ++w) {
+            f1[w] += p1[w];
+            f2[w] += p2[w];
         }
     }
 }

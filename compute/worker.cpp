@@ -12,6 +12,8 @@
 #include "leonkernel.cuh"
 
 #include <algorithm>
+#include <chrono>
+#include <functional>
 #include <cmath>
 #include <limits>
 
@@ -1312,6 +1314,23 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         }
     };
 
+    // Оценка Чао: поимки слов считаются либо на хосте (CPU-путь и слова, не
+    // попавшие в таблицу видеокарты), либо на видеокарте; f1/f2 складываются.
+    std::function<void(std::vector<quint64>&, std::vector<quint64>&)> deviceHitCounts;
+    auto chaoUnseen = [&]() {
+        std::vector<quint64> f1, f2;
+        table.hitCounts(f1, f2);
+        if (deviceHitCounts) {
+            std::vector<quint64> d1, d2;
+            deviceHitCounts(d1, d2);
+            for (size_t w = 0; w < f1.size() && w < d1.size(); ++w) {
+                f1[w] += d1[w];
+                f2[w] += d2[w];
+            }
+        }
+        return Leon::chaoUnseen(f1, f2);
+    };
+
     auto publish = [&](bool force) {
         const std::vector<quint64> found = table.countByWeight();
         h_spectrum.fillZero();
@@ -1333,7 +1352,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
             // одного слова, поделённый на шанс поимки. Сумма по весам.
             double missTotal = 0.0;
             SpectrumFloat unseen(cols + 1, 0.0f);
-            const std::vector<double> chao = table.unseenByWeight();
+            const std::vector<double> chao = chaoUnseen();
             for (int w = 1; w <= maxWeight && w <= cols; ++w) {
                 const double p = Leon::catchProbability(cols, rows, w, depth);
                 const double q = std::exp(double(collected) * std::log1p(-p));   // (1-p)^collected
@@ -1445,6 +1464,96 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         s.stream.create();
     }
 
+    // Таблица виденных слов на видеокарте. Ячейка — отпечаток (8 байт),
+    // поимки (4) и вес (2). Начинается с миллиона ячеек, при заполнении 0,6
+    // удваивается; не хватило памяти — остаётся как есть, а слова без ячейки
+    // выкладываются при каждой поимке (см. leonkernel.cuh).
+    struct Seen
+    {
+        DeviceBuffer<uint64_t> fp;
+        DeviceBuffer<unsigned> hits;
+        DeviceBuffer<uint16_t> weight;
+        DeviceBuffer<unsigned> count;
+        HostBuffer<unsigned>   h_count;
+        quint64                capacity = 0;
+        bool                   canGrow  = true;
+        quint64                inserted = 0;
+
+        bool allocate(quint64 cells)
+        {
+            try {
+                DeviceBuffer<uint64_t> f; f.allocate(size_t(cells));
+                DeviceBuffer<unsigned> h; h.allocate(size_t(cells));
+                DeviceBuffer<uint16_t> w; w.allocate(size_t(cells));
+                f.fillZero(); h.fillZero(); w.fillZero();
+                fp = std::move(f); hits = std::move(h); weight = std::move(w);
+            } catch (const std::exception&) {
+                cudaGetLastError();   // снять cudaErrorMemoryAllocation
+                return false;
+            }
+            capacity = cells;
+            return true;
+        }
+    } seen;
+    if (seen.allocate(1ULL << 20)) {
+        seen.count.allocate(1);
+        seen.count.fillZero();
+        seen.h_count.allocate(1, HostBuffer<unsigned>::Kind::Pinned);
+    }
+
+    // Удвоение таблицы, когда занято больше 0,6. Ядра обеих пачек на время
+    // перекладки должны стоять — оба потока дожидаются; удвоений за прогон
+    // не больше десятка, простой не в счёт.
+    auto growSeen = [&]() {
+        if (!seen.canGrow || seen.capacity == 0)
+            return;
+        if (seen.inserted * 10 <= seen.capacity * 6)
+            return;
+        for (Slot& s : slot)
+            CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
+        Seen bigger;
+        if (!bigger.allocate(seen.capacity * 2)) {
+            seen.canGrow = false;
+            return;
+        }
+        launchSeenRehash(seen.fp.get(), seen.hits.get(), seen.weight.get(), seen.capacity,
+                         bigger.fp.get(), bigger.hits.get(), bigger.weight.get(), bigger.capacity - 1,
+                         slot[0].stream.get());
+        CUDA_CALL(cudaStreamSynchronize(slot[0].stream.get()));
+        seen.fp = std::move(bigger.fp);
+        seen.hits = std::move(bigger.hits);
+        seen.weight = std::move(bigger.weight);
+        seen.capacity = bigger.capacity;
+    };
+
+    // f1/f2 по весам из таблицы видеокарты: счётчики и веса скачиваются
+    // целиком (6 байт на ячейку), поэтому не чаще раза в две секунды —
+    // между скачиваниями отдаётся прошлый ответ.
+    std::vector<quint64> seenF1, seenF2;
+    auto seenStamp = std::chrono::steady_clock::now() - std::chrono::hours(1);
+    if (seen.capacity > 0) {
+        deviceHitCounts = [&](std::vector<quint64>& f1, std::vector<quint64>& f2) {
+            const auto now = std::chrono::steady_clock::now();
+            if (!seenF1.empty() && now - seenStamp < std::chrono::seconds(2)) {
+                f1 = seenF1; f2 = seenF2;
+                return;
+            }
+            f1.assign(size_t(maxWeight) + 1, 0ULL);
+            f2.assign(size_t(maxWeight) + 1, 0ULL);
+            for (Slot& s : slot)
+                CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
+            std::vector<unsigned> hits(size_t(seen.capacity));
+            std::vector<uint16_t> weight(size_t(seen.capacity));
+            CUDA_CALL(cudaMemcpy(hits.data(), seen.hits.get(), hits.size() * sizeof(unsigned), cudaMemcpyDeviceToHost));
+            CUDA_CALL(cudaMemcpy(weight.data(), seen.weight.get(), weight.size() * sizeof(uint16_t), cudaMemcpyDeviceToHost));
+            for (size_t i = 0; i < hits.size(); ++i) {
+                if (hits[i] == 1u && weight[i] <= maxWeight) ++f1[weight[i]];
+                else if (hits[i] == 2u && weight[i] <= maxWeight) ++f2[weight[i]];
+            }
+            seenF1 = f1; seenF2 = f2; seenStamp = now;
+        };
+    }
+
     // Размер пачки подстраивается под плотность находок: у плотного кода
     // слов нужного веса тысячи на попытку, у редкого — доли. Первая пачка
     // маленькая — по ней и меряется.
@@ -1477,6 +1586,13 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         L.outCount     = s.d_count.get();
         L.capacity     = unsigned(capacity);
         L.scratch      = s.d_scratch.get();
+        if (seen.capacity > 0) {
+            L.seenFp     = seen.fp.get();
+            L.seenHits   = seen.hits.get();
+            L.seenWeight = seen.weight.get();
+            L.seenCount  = seen.count.get();
+            L.seenMask   = seen.capacity - 1;
+        }
         launchLeonTrials(L, kThreads, s.stream.get());
         // Счётчик здесь не копируется. Копии всех потоков стоят в одной
         // очереди движка копирования, и четыре байта, поставленные за ядром
@@ -1492,10 +1608,15 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
         CUDA_CALL(cudaMemcpyAsync(s.h_count.get(), s.d_count.get(), sizeof(unsigned),
                                   cudaMemcpyDeviceToHost, s.stream.get()));
+        if (seen.capacity > 0)
+            CUDA_CALL(cudaMemcpyAsync(seen.h_count.get(), seen.count.get(), sizeof(unsigned),
+                                      cudaMemcpyDeviceToHost, s.stream.get()));
         CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
         const unsigned found = s.h_count[0];
         if (quint64(found) > capacity)
             return false;
+        if (seen.capacity > 0)
+            seen.inserted = seen.h_count[0];
         if (found > 0) {
             // В потоке пачки, не в нулевом: синхронный cudaMemcpy ждал бы
             // и ядро соседней пачки.
@@ -1503,7 +1624,9 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
                                       size_t(found) * words * sizeof(quint64),
                                       cudaMemcpyDeviceToHost, s.stream.get()));
             CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
-            table.addBatch(s.h_out.get(), found);
+            // С таблицей на видеокарте поимки посчитаны там; здесь слово
+            // только хранится.
+            table.addBatch(s.h_out.get(), found, seen.capacity == 0);
         }
         adaptBatch(found, s.count);
         s.pending  = false;
@@ -1593,6 +1716,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         Slot& s = slot[cur];
         if (s.pending)
             collectOrRetry(s);
+        growSeen();
         launchBatch(s, first, count);
         activeTrials = collected;
 

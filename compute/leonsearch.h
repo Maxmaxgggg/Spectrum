@@ -74,8 +74,10 @@ class WordTable
 public:
     WordTable(int wordsPerRow, int maxWeight);
 
-    // true — слово новое.
-    bool add(const quint64* word, int weight);
+    // true — слово новое. countHit = false — поимка не засчитывается: её
+    // считает таблица на видеокарте, а здесь слово только хранится (поимок
+    // у него 0, и в оценку Чао оно отсюда не попадает).
+    bool add(const quint64* word, int weight, bool countHit = true);
     // Есть ли слово в таблице; поимки не считает.
     bool contains(const quint64* word) const;
 
@@ -132,13 +134,16 @@ public:
     // Одно слово, под замком своей части. Можно звать из разных потоков.
     void add(const quint64* word, int weight);
     // Пачка слов подряд, по wordsPerRow каждое: разбирается всеми потоками
-    // OpenMP сразу, вес считается здесь.
-    void addBatch(const quint64* words, size_t count);
+    // OpenMP сразу, вес считается здесь. countHits — см. WordTable::add.
+    void addBatch(const quint64* words, size_t count, bool countHits = true);
 
     quint64 size()  const;
     quint64 bytes() const;
     std::vector<quint64> countByWeight()  const;
     std::vector<double>  unseenByWeight() const;
+    // f1 и f2 по весам суммарно по частям — для оценки Чао, когда часть
+    // поимок посчитана в другом месте.
+    void hitCounts(std::vector<quint64>& f1, std::vector<quint64>& f2) const;
     // Все найденные слова и их веса — для тех, кому нужны сами слова, а не
     // только счёт: код произведения строит из них наборы.
     void exportWords(std::vector<quint64>& words, std::vector<int>& weights) const;

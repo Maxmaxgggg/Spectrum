@@ -39,15 +39,72 @@ __device__ __forceinline__ bool bitAt(const uint64_t* row, int c)
 // Выкладывает слово a ^ b (b может быть nullptr) в буфер. Зовётся редко —
 // только для слов нужного веса, — поэтому собирать слово заново дешевле, чем
 // держать его в регистрах на каждом уровне перебора.
-template <int WORDS>
-__device__ __forceinline__ void emitWord(const LeonLaunch& P, const uint64_t* a, const uint64_t* b)
+// Тот же хеш, что Leon::hashWord на хосте — по wordsPerRow словам.
+__device__ __forceinline__ uint64_t fingerprint(const LeonLaunch& P, const uint64_t* a, const uint64_t* b)
 {
-    const unsigned slot = atomicAdd(P.outCount, 1u);
-    if (slot >= P.capacity)
-        return;   // переполнение хост увидит по счётчику и повторит пачку
+    uint64_t h = 0x9E3779B97F4A7C15ULL;
+    for (int w = 0; w < P.wordsPerRow; ++w) {
+        h ^= a[w] ^ (b ? b[w] : 0ULL);
+        h *= 0xFF51AFD7ED558CCDULL;
+        h ^= h >> 33;
+    }
+    return h == 0ULL ? 1ULL : h;   // ноль значит «пусто»
+}
+
+__device__ __forceinline__ void storeWord(const LeonLaunch& P, unsigned slot, const uint64_t* a, const uint64_t* b)
+{
     uint64_t* dst = P.outWords + size_t(slot) * P.wordsPerRow;
     for (int w = 0; w < P.wordsPerRow; ++w)
         dst[w] = a[w] ^ (b ? b[w] : 0ULL);
+}
+
+// Слово найдено. Без таблицы — в буфер. С таблицей — сначала поиск без
+// записи: повтор считается на месте. Новому слову сперва занимается место
+// в буфере (нет места — слово не трогает таблицу и найдётся при повторе
+// пачки), потом ячейка: проиграли гонку тому же слову — поимка засчитана
+// ему, а слово всё равно выкладывается (хост повторы отбросит); ячейки не
+// нашлось — выкладывается без счёта.
+template <int WORDS>
+__device__ __forceinline__ void emitWord(const LeonLaunch& P, const uint64_t* a, const uint64_t* b, int weight)
+{
+    if (P.seenFp != nullptr) {
+        const uint64_t fp = fingerprint(P, a, b);
+        uint64_t pos   = fp & P.seenMask;
+        int      probe = 0;
+        for (; probe < SEEN_PROBES; ++probe, pos = (pos + 1) & P.seenMask) {
+            const uint64_t cur = P.seenFp[pos];
+            if (cur == fp) {
+                atomicAdd(P.seenHits + pos, 1u);
+                return;
+            }
+            if (cur == 0ULL)
+                break;
+        }
+        const unsigned slot = atomicAdd(P.outCount, 1u);
+        if (slot >= P.capacity)
+            return;
+        for (; probe < SEEN_PROBES; ++probe, pos = (pos + 1) & P.seenMask) {
+            const uint64_t old = atomicCAS(reinterpret_cast<unsigned long long*>(P.seenFp + pos),
+                                           0ULL, static_cast<unsigned long long>(fp));
+            if (old == 0ULL) {
+                // Новое: вес пишет только победитель CAS, счётчик — все.
+                P.seenWeight[pos] = uint16_t(weight);
+                atomicAdd(P.seenHits + pos, 1u);
+                atomicAdd(P.seenCount, 1u);
+                break;
+            }
+            if (old == fp) {
+                atomicAdd(P.seenHits + pos, 1u);
+                break;
+            }
+        }
+        storeWord(P, slot, a, b);
+        return;
+    }
+    const unsigned slot = atomicAdd(P.outCount, 1u);
+    if (slot >= P.capacity)
+        return;   // переполнение хост увидит по счётчику и повторит пачку
+    storeWord(P, slot, a, b);
 }
 
 __device__ __forceinline__ bool light(int weight, const LeonLaunch& P)
@@ -155,7 +212,7 @@ __global__ void leonTrialsKernel(LeonLaunch P)
         #pragma unroll
         for (int w = 0; w < WORDS; ++w) weight += __popcll(row[w]);
         if (light(weight, P))
-            emitWord<WORDS>(P, row, nullptr);
+            emitWord<WORDS>(P, row, nullptr, weight);
     }
     if (p == 2) {
         // Пар мало, перекос между нитями роли не играет — Гаусс дороже.
@@ -168,7 +225,7 @@ __global__ void leonTrialsKernel(LeonLaunch P)
                 #pragma unroll
                 for (int w = 0; w < WORDS; ++w) weight += __popcll(acc[w] ^ row[w]);
                 if (light(weight, P))
-                    emitWord<WORDS>(P, acc, row);
+                    emitWord<WORDS>(P, acc, row, weight);
             }
         }
     }
@@ -188,7 +245,7 @@ __global__ void leonTrialsKernel(LeonLaunch P)
                 weight += __popcll(acc[w]);
             }
             if (light(weight, P))
-                emitWord<WORDS>(P, acc, nullptr);
+                emitWord<WORDS>(P, acc, nullptr, weight);
             for (int l = j + 1; l < k; ++l) {
                 const uint64_t* rowL = m + size_t(l) * WORDS;
                 if (p == 3) {
@@ -196,7 +253,7 @@ __global__ void leonTrialsKernel(LeonLaunch P)
                     #pragma unroll
                     for (int w = 0; w < WORDS; ++w) wt += __popcll(acc[w] ^ rowL[w]);
                     if (light(wt, P))
-                        emitWord<WORDS>(P, acc, rowL);
+                        emitWord<WORDS>(P, acc, rowL, wt);
                     continue;
                 }
                 int wt = 0;
@@ -206,17 +263,41 @@ __global__ void leonTrialsKernel(LeonLaunch P)
                     wt += __popcll(acc2[w]);
                 }
                 if (light(wt, P))
-                    emitWord<WORDS>(P, acc2, nullptr);
+                    emitWord<WORDS>(P, acc2, nullptr, wt);
                 for (int q = l + 1; q < k; ++q) {
                     const uint64_t* rowQ = m + size_t(q) * WORDS;
                     int wq = 0;
                     #pragma unroll
                     for (int w = 0; w < WORDS; ++w) wq += __popcll(acc2[w] ^ rowQ[w]);
                     if (light(wq, P))
-                        emitWord<WORDS>(P, acc2, rowQ);
+                        emitWord<WORDS>(P, acc2, rowQ, wq);
                 }
             }
         }
+    }
+}
+
+__global__ void seenRehashKernel(const uint64_t* oldFp, const unsigned* oldHits, const uint16_t* oldWeight,
+                                 uint64_t oldCapacity,
+                                 uint64_t* newFp, unsigned* newHits, uint16_t* newWeight, uint64_t newMask)
+{
+    const uint64_t i = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i >= oldCapacity)
+        return;
+    const uint64_t fp = oldFp[i];
+    if (fp == 0ULL)
+        return;
+    // Новая таблица вдвое больше и не переполнена — ячейка найдётся.
+    uint64_t pos = fp & newMask;
+    for (;;) {
+        const uint64_t old = atomicCAS(reinterpret_cast<unsigned long long*>(newFp + pos),
+                                       0ULL, static_cast<unsigned long long>(fp));
+        if (old == 0ULL) {
+            newHits[pos]   = oldHits[i];
+            newWeight[pos] = oldWeight[i];
+            return;
+        }
+        pos = (pos + 1) & newMask;
     }
 }
 
@@ -251,6 +332,21 @@ size_t leonSharedBytes(int rows, int cols, int wordsPerRow)
         return 0;
     return sharedBytesFor(rows, cols, leonPaddedWords(wordsPerRow),
                           !leonFitsShared(rows, cols, wordsPerRow));
+}
+
+void launchSeenRehash(const uint64_t* oldFp, const unsigned* oldHits, const uint16_t* oldWeight,
+                      uint64_t oldCapacity,
+                      uint64_t* newFp, unsigned* newHits, uint16_t* newWeight, uint64_t newMask,
+                      cudaStream_t stream)
+{
+    const unsigned threads = 256;
+    const unsigned blocks  = unsigned((oldCapacity + threads - 1) / threads);
+    seenRehashKernel<<<blocks, threads, 0, stream>>>(oldFp, oldHits, oldWeight, oldCapacity,
+                                                     newFp, newHits, newWeight, newMask);
+    const cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        throw std::invalid_argument(
+            std::string("не удалось запустить перекладку таблицы виденных слов: ") + cudaGetErrorString(err));
 }
 
 void launchLeonTrials(const LeonLaunch& launch, int threadsPerBlock, cudaStream_t stream)
