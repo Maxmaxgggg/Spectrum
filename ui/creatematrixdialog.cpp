@@ -35,15 +35,7 @@ CreateMatrixDialog::CreateMatrixDialog(QWidget* parent)
     layout->addWidget(tabs, 1);
 
     buildBchTab();
-    {
-        auto* const page = new QWidget(this);
-        tabs->setTabEnabled(tabs->addTab(page, tr("РС-код")), false);
-    }
     buildHammingTab();
-    {
-        auto* const page = new QWidget(this);
-        tabs->setTabEnabled(tabs->addTab(page, tr("Код Рида–Маллера")), false);
-    }
 
     auto* const buttons = new QDialogButtonBox(this);
     createButton = buttons->addButton(tr("Создать"), QDialogButtonBox::AcceptRole);
