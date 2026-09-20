@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cmath>
 #include <numeric>
+#include <random>
 #include <thread>
 
 // worker.h тянет gmpxx.h, где есть std::numeric_limits<...>::min(). Его нужно
@@ -34,6 +35,7 @@
 #include "bz.h"
 #include "isd.h"
 #include "leonkernel.cuh"
+#include "leonsearch.h"
 #include "productcode.h"
 
 #ifdef Q_OS_WIN
@@ -3063,6 +3065,36 @@ int main(int argc, char* argv[])
         const int rc = productRun(args.at(productAt + 1), args.at(productAt + 2), weight, rank > 0 ? rank : 2, device);
         out.flush();
         return rc;
+    }
+
+    // --table-bench [слов в пачке] [различных] — скорость ShardedWordTable::addBatch
+    if (args.contains(QStringLiteral("--table-bench"))) {
+        const int at = args.indexOf(QStringLiteral("--table-bench"));
+        const size_t perBatch = at + 1 < args.size() ? size_t(args.at(at + 1).toULongLong()) : 250000;
+        const size_t distinct = at + 2 < args.size() ? size_t(args.at(at + 2).toULongLong()) : 1800000;
+        const int words = 6;
+        std::mt19937_64 rng(7);
+        std::vector<quint64> pool(distinct * words);
+        for (quint64& w : pool) w = rng() & rng() & rng();   // ~1/8 единиц, вес ~40
+        std::vector<quint64> batch(perBatch * words);
+        Leon::ShardedWordTable table(words, 336, std::max(1, omp_get_max_threads()));
+        double total = 0.0;
+        const int batches = 100;
+        for (int b = 0; b < batches; ++b) {
+            for (size_t i = 0; i < perBatch; ++i) {
+                const size_t src = size_t(rng() % distinct);
+                std::copy(pool.begin() + long(src * words), pool.begin() + long((src + 1) * words),
+                          batch.begin() + long(i * words));
+            }
+            const auto t = std::chrono::steady_clock::now();
+            table.addBatch(batch.data(), perBatch);
+            total += std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
+        }
+        out << QStringLiteral("потоков %1, пачка %2 слов: %3 мс на пачку, %4 млн слов/с, в таблице %5")
+                   .arg(omp_get_max_threads()).arg(perBatch).arg(total / batches * 1e3, 0, 'f', 2)
+                   .arg(perBatch * batches / total / 1e6, 0, 'f', 1).arg(table.size()) << Qt::endl;
+        out.flush();
+        return 0;
     }
 
     // --isd <файл|random:n,k[,seed]> <вес> [степень пропуска] [прогонов] [p Штерна] [l Штерна]

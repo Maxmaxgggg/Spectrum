@@ -1478,21 +1478,31 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         L.capacity     = unsigned(capacity);
         L.scratch      = s.d_scratch.get();
         launchLeonTrials(L, kThreads, s.stream.get());
-        CUDA_CALL(cudaMemcpyAsync(s.h_count.get(), s.d_count.get(), sizeof(unsigned),
-                                  cudaMemcpyDeviceToHost, s.stream.get()));
+        // Счётчик здесь не копируется. Копии всех потоков стоят в одной
+        // очереди движка копирования, и четыре байта, поставленные за ядром
+        // этой пачки, задержали бы за собой мегабайты соседней: та ждала бы
+        // конца чужого ядра, а видеокарта — хоста (профиль: занята 37 %).
         s.first = first; s.count = count; s.pending = true;
     };
 
     // Забирает слова пачки в таблицу. false — буфер оказался мал: слова
     // сверх него потеряны, пачку надо повторить.
     auto collectBatch = [&](Slot& s) -> bool {
+        // Ядро пачки закончилось — только теперь копии, и они идут сразу.
+        CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
+        CUDA_CALL(cudaMemcpyAsync(s.h_count.get(), s.d_count.get(), sizeof(unsigned),
+                                  cudaMemcpyDeviceToHost, s.stream.get()));
         CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
         const unsigned found = s.h_count[0];
         if (quint64(found) > capacity)
             return false;
         if (found > 0) {
-            CUDA_CALL(cudaMemcpy(s.h_out.get(), s.d_out.get(),
-                                 size_t(found) * words * sizeof(quint64), cudaMemcpyDeviceToHost));
+            // В потоке пачки, не в нулевом: синхронный cudaMemcpy ждал бы
+            // и ядро соседней пачки.
+            CUDA_CALL(cudaMemcpyAsync(s.h_out.get(), s.d_out.get(),
+                                      size_t(found) * words * sizeof(quint64),
+                                      cudaMemcpyDeviceToHost, s.stream.get()));
+            CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
             table.addBatch(s.h_out.get(), found);
         }
         adaptBatch(found, s.count);
