@@ -19,6 +19,9 @@
 namespace {
 const QColor kHighlight(0x9f, 0xe1, 0xcb);   // подсветка столбца при наведении
 const QColor kSelected(0x5d, 0xca, 0xa5);    // закреплённый выбор
+// Столбцы таблицы БЧХ — как в справочнике, до m = 10; у m = 11 классов
+// вдвое больше, и таблица разрослась бы вдвое.
+constexpr int TABLE_MAX_M = 10;
 }
 
 CreateMatrixDialog::CreateMatrixDialog(QWidget* parent)
@@ -118,13 +121,13 @@ void CreateMatrixDialog::buildBchTab()
     // Строки — все представители всех полей, по возрастанию.
     std::set<int> exponents;
     QVector<std::vector<Bch::MinimalPolynomial>> fields;
-    for (int m = Bch::MIN_M; m <= Bch::MAX_M; ++m) {
+    for (int m = Bch::MIN_M; m <= TABLE_MAX_M; ++m) {
         fields.append(Bch::minimalPolynomials(m));
         for (const Bch::MinimalPolynomial& p : fields.last())
             exponents.insert(p.exponent);
     }
     rowExponents = QVector<int>(exponents.begin(), exponents.end());
-    const int columns = Bch::MAX_M - Bch::MIN_M + 1;
+    const int columns = TABLE_MAX_M - Bch::MIN_M + 1;
 
     table = new QTableWidget(rowExponents.size(), columns, page);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -134,7 +137,7 @@ void CreateMatrixDialog::buildBchTab()
     table->viewport()->setMouseTracking(true);
     table->viewport()->installEventFilter(this);
     QStringList headers;
-    for (int m = Bch::MIN_M; m <= Bch::MAX_M; ++m) headers << QString::number(m);
+    for (int m = Bch::MIN_M; m <= TABLE_MAX_M; ++m) headers << QString::number(m);
     table->setHorizontalHeaderLabels(headers);
     QStringList rowHeaders;
     for (int e : rowExponents) rowHeaders << QString::number(e);

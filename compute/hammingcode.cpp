@@ -1,5 +1,7 @@
 #include "hammingcode.h"
 
+#include "bchcode.h"
+
 namespace Hamming {
 
 namespace {
@@ -18,23 +20,8 @@ Code make(int r, bool extend, int shorten, bool withRows)
     code.d = extend ? 4 : 3;
     if (!withRows)
         return code;
-
-    // Строка i — единичный вектор и i-й по счёту r-разрядный вектор веса
-    // не меньше двух (в двоичном порядке): столбец проверочной матрицы.
-    int value = 0;
-    for (int i = 0; i < k; ++i) {
-        do { ++value; } while ((value & (value - 1)) == 0);   // пропуск степеней двойки
-        if (i < shorten)
-            continue;
-        QString row(code.n, QLatin1Char('0'));
-        row[i - shorten] = QLatin1Char('1');
-        int ones = 1;
-        for (int b = 0; b < r; ++b)
-            if (value >> b & 1) { row[code.k + b] = QLatin1Char('1'); ++ones; }
-        if (extend && (ones & 1))
-            row[code.n - 1] = QLatin1Char('1');
-        code.rows.append(row);
-    }
+    const Bch::Code cyclic = Bch::cyclic(r, Bch::reciprocal(Bch::primitivePolynomial(r)), extend, shorten);
+    code.rows = cyclic.rows;
     return code;
 }
 

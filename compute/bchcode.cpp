@@ -7,8 +7,8 @@ namespace Bch {
 
 namespace {
 
-// Восьмеричные примитивные многочлены из таблицы, m = 2..10.
-const uint32_t kPrimitive[MAX_M + 1] = { 0, 0, 07, 013, 023, 045, 0103, 0211, 0435, 01021, 02011 };
+// Восьмеричные примитивные многочлены из таблицы, m = 2..11.
+const uint32_t kPrimitive[MAX_M + 1] = { 0, 0, 07, 013, 023, 045, 0103, 0211, 0435, 01021, 02011, 04005 };
 
 struct Field
 {
@@ -128,6 +128,34 @@ int designedDistance(const std::vector<bool>& isRoot, int n)
     return L + 1;
 }
 
+// Строки систематической матрицы: проверочная часть строки i — x^{n−k+i}
+// mod g, младшая степень слева. Считается подряд: следующая — предыдущая,
+// умноженная на x и приведённая. code.n и code.k уже с учётом расширения
+// и укорочения.
+void fillRows(Code& code, const Poly& g, int n, int k, bool extend, int shorten)
+{
+    const int r = n - k;
+    Poly cur;
+    cur.set(r);
+    cur.reduce(g);
+    for (int i = 0; i < k; ++i) {
+        if (i >= shorten) {
+            QString row(code.n, QLatin1Char('0'));
+            row[i - shorten] = QLatin1Char('1');
+            int ones = 1;
+            for (int d = 0; d < r; ++d)
+                if (cur.bit(d)) { row[k - shorten + d] = QLatin1Char('1'); ++ones; }
+            if (extend && (ones & 1))
+                row[code.n - 1] = QLatin1Char('1');
+            code.rows.append(row);
+        }
+        Poly next;
+        next.xorShifted(cur, 1);
+        next.reduce(g);
+        cur = next;
+    }
+}
+
 Code make(int m, int reps, bool extend, int shorten, bool withRows)
 {
     Code code;
@@ -159,32 +187,8 @@ Code make(int m, int reps, bool extend, int shorten, bool withRows)
     code.corrects         = (code.designedDistance - 1) / 2;
     for (int d = degree; d >= 0; --d)
         code.generator += g.bit(d) ? QLatin1Char('1') : QLatin1Char('0');
-    if (!withRows)
-        return code;
-
-    // Проверочная часть строки i — x^{n−k+i} mod g, младшая степень слева.
-    // Считается подряд: следующая — предыдущая, умноженная на x и приведённая.
-    const int r = n - k;
-    Poly cur;
-    cur.set(r);
-    cur.reduce(g);
-    for (int i = 0; i < k; ++i) {
-        if (i >= shorten) {
-            QString row(code.n, QLatin1Char('0'));
-            row[i - shorten] = QLatin1Char('1');
-            int ones = 1;
-            for (int d = 0; d < r; ++d)
-                if (cur.bit(d)) { row[k - shorten + d] = QLatin1Char('1'); ++ones; }
-            if (extend && (ones & 1))
-                row[code.n - 1] = QLatin1Char('1');
-            code.rows.append(row);
-        }
-        // cur = cur · x mod g
-        Poly next;
-        next.xorShifted(cur, 1);
-        next.reduce(g);
-        cur = next;
-    }
+    if (withRows)
+        fillRows(code, g, n, k, extend, shorten);
     return code;
 }
 
@@ -225,6 +229,37 @@ Code build(int m, int reps, bool extend, int shorten)
 Code describe(int m, int reps, bool extend, int shorten)
 {
     return make(m, reps, extend, shorten, false);
+}
+
+Code cyclic(int m, uint32_t generator, bool extend, int shorten)
+{
+    Code code;
+    if (m < MIN_M || m > MAX_M || generator < 2)
+        return code;
+    const Poly g  = fromBits(generator);
+    const int  n  = (1 << m) - 1;
+    const int  dg = g.deg();
+    const int  k  = n - dg;
+    if (k <= 0 || shorten < 0 || shorten >= k)
+        return code;
+    code.n = n - shorten + (extend ? 1 : 0);
+    code.k = k - shorten;
+    for (int d = dg; d >= 0; --d)
+        code.generator += g.bit(d) ? QLatin1Char('1') : QLatin1Char('0');
+    fillRows(code, g, n, k, extend, shorten);
+    return code;
+}
+
+uint32_t reciprocal(uint32_t poly)
+{
+    if (poly == 0)
+        return 0;
+    int deg = 31;
+    while (!(poly >> deg & 1u)) --deg;
+    uint32_t out = 0;
+    for (int d = 0; d <= deg; ++d)
+        if (poly >> d & 1u) out |= 1u << (deg - d);
+    return out;
 }
 
 } // namespace Bch

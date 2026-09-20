@@ -31,7 +31,7 @@
 namespace Bch {
 
 constexpr int MIN_M = 2;
-constexpr int MAX_M = 10;
+constexpr int MAX_M = 11;   // n = 2047 — потолок ширины матрицы в программе
 
 // Примитивный многочлен поля GF(2^m), биты — коэффициенты.
 uint32_t primitivePolynomial(int m);
@@ -66,5 +66,13 @@ Code build(int m, int reps, bool extend, int shorten);
 
 // Только размеры, без матрицы — для показа n и k при наведении.
 Code describe(int m, int reps, bool extend, int shorten);
+
+// Циклический код длины 2^m − 1 по заданному порождающему многочлену
+// (биты, младшая степень — бит 0), в том же систематическом виде, что и
+// build(). Конструктивное расстояние не выводится — designedDistance = 0.
+Code cyclic(int m, uint32_t generator, bool extend, int shorten);
+
+// Обратный многочлен: x^deg · p(1/x). Тоже примитивный, если примитивен p.
+uint32_t reciprocal(uint32_t poly);
 
 } // namespace Bch

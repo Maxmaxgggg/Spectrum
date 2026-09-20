@@ -2923,7 +2923,8 @@ static void testHammingCode()
                    s15 = Reference::bruteForce(h15.rows), s12 = Reference::bruteForce(h12.rows);
     expectLeon(QStringLiteral("[7,4,3]: A_3 = %1, A_4 = %2, A_7 = %3").arg(s7.value(3)).arg(s7.value(4)).arg(s7.value(7)),
                h7.n == 7 && h7.k == 4 && s7.value(3) == 7 && s7.value(4) == 7 && s7.value(7) == 1
-                   && h7.rows.first() == QStringLiteral("1000110"));
+                   && h7.rows == QStringList{ QStringLiteral("1000101"), QStringLiteral("0100111"),
+                                              QStringLiteral("0010110"), QStringLiteral("0001011") });
     expectLeon(QStringLiteral("[8,4,4] расширенный: A_4 = %1, A_8 = %2").arg(s8.value(4)).arg(s8.value(8)),
                h8.n == 8 && h8.d == 4 && s8.value(3, 0) == 0 && s8.value(4) == 14 && s8.value(8) == 1);
     expectLeon(QStringLiteral("[15,11,3]: A_3 = %1, A_4 = %2").arg(s15.value(3)).arg(s15.value(4)),
