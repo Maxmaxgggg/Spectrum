@@ -54,6 +54,9 @@ CreateMatrixDialog::CreateMatrixDialog(QWidget* parent)
 
 void CreateMatrixDialog::updateCreateButton()
 {
+    // Вкладки строятся раньше кнопок; пока кнопки нет — нечего обновлять.
+    if (!createButton)
+        return;
     const int tab = tabs->currentIndex();
     bool ok = false;
     if (tab == bchTab)
