@@ -2668,6 +2668,10 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
     else
         updateSpectrum(int(g.numOfCols));
 
+    // Последняя оценка — по итогу, а не по последнему промежуточному
+    // замеру: иначе в панели остаётся «перебрано 47,6 из 48,0 млрд,
+    // осталось 1 мин» при состоянии «готово».
+    reportEstimate();
     emit updateInfoPBR(100);
     emit finished(int(duration_cast<seconds>(steady_clock::now() - startedAt).count()));
 
