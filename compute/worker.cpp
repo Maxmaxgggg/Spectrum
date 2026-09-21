@@ -1409,9 +1409,8 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     }
 
     // ------------------------------------------------------------- GPU
-    // Блок на попытку, 256 нитей: Гаусс идёт всем блоком по строкам, а
-    // перебор — по комбинациям; сетка из настроек тут ни при чём.
-    constexpr int     kThreads     = 256;
+    // Блок на попытку (LEON_THREADS нитей); сетка из настроек тут ни при чём.
+    constexpr int     kThreads     = LEON_THREADS;
     constexpr quint64 kBatchMax    = 8192;         // попыток на запуск, потолок
     constexpr quint64 kCapacityMax = 8ULL << 20;   // слов в буфере, потолок
     quint64           capacity     = 1ULL << 20;
