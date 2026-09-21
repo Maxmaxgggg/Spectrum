@@ -79,6 +79,7 @@ struct CodeGeometry
     // перебора в попытке лежит в maxRows.
     quint64               leonTrials        = 0;
     double                leonWordsPerTrial = 0.0;
+    int                   leonWindow        = 0;     // окно Штерна–Дюмера; 0 — без окна
 };
 
 Q_DECLARE_METATYPE(LoadMode)

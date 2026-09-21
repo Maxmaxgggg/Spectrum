@@ -1295,7 +1295,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     quint64 collected = 0;   // попыток, чьи слова уже в таблице
 
     auto retarget = [&]() {
-        const quint64 needed = Leon::trialsForAll(cols, rows, maxWeight, depth,
+        const quint64 needed = Leon::trialsForAll(cols, rows, maxWeight, depth, g.leonWindow,
                                                   settings.leonMissProbability(),
                                                   table.countByWeight());
         if (needed > target) {
@@ -1344,7 +1344,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
             SpectrumFloat unseen(cols + 1, 0.0f);
             const std::vector<double> chao = chaoUnseen();
             for (int w = 1; w <= maxWeight && w <= cols; ++w) {
-                const double p = Leon::catchProbability(cols, rows, w, depth);
+                const double p = Leon::catchProbabilityFor(cols, rows, w, depth, g.leonWindow);
                 const double q = std::exp(double(collected) * std::log1p(-p));   // (1-p)^collected
                 if (found[size_t(w)] > 0)
                     missTotal += double(found[size_t(w)]) * q / std::max(1.0 - q, 1e-300);
@@ -1379,11 +1379,13 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
 
             #pragma omp parallel for schedule(dynamic)
             for (long long t = 0; t < (long long)count; ++t) {
-                Leon::trial(h_matrix.get(), rows, cols, words, depth, maxWeight,
-                            launched + quint64(t),
-                            [&](const quint64* word, int weight) {
-                                table.add(word, weight);
-                            });
+                auto visit = [&](const quint64* word, int weight) { table.add(word, weight); };
+                if (g.leonWindow > 0)
+                    Leon::trialStern(h_matrix.get(), rows, cols, words, depth, g.leonWindow, maxWeight,
+                                     launched + quint64(t), visit);
+                else
+                    Leon::trial(h_matrix.get(), rows, cols, words, depth, maxWeight,
+                                launched + quint64(t), visit);
             }
 
             launched  += count;
@@ -2311,10 +2313,14 @@ CodeGeometry Worker::describeTask() const
         if (g.useGpu && leonSharedBytes(int(g.numOfRows), int(g.numOfCols), int(g.wordsPerRow)) == 0)
             throw std::invalid_argument(
                 "стохастический поиск на видеокарте: строка длиннее, чем умеет ядро — выберите CPU");
+        // Профиль ключей окна — по самой матрице, на видеокарте окна нет.
+        const Leon::SternProfile profile = g.useGpu ? Leon::SternProfile()
+                                                    : Leon::sternProfile(g.matrix);
         const Leon::Plan plan = Leon::plan(int(g.numOfCols), int(g.numOfRows),
                                            settings.leonWeight, settings.leonMissProbability(),
-                                           g.useGpu);
+                                           g.useGpu, &profile);
         g.maxRows           = quint64(plan.rows);
+        g.leonWindow        = plan.window;
         g.leonTrials        = plan.trials;
         g.leonWordsPerTrial = plan.costPerTrial;
     }

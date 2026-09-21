@@ -75,6 +75,39 @@ double catchProbability(int n, int k, int weight, int rows)
     return std::min(1.0, p);
 }
 
+double catchProbabilityStern(int n, int k, int weight, int rows, int window)
+{
+    if (window <= 0)
+        return catchProbability(n, k, weight, rows);
+    if (n <= 0 || k <= 0 || weight <= 0 || rows <= 0 || weight > n || window > n - k)
+        return 0.0;
+    // Носитель веса w раскладывается по половинам (h1, h2), окну (l) и остатку
+    // (n − k − l): ловится, если на половинах не больше rows и на окне ноль.
+    const int h1 = k / 2, h2 = k - h1, rest = n - k - window;
+    const double logTotal = logBinom(n, weight);
+    double p = 0.0;
+    for (int a = 0; a <= rows && a <= h1; ++a)
+        for (int b = 0; b <= rows && b <= h2; ++b) {
+            if (a + b == 0) continue;   // нулевое на множестве — нулевое слово
+            const int r = weight - a - b;
+            if (r < 0 || r > rest) continue;
+            const double term = logBinom(h1, a) + logBinom(h2, b) + logBinom(rest, r) - logTotal;
+            if (std::isfinite(term))
+                p += std::exp(term);
+        }
+    return std::min(1.0, p);
+}
+
+double sternListSize(int half, int rows)
+{
+    double total = 1.0, term = 1.0;
+    for (int i = 1; i <= rows && i <= half; ++i) {
+        term = term * double(half - i + 1) / double(i);
+        total += term;
+    }
+    return total;
+}
+
 double wordsPerTrial(int k, int rows)
 {
     double total = 0.0;
@@ -159,19 +192,83 @@ double gaussCostInWords(int k, int wordsPerRow, bool gpu)
     return gpu ? cpu * 5.5 : cpu;
 }
 
-quint64 trialsForAll(int n, int k, int weight, int rows, double miss,
+quint64 trialsForAll(int n, int k, int weight, int rows, int window, double miss,
                      const std::vector<quint64>& foundByWeight)
 {
     quint64 needed = 1;
     for (int w = 1; w <= weight && w <= n; ++w) {
         const quint64 found = size_t(w) < foundByWeight.size() ? foundByWeight[size_t(w)] : 0;
         const double  each  = miss / double(std::max<quint64>(1, found));
-        needed = std::max(needed, trialsFor(catchProbability(n, k, w, rows), each));
+        needed = std::max(needed, trialsFor(catchProbabilityFor(n, k, w, rows, window), each));
     }
     return needed;
 }
 
-Plan plan(int n, int k, int weight, double miss, bool gpu)
+quint64 trialsForAll(int n, int k, int weight, int rows, double miss,
+                     const std::vector<quint64>& foundByWeight)
+{
+    return trialsForAll(n, k, weight, rows, 0, miss, foundByWeight);
+}
+
+bool windowEnabled = true;
+
+SternProfile sternProfile(const QStringList& matrix)
+{
+    SternProfile profile;
+    const int k = matrix.size();
+    // Строки в записи списка — по 16 бит (см. trialStern).
+    if (k == 0 || k > 0xFFFF)
+        return profile;
+    const int n = matrix.first().length();
+    int words = 0;
+    const std::vector<quint64> packed = InfoSets::packRows(matrix, words);
+    std::vector<int> order;
+    shuffledColumns(n, 0, order);
+    InfoSets::InfoSet set;
+    if (!InfoSets::systematize(packed.data(), k, n, words, order, nullptr, set))
+        return profile;
+    std::vector<char> pivot;
+    std::vector<int>  win;
+    sternWindow(order, set, n, MAX_STERN_WINDOW, pivot, win);
+    const int lw = int(win.size());
+    if (lw == 0)
+        return profile;
+    profile.window = lw;
+
+    // Ключи комбинаций каждой половины на самом широком окне; окно уже —
+    // те же ключи без старших битов. Как в trialStern: пустая комбинация в
+    // списке есть, и пара «пусто, пусто» из счёта вычитается.
+    std::vector<uint32_t> key(static_cast<size_t>(k), 0u);
+    for (int i = 0; i < k; ++i)
+        key[size_t(i)] = sternKey(set.rows.data() + size_t(i) * words, win);
+    const int h1 = k / 2;
+    auto list = [&](int from, int to, int rows) {
+        std::vector<uint32_t> keys;
+        keys.push_back(0u);
+        for (int a = from; a < to; ++a) {
+            keys.push_back(key[size_t(a)]);
+            if (rows < 2) continue;
+            for (int b = a + 1; b < to; ++b)
+                keys.push_back(key[size_t(a)] ^ key[size_t(b)]);
+        }
+        return keys;
+    };
+    std::vector<uint32_t> hist;
+    for (int rows = 1; rows <= 2; ++rows) {
+        const std::vector<uint32_t> a = list(0, h1, rows), b = list(h1, k, rows);
+        for (int l = 1; l <= lw; ++l) {
+            const uint32_t mask = (1u << l) - 1u;
+            hist.assign(size_t(1) << l, 0u);
+            for (uint32_t x : a) ++hist[x & mask];
+            double pairs = -1.0;
+            for (uint32_t x : b) pairs += double(hist[x & mask]);
+            profile.pairs[rows][l] = std::max(0.0, pairs);
+        }
+    }
+    return profile;
+}
+
+Plan plan(int n, int k, int weight, double miss, bool gpu, const SternProfile* profile)
 {
     Plan best;
     double bestCost = 0.0;
@@ -185,10 +282,59 @@ Plan plan(int n, int k, int weight, double miss, bool gpu)
         const double  cost   = double(trials) * (words + gauss);
         if (best.rows == 0 || cost < bestCost) {
             best.rows          = rows;
+            best.window        = 0;
             best.trials        = trials;
             best.wordsPerTrial = words;
             best.costPerTrial  = words + gauss;
             bestCost           = cost;
+        }
+    }
+    if (gpu || !windowEnabled || !profile || profile->window <= 0)
+        return best;
+
+    // Окно Штерна–Дюмера (только процессор). Замер одного потока (мкс на
+    // попытку, --stern-bench, строки по 16 слов): сумма перебора стоит
+    // words операций над словами (≈1,75 нс каждая); запись списка — от 10
+    // до 35 нс, смотря помещаются ли списки в кэш ядра; пара — words + 10
+    // (сумма четырёх строк читается сплошь, 15–50 нс); корзина сортировки —
+    // 0,5–1,5 нс. Модель окну не льстит: на [961,676] она даёт попытке
+    // 9 мс против измеренных 6, на случайной [1000,500] — 2,5 против 0,8.
+    // Списки только до p = 2: при p = 3 они в миллионы записей и в
+    // несколько потоков попытка дорожает в разы против одного.
+    const int    words   = std::max(1, (n + 63) / 64);
+    const double h1      = k / 2, h2 = k - k / 2;
+    // Окно берётся, только если по модели выигрывает хотя бы в cutover раз.
+    // На деле выигрыш меньше модельного: рабочий набор попытки с окном —
+    // мегабайты на поток против десятков килобайт у перебора, и в
+    // несколько потоков она дорожает сильнее; а у кода с тьмой лёгких слов
+    // (разреженная [1000,500], 120 тысяч слов веса до 12) почти каждая
+    // пара — лёгкое слово, и цена попытки уходит в таблицу найденных, чего
+    // модель не знает. Замеры в 16 потоков: [961,676] (Хэмминг [31,26]²)
+    // до веса 9 — модель 7,4 раза, на деле 4,6; до веса 12 — 11 и 7,5;
+    // разреженная [1000,500] до веса 12 — модель 2, на деле проигрыш 2,6.
+    const double cutover = 2.5;
+    const double gaussOps = gauss * words;
+    const double bestOps  = bestCost * words;   // перебор: слова × длина строки
+    double bestWindowOps  = 0.0;
+    for (int rows = 1; rows <= 2 && rows <= int(h1); ++rows) {
+        const double listA = sternListSize(int(h1), rows), listB = sternListSize(int(h2), rows);
+        for (int window = 1; window <= profile->window && window < n - k; ++window) {
+            const double p = catchProbabilityStern(n, k, weight, rows, window);
+            if (p <= 0.0) continue;
+            const quint64 trials = trialsFor(p, miss);
+            const double  pairs  = profile->pairs[rows][window];
+            const double  ops    = 16.0 * (listA + listB) + pairs * (words + 10.0)
+                                 + 0.8 * std::ldexp(1.0, window);
+            const double  cost   = double(trials) * (ops + gaussOps);
+            if (cost * cutover < bestOps && (best.window == 0 || cost < bestWindowOps)) {
+                best.rows          = rows;
+                best.window        = window;
+                best.trials        = trials;
+                // В «словах» перебора, чтобы скорость и ETA считались как обычно.
+                best.wordsPerTrial = ops / words;
+                best.costPerTrial  = (ops + gaussOps) / words;
+                bestWindowOps      = cost;
+            }
         }
     }
     return best;

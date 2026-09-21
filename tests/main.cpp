@@ -2473,12 +2473,59 @@ static void testLeonModel()
     expectLeon(QStringLiteral("вес 24, три строки: %1").arg(p24, 0, 'f', 4),
                p24 > 0.045 && p24 < 0.056);
 
-    const Leon::Plan plan = Leon::plan(n, k, 42, 1e-9);
     // С учётом цены Гаусса выгодны две строки: одна — слишком много попыток,
-    // три — слишком дорогая каждая.
-    expectLeon(QStringLiteral("план для веса 42: %1 строк, %2 попыток")
+    // три — слишком дорогая каждая. Без профиля ключей окна не бывает.
+    const Leon::Plan plan = Leon::plan(n, k, 42, 1e-9);
+    expectLeon(QStringLiteral("план для веса 42: %1 строк, %2 попыток, без окна")
                    .arg(plan.rows).arg(plan.trials),
-               plan.rows == 2 && plan.trials > 100000 && plan.trials < 1000000);
+               plan.rows == 2 && plan.window == 0 && plan.trials > 100000 && plan.trials < 1000000);
+
+    // Профиль ключей окна Штерна–Дюмера. У случайной [1000,500] ключи
+    // равномерны: пар столько, сколько даёт L₁·L₂/2^l, и на такой длине
+    // план берёт окно — по модели оно втрое и более дешевле перебора. У
+    // разреженной (по пять единиц в строке) многие строки на окне нулевые,
+    // пар на порядки больше. На видеокарте окна нет.
+    {
+        // Не Reference::randomMatrix: та берёт младший бит xorshift, а он —
+        // линейная рекуррента порядка 64, и у проверочной части такой
+        // «случайной» матрицы ранг не выше 64 — ключи скошены.
+        std::mt19937_64 rng(11);
+        QStringList dense;
+        for (int r = 0; r < 500; ++r) {
+            QString row(1000, QLatin1Char('0'));
+            for (int c = 0; c < 1000; ++c)
+                if (rng() & 1ULL) row[c] = QLatin1Char('1');
+            dense << row;
+        }
+        const Leon::SternProfile dp = Leon::sternProfile(dense);
+        const double uniform2 = Leon::sternListSize(250, 2) * Leon::sternListSize(250, 2) / std::ldexp(1.0, 20);
+        expectLeon(QStringLiteral("профиль случайной [1000,500]: окно %1, пар при p=2 l=20 %2 (у равномерных ключей %3)")
+                       .arg(dp.window).arg(dp.pairs[2][20], 0, 'g', 4).arg(uniform2, 0, 'g', 4),
+                   dp.window == Leon::MAX_STERN_WINDOW && dp.pairs[2][20] > 0.5 * uniform2 && dp.pairs[2][20] < 2.0 * uniform2);
+        const Leon::Plan wide = Leon::plan(1000, 500, 40, 1e-9, false, &dp);
+        Leon::windowEnabled = false;
+        const Leon::Plan widePlain = Leon::plan(1000, 500, 40, 1e-9, false, &dp);
+        Leon::windowEnabled = true;
+        expectLeon(QStringLiteral("план [1000,500] для веса 40: p=%1 l=%2, %3 попыток по %4 слов (без окна p=%5, %6 попыток по %7)")
+                       .arg(wide.rows).arg(wide.window).arg(wide.trials).arg(wide.costPerTrial, 0, 'g', 3)
+                       .arg(widePlain.rows).arg(widePlain.trials).arg(widePlain.costPerTrial, 0, 'g', 3),
+                   wide.window > 0 && wide.rows == 2
+                       && 3.0 * double(wide.trials) * wide.costPerTrial <= double(widePlain.trials) * widePlain.costPerTrial);
+        expectLeon(QStringLiteral("план для GPU без окна"), Leon::plan(1000, 500, 40, 1e-9, true, &dp).window == 0);
+
+        rng.seed(5);
+        QStringList sparse;
+        for (int r = 0; r < 500; ++r) {
+            QString row(1000, QLatin1Char('0'));
+            for (int i = 0; i < 5; ++i) row[int(rng() % 1000)] = QLatin1Char('1');
+            sparse << row;
+        }
+        const Leon::SternProfile sp = Leon::sternProfile(sparse);
+        const double uniform1 = Leon::sternListSize(250, 1) * Leon::sternListSize(250, 1) / std::ldexp(1.0, 20);
+        expectLeon(QStringLiteral("профиль разреженной [1000,500]: пар при p=1 l=20 %1 (у равномерных ключей %2)")
+                       .arg(sp.pairs[1][20], 0, 'g', 4).arg(uniform1, 0, 'g', 4),
+                   sp.window == Leon::MAX_STERN_WINDOW && sp.pairs[1][20] > 20.0 * uniform1);
+    }
 
     // Таблица: слово помнится один раз, поимки считаются, оценка Чао по f1/f2.
     Leon::WordTable table(1, 8);
@@ -2712,6 +2759,9 @@ static void testLeonWorker()
             { QStringLiteral("[700,40] строка в 11 слов"),  sparseCode(40, 700, 5, 23),                         12 },
             { QStringLiteral("[600,300] строка в 10 слов"), sparseCode(300, 600, 5, 29),                         8 },
         };
+        // Окно Штерна–Дюмера есть только у процессора — на время сравнения
+        // слово в слово оно выключается.
+        Leon::windowEnabled = false;
         for (const Twin& t : twins) {
             const int n = t.rows.first().length(), k = t.rows.size();
             const bool shared = leonFitsShared(k, n, (n + 63) / 64);
@@ -2744,6 +2794,92 @@ static void testLeonWorker()
                        !cpu.isEmpty() && cpu == gpu && cpuTrials == gpuTrials,
                        QStringLiteral("CPU: %1\n      GPU: %2").arg(formatSpectrum(cpu), formatSpectrum(gpu)));
         }
+        Leon::windowEnabled = true;
+    }
+
+    // Окно Штерна–Дюмера на процессоре. Произведение двух кодов Хэмминга
+    // [31,26] — [961,676], d = 9: слов веса 9 ровно A₃² = 155² = 24025,
+    // легче нет; план берёт окно, спектр с окном совпадает с точным и со
+    // спектром без окна, а времени уходит меньше. У разреженной [1000,500]
+    // (по пять единиц в строке) ключи скошены и лёгких слов тьма — окно
+    // план обязан отвергнуть (см. cutover в Leon::plan).
+    {
+        auto kron = [](const QStringList& a, const QStringList& b) {
+            QStringList out;
+            for (const QString& ra : a)
+                for (const QString& rb : b) {
+                    QString row;
+                    row.reserve(ra.size() * rb.size());
+                    for (const QChar& x : ra)
+                        row += x == QLatin1Char('1') ? rb : QString(rb.size(), QLatin1Char('0'));
+                    out << row;
+                }
+            return out;
+        };
+        const QStringList ham31 = Hamming::build(5, false, 0).rows;
+        std::mt19937_64 rng(5);
+        QStringList sparse;
+        for (int r = 0; r < 500; ++r) {
+            QString row(1000, QLatin1Char('0'));
+            for (int i = 0; i < 5; ++i) row[int(rng() % 1000)] = QLatin1Char('1');
+            sparse << row;
+        }
+        struct WinCase { QString name; QStringList rows; int weight; Spectrum exact; bool wantWindow; };
+        const QVector<WinCase> cases = {
+            { QStringLiteral("Хэмминг [31,26]²"), kron(ham31, ham31), 9, Spectrum{ { 9, 24025 } }, true },
+            { QStringLiteral("разреженная [1000,500]"), sparse, 12, Spectrum(), false },
+        };
+        for (const WinCase& c : cases) {
+            const int n = c.rows.first().length(), k = c.rows.size();
+            const Leon::SternProfile profile = Leon::sternProfile(c.rows);
+            const Leon::Plan withWindow = Leon::plan(n, k, c.weight, 1e-12, false, &profile);
+            Leon::windowEnabled = false;
+            const Leon::Plan plain = Leon::plan(n, k, c.weight, 1e-12, false, &profile);
+            Leon::windowEnabled = true;
+
+            RunConfig cfg;
+            cfg.matrix     = c.rows;
+            cfg.algorithm  = Algorithm::RandomInfoSets;
+            cfg.leonWeight = c.weight;
+            cfg.device     = ComputeDevice::CPU;
+            cfg.threadsCpu = omp_get_num_procs();
+            clearCheckpoints();
+            auto t0 = std::chrono::steady_clock::now();
+            const Spectrum found = runWorker(cfg);
+            const double withSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            const quint64 done = g_searchDone;
+            // Без окна — тот же код, тот же предел: спектры обязаны совпасть.
+            Leon::windowEnabled = false;
+            clearCheckpoints();
+            t0 = std::chrono::steady_clock::now();
+            const Spectrum plainFound = runWorker(cfg);
+            const double plainSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            Leon::windowEnabled = true;
+            clearCheckpoints();
+
+            bool ok = !found.isEmpty() && found == plainFound;
+            QStringList problems;
+            if (found != plainFound)
+                problems << QStringLiteral("с окном и без окна спектры разошлись");
+            for (int w = 1; w <= c.weight && !c.exact.isEmpty(); ++w) {
+                if (found.value(w, 0) != c.exact.value(w, 0)) {
+                    ok = false;
+                    problems << QStringLiteral("вес %1: точно %2, найдено %3").arg(w).arg(c.exact.value(w, 0)).arg(found.value(w, 0));
+                }
+            }
+            if (c.wantWindow && (withWindow.window == 0 || withSeconds > plainSeconds)) {
+                ok = false;
+                problems << QStringLiteral("окно должно быть выбрано и выиграть по времени");
+            }
+            if (!c.wantWindow && withWindow.window != 0) {
+                ok = false;
+                problems << QStringLiteral("окно на скошенных ключах должно быть отвергнуто");
+            }
+            expectLeon(QStringLiteral("%1, окно Штерна–Дюмера: план p=%2 l=%3, попыток %4, %5 с (без окна p=%6, попыток %7, %8 с), сделано %9")
+                           .arg(c.name).arg(withWindow.rows).arg(withWindow.window).arg(withWindow.trials)
+                           .arg(withSeconds, 0, 'f', 1).arg(plain.rows).arg(plain.trials).arg(plainSeconds, 0, 'f', 1).arg(done),
+                       ok, problems.join(QStringLiteral("; ")));
+        }
     }
 }
 
@@ -2760,15 +2896,19 @@ static int leonRun(const QString& path, int weight, int missExponent, const QStr
     cfg.leonMissExponent = missExponent;
     cfg.device           = device == QStringLiteral("gpu") ? ComputeDevice::GPU : ComputeDevice::CPU;
     cfg.threadsCpu       = omp_get_num_procs();
+    // «cpu-plain» — процессор без окна Штерна–Дюмера, для сравнения.
+    Leon::windowEnabled = device != QStringLiteral("cpu-plain");
 
     const int k = cfg.matrix.size();
     const int n = cfg.matrix.first().length();
+    const Leon::SternProfile profile = Leon::sternProfile(cfg.matrix);
     const Leon::Plan plan = Leon::plan(n, k, weight, std::pow(10.0, -missExponent),
-                                       cfg.device == ComputeDevice::GPU);
-    out << QStringLiteral("[%1,%2], все слова до веса %3, пропуск 10^-%4, %8: %5 строк за попытку, попыток %6, слов %7")
+                                       cfg.device == ComputeDevice::GPU, &profile);
+    out << QStringLiteral("[%1,%2], все слова до веса %3, пропуск 10^-%4, %8: %5 строк за попытку%9, попыток %6, слов %7")
                .arg(n).arg(k).arg(weight).arg(missExponent)
                .arg(plan.rows).arg(plan.trials).arg(double(plan.trials) * plan.wordsPerTrial, 0, 'g', 3)
-               .arg(cfg.device == ComputeDevice::GPU ? QStringLiteral("GPU") : QStringLiteral("CPU")) << Qt::endl;
+               .arg(cfg.device == ComputeDevice::GPU ? QStringLiteral("GPU") : QStringLiteral("CPU"))
+               .arg(plan.window > 0 ? QStringLiteral(", окно %1").arg(plan.window) : QString()) << Qt::endl;
     out.flush();
 
     clearCheckpoints();
@@ -3213,6 +3353,63 @@ int main(int argc, char* argv[])
         const int rc = productRun(args.at(productAt + 1), args.at(productAt + 2), weight, rank > 0 ? rank : 2, device);
         out.flush();
         return rc;
+    }
+
+    // --stern-bench <файл> <вес> [p] — цена попытки с окном и без, один поток,
+    // и профиль ключей: сколько пар списков совпадает против равномерных
+    // L₁·L₂/2^l.
+    if (args.contains(QStringLiteral("--stern-bench"))) {
+        const int at = args.indexOf(QStringLiteral("--stern-bench"));
+        RunConfig cfg;
+        if (at + 2 >= args.size() || !loadMatrixOrCase(args.at(at + 1), cfg)) return 2;
+        const int W = args.at(at + 2).toInt();
+        const int maxP = at + 3 < args.size() ? args.at(at + 3).toInt() : 2;
+        int words = 0;
+        const std::vector<quint64> packed = InfoSets::packRows(cfg.matrix, words);
+        const int k = cfg.matrix.size(), n = cfg.matrix.first().length();
+        auto timeIt = [&](auto&& body, int reps) {
+            const auto t = std::chrono::steady_clock::now();
+            for (int i = 0; i < reps; ++i) body(quint64(i));
+            return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count() / reps * 1e6;
+        };
+        quint64 sink = 0;
+        auto visit = [&](const quint64*, int) { ++sink; };
+        out << QStringLiteral("[%1,%2], вес %3, один поток, мкс на попытку:").arg(n).arg(k).arg(W) << Qt::endl;
+        {
+            std::vector<int> order;
+            InfoSets::InfoSet set;
+            int ok = 0;
+            const double us = timeIt([&](quint64 t) {
+                Leon::shuffledColumns(n, t, order);
+                ok += InfoSets::systematize(packed.data(), k, n, words, order, nullptr, set) ? 1 : 0;
+            }, 100);
+            out << QStringLiteral("  систематизация: %1 мкс (удачных %2 из 100)").arg(us, 0, 'f', 1).arg(ok) << Qt::endl;
+        }
+        for (int p = 1; p <= maxP; ++p) {
+            const double us = timeIt([&](quint64 t) { Leon::trial(packed.data(), k, n, words, p, W, t, visit); }, p == 3 ? 10 : 100);
+            out << QStringLiteral("  перебор p=%1: %2 мкс (слов %3)").arg(p).arg(us, 0, 'f', 1).arg(Leon::wordsPerTrial(k, p), 0, 'g', 4) << Qt::endl;
+        }
+        const Leon::SternProfile profile = Leon::sternProfile(cfg.matrix);
+        for (int p = 1; p <= std::min(maxP, 2); ++p)
+            for (int l : { 8, 12, 16, 20 }) {
+                if (l > profile.window) continue;
+                const double us = timeIt([&](quint64 t) { Leon::trialStern(packed.data(), k, n, words, p, l, W, t, visit); }, p == 2 ? 20 : 100);
+                const double list    = Leon::sternListSize(k / 2, p) + Leon::sternListSize(k - k / 2, p);
+                const double uniform = Leon::sternListSize(k / 2, p) * Leon::sternListSize(k - k / 2, p) / std::ldexp(1.0, l);
+                out << QStringLiteral("  окно p=%1 l=%2: %3 мкс (список %4, пар %5, у равномерных ключей %6)")
+                           .arg(p).arg(l, 2).arg(us, 8, 'f', 1).arg(list, 0, 'g', 4)
+                           .arg(profile.pairs[p][l], 0, 'g', 4).arg(uniform, 0, 'g', 4) << Qt::endl;
+            }
+        const Leon::Plan plan = Leon::plan(n, k, W, 1e-6, false, &profile);
+        Leon::windowEnabled = false;
+        const Leon::Plan plain = Leon::plan(n, k, W, 1e-6, false);
+        Leon::windowEnabled = true;
+        out << QStringLiteral("  план (пропуск 10^-6): p=%1 l=%2, попыток %3, цена %4 слов; без окна p=%5, попыток %6, цена %7 слов")
+                   .arg(plan.rows).arg(plan.window).arg(plan.trials).arg(double(plan.trials) * plan.costPerTrial, 0, 'g', 3)
+                   .arg(plain.rows).arg(plain.trials).arg(double(plain.trials) * plain.costPerTrial, 0, 'g', 3) << Qt::endl;
+        out << QStringLiteral("  (sink %1)").arg(sink) << Qt::endl;
+        out.flush();
+        return 0;
     }
 
     // --table-bench [слов в пачке] [различных] — скорость ShardedWordTable::addBatch
