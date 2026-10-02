@@ -880,6 +880,12 @@ void Worker::computeSpectrumCpuNoGrayLong(const CodeGeometry& g)
                 //        h_spectrum[(size_t)w] += localSpectrum[(size_t)w];
                 //}
             } // omp parallel
+
+            // Отмена посреди чанка: часть масок не перебрана, и чанк
+            // выбрасывается целиком — ни в спектр, ни в чекпоинт (см. тот же
+            // случай в computeSpectrumCpuGrayShort).
+            if (cancelled.load())
+                break;
             for (int t = 0; t < numThreads; ++t)
             {
                 for (quint64 w = 0; w <= numOfCols; ++w)
@@ -941,6 +947,10 @@ void Worker::computeSpectrumCpuGrayShort(const CodeGeometry& g)
         quint64 chunkStart = offset;
         // Получаем индекс последней маски в чанке
         quint64 chunkEnd = std::min(offset + chunkSize, totalOps);
+
+        // Спектр чанка копится отдельно и попадает в h_spectrum, только если
+        // чанк пройден целиком (см. проверку отмены после параллельной части).
+        std::vector<quint64> chunkSpectrum(numOfCols + 1, 0);
 
         // =========================
         // ПАРАЛЛЕЛЬНЫЙ РАСЧЁТ ЧАНКА
@@ -1049,13 +1059,23 @@ void Worker::computeSpectrumCpuGrayShort(const CodeGeometry& g)
                 #pragma omp critical
                 {
                     for (quint64 w = 0; w <= numOfCols; ++w)
-                        h_spectrum[w] += localSpectrum[w];
+                        chunkSpectrum[w] += localSpectrum[w];
                 } //#pragma omp critical
 
             } // if (startIdx < endIdx)
 
         } // ===== Конец omp parallel =====
-        
+
+        // Отмена посреди чанка: нити бросили перебор, не дойдя до конца, и
+        // часть масок не перебрана. Такой чанк выбрасывается целиком — ни в
+        // спектр, ни в чекпоинт. Иначе чекпоинт ниже записал бы, что чанк
+        // пройден, а в спектре его не хватало бы, и продолжение с этой записи
+        // дало бы заниженный спектр. Флаг отмены за время расчёта не
+        // сбрасывается, поэтому если его видела хоть одна нить, видно и здесь.
+        if (cancelled.load())
+            break;
+        for (quint64 w = 0; w <= numOfCols; ++w)
+            h_spectrum[w] += chunkSpectrum[w];
 
         // chunkEnd — абсолютный индекс маски, поэтому присваивание, а не +=
         progress.setDoneOps(chunkEnd);

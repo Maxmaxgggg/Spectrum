@@ -608,6 +608,102 @@ static void testCheckpoints()
     checkResume(QStringLiteral("GPU длинный, мелкие чанки"), lfine, lfine, 900000, 5000000);
 }
 
+// Отмена посреди чанка. Нити бросают перебор, не дойдя до конца чанка, и
+// такой чанк не имеет права попасть ни в спектр, ни в чекпоинт.
+//
+// На процессоре в коде Грея и в длинном пути раньше попадал: прерванный
+// чанк прибавлялся к спектру, а чекпоинт после него записывал, что чанк
+// пройден целиком. Сценарий из жизни — пауза дольше интервала
+// автосохранения и потом «Отмена»: сохранение после паузы назревает
+// обязательно. «Продолжить» по такой записи давало заниженный спектр без
+// единого сообщения.
+//
+// Здесь пауза ставится до старта, а чекпоинт — после каждого чанка: нити
+// встают на паузу в первом же чанке, отмена приходит, пока они стоят.
+// Проверяется инвариант записи: слов в сохранённом спектре ровно столько,
+// сколько масок пройдено по её смещению.
+static void checkCancelMidChunk(const QString& name, const RunConfig& cfg)
+{
+    if (cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        return;
+    }
+
+    clearCheckpoints();
+
+    Worker worker;
+    worker.setAutosaveRoot(autosaveRoot());
+    worker.setSettings(makeSettings(cfg).toJson());
+    worker.setCheckpointOpsPolicy(1, 0);
+    worker.setGridTuningThreshold(0.0);
+    worker.initializeRunState(LoadMode::Reset);
+    worker.pause();
+
+    std::thread canceller([&worker]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        worker.cancel();
+    });
+    worker.computeSpectrum();
+    canceller.join();
+
+    AutosaveRecord record;
+    const bool saved = testStore().load(cfg.matrix, cfg.algorithm, record);
+    clearCheckpoints();
+
+    if (!saved) {
+        ++g_passed;
+        out << "  ok       " << name << QStringLiteral("  (чекпоинта нет)") << Qt::endl;
+        return;
+    }
+
+    // Пройдено масок по смещению записи: у кода Грея — сплошной номер, у
+    // слоёв — все слои до rOffset целиком и chunkOffset масок слоя rOffset.
+    quint64 covered = record.state.chunkOffset;
+    if (cfg.algorithm != Algorithm::GrayCode)
+        for (quint64 r = 0; r < record.state.rOffset; ++r)
+            covered += Reference::binom(quint64(cfg.matrix.size()), r);
+    quint64 counted = 0;
+    for (quint64 v : record.state.spectrum)
+        counted += v;
+
+    if (counted == covered) {
+        ++g_passed;
+        out << "  ok       " << name
+            << QStringLiteral("  (чекпоинт на %1 масок сходится со спектром)").arg(covered) << Qt::endl;
+        return;
+    }
+    ++g_failed;
+    out << QStringLiteral("  ПРОВАЛ   ") << name
+        << QStringLiteral("  — по чекпоинту пройдено %1 масок, а в его спектре %2 слов")
+               .arg(covered).arg(counted) << Qt::endl;
+}
+
+static void testCancelMidChunk()
+{
+    out << Qt::endl << QStringLiteral("Отмена посреди чанка: чекпоинт сходится со спектром") << Qt::endl;
+
+    for (ComputeDevice dev : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+        const QString who = dev == ComputeDevice::CPU ? QStringLiteral("CPU") : QStringLiteral("GPU");
+
+        // Код Грея: I(22) — четыре чанка по 2^20 масок.
+        RunConfig gray;
+        gray.matrix    = Reference::identity(22);
+        gray.algorithm = Algorithm::GrayCode;
+        gray.device    = dev;
+        checkCancelMidChunk(who + QStringLiteral(" Грей, пауза и отмена"), gray);
+
+        // Простой XOR, короткий код.
+        RunConfig xorShort;
+        xorShort.matrix    = Reference::golay24_12();
+        xorShort.algorithm = Algorithm::SimpleXor;
+        xorShort.device    = dev;
+        checkCancelMidChunk(who + QStringLiteral(" XOR Голей, пауза и отмена"), xorShort);
+
+        // Длинный код (k >= 64).
+        checkCancelMidChunk(who + QStringLiteral(" XOR длинный, пауза и отмена"), longConfig(dev));
+    }
+}
+
 // Ключевая проверка: чекпоинт обязан переноситься между разными
 // конфигурациями железа. Точка возобновления хранится как абсолютный индекс
 // (ранг сочетания либо номер маски Грея), а не как номер чанка, поэтому смена
@@ -3643,6 +3739,7 @@ int main(int argc, char* argv[])
 
     testCheckpoints();
     testCheckpointPortability();
+    testCancelMidChunk();
     testAutoTunedCheckpoints();
     testOversizedMatrixRejected();
 
