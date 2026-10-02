@@ -17,6 +17,7 @@
     <ClCompile Include="compute\bch.cpp" />
     <ClCompile Include="compute\hamming.cpp" />
     <ClCompile Include="compute\leon.cpp" />
+    <ClCompile Include="compute\cyclic.cpp" />
     <ClCompile Include="compute\product.cpp" />
     <ClCompile Include="compute\worker.cpp" />
     <ClCompile Include="compute\worker_cpu.cpp" />
@@ -51,6 +52,7 @@
     <ClInclude Include="compute\gridtuner.h" />
     <ClInclude Include="compute\infosets.h" />
     <ClInclude Include="compute\leon.h" />
+    <ClInclude Include="compute\cyclic.h" />
     <ClInclude Include="compute\product.h" />
     <ClInclude Include="compute\leonkernel.cuh" />
     <ClInclude Include="compute\spectrumring.h" />

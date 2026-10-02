@@ -458,9 +458,16 @@ CodeGeometry Worker::describeTask() const
         const bool windowAllowed = g.useGpu ? m_windowPolicy.gpu : m_windowPolicy.cpu;
         const Leon::SternProfile profile = windowAllowed ? Leon::sternProfile(g.matrix)
                                                          : Leon::SternProfile();
+        // Циклический код (БЧХ, Хэмминг, в том числе расширенные) ищется по
+        // орбитам: попыток и памяти во много раз меньше.
+        if (m_cyclicSearch) {
+            int words = 0;
+            const std::vector<quint64> packed = InfoSets::packRows(g.matrix, words);
+            g.leonSymmetry = Cyclic::find(packed.data(), int(g.rows), int(g.cols), words);
+        }
         const Leon::Plan plan = Leon::plan(int(g.cols), int(g.rows),
                                            m_settings.leonWeight, m_settings.leonMissProbability(),
-                                           g.useGpu, &profile, m_windowPolicy);
+                                           g.useGpu, &profile, m_windowPolicy, g.leonSymmetry);
         g.maxRows           = quint64(plan.rows);
         g.leonWindow        = plan.window;
         g.leonPairs         = plan.window > 0 ? profile.pairs[plan.rows][plan.window] : 0.0;

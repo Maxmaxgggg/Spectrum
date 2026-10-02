@@ -26,8 +26,16 @@ Worker::ComponentPlan Worker::planComponent(const QStringList& rows, int weightU
     // собирает только стохастический поиск; маленькую компоненту перебирает
     // Product::bruteForce сам, до planComponent дело не доходит.
     if (wantWords) {
+        // У циклической компоненты (БЧХ, Хэмминг) поиск пойдёт по орбитам.
+        Cyclic::Symmetry symmetry;
+        if (m_cyclicSearch) {
+            int packedWords = 0;
+            const std::vector<quint64> packed = InfoSets::packRows(rows, packedWords);
+            symmetry = Cyclic::find(packed.data(), k, n, packedWords);
+        }
         const Leon::Plan p = Leon::plan(n, k, limit, m_settings.leonMissProbability(),
-                                       m_settings.device == ComputationSettings::ComputeDevice::Gpu);
+                                       m_settings.device == ComputationSettings::ComputeDevice::Gpu,
+                                       nullptr, Leon::WindowPolicy::none(), symmetry);
         return ComponentPlan{ ComputationSettings::RandomInfoSets, double(p.trials) * p.costPerTrial,
                               tr("стохастический поиск до веса %1, в-ть пропуска 10^-%2")
                                   .arg(limit).arg(m_settings.leonMissExponent) };
@@ -100,6 +108,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     sub.setGridTuningThreshold(m_tuneThresholdSec);
     sub.setKeepFoundWords(wantWords);
     sub.setWindowPolicy(m_windowPolicy);
+    sub.setCyclicSearch(m_cyclicSearch);
 
     ComputationSettings cs = m_settings;
     cs.matrix        = rows;

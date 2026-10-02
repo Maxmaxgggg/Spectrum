@@ -16,8 +16,15 @@
 // пойманным один и два раза, оценивается, сколько ещё не найдено (Чао).
 //
 // Предел метода — память, а не время: всё найденное надо хранить.
+//
+// Циклический код (cyclic.h) ищется по орбитам сдвигов: таблица хранит по
+// одному представителю на орбиту, а попыток нужно столько, чтобы с заданной
+// вероятностью поймать хоть одно слово каждой орбиты (orbitCatchProbability).
+// На БЧХ [127,92] до веса 14 это 37 секунд против 868 по отдельным словам
+// при том же, точном спектре.
 
 #include "bitops.h"
+#include "cyclic.h"
 #include "infosets.h"
 
 #include <QStringList>
@@ -106,6 +113,10 @@ quint64 trialsForAll(int n, int k, int weight, int rows, double miss,
 // То же для попытки с окном Штерна–Дюмера (window == 0 — без окна).
 quint64 trialsForAll(int n, int k, int weight, int rows, int window, double miss,
                      const std::vector<quint64>& foundByWeight);
+// То же по готовым вероятностям поимки (индекс — вес): у циклического кода
+// они считаются по орбитам и дорого, поэтому один раз на расчёт.
+quint64 trialsForAll(const std::vector<double>& catchByWeight, double miss,
+                     const std::vector<quint64>& foundByWeight);
 
 // План поиска: глубина перебора в попытке и число попыток, при которых слово
 // веса weight пропускается с вероятностью не больше miss. Глубина выбирается
@@ -138,8 +149,12 @@ struct WindowPolicy
 
 // Без профиля ключей (sternProfile) окно не рассматривается: цена попытки
 // с окном зависит от матрицы, а не только от размеров.
+//
+// У циклического кода (symmetry) попытки считаются по орбитам: ловить
+// достаточно любое слово орбиты (см. orbitCatchProbability).
 Plan plan(int n, int k, int weight, double miss, bool gpu = false,
-          const SternProfile* profile = nullptr, WindowPolicy window = WindowPolicy());
+          const SternProfile* profile = nullptr, WindowPolicy window = WindowPolicy(),
+          const Cyclic::Symmetry& symmetry = Cyclic::Symmetry());
 
 // Вероятность поимки по плану: с окном или без.
 inline double catchProbabilityFor(int n, int k, int weight, int rows, int window)
@@ -148,25 +163,68 @@ inline double catchProbabilityFor(int n, int k, int weight, int rows, int window
                       : catchProbability(n, k, weight, rows);
 }
 
+// Вероятность, что одна попытка поймает сразу два слова веса weight, у
+// которых overlap общих единиц, — с окном или без. Оценка сверху по той же
+// модели: случаи, где у слова ноль единиц на множестве (у ненулевого
+// кодового слова так не бывает), не вычитаются.
+double jointCatchProbability(int n, int k, int weight, int overlap, int rows, int window);
+
+// Нижняя граница вероятности, что попытка поймает хоть одно слово орбиты
+// веса weight циклического кода. Сдвиги слова ловятся с одной и той же
+// вероятностью P (код переходит в себя, и случайное множество — тоже), но
+// не независимо. Неравенство Чжуна–Эрдёша:
+//
+//     P(хоть одно из N) >= (N·P)² / (N·P + Σ_{i≠j} P_ij),
+//
+// а P_ij растёт с пересечением носителей двух сдвигов. Сумма пересечений по
+// всем парам у слова периода p известна точно — w(wp − L)/L на сдвиг, —
+// поэтому Σ P_ij оценивается сверху вогнутой оболочкой совместной
+// вероятности в средней точке (неравенство Йенсена). Худший случай берётся
+// по всем возможным периодам слова этого веса: у слова с коротким периодом
+// и орбита короткая. Без симметрии — просто P.
+//
+// По двум строкам за попытку для кодов [127,92] до веса 16 это в 21 раз
+// больше P, [255,131] до 45 — в 9, [1023,513] до 80 — в 26 раз: во столько
+// же раз меньше попыток. Оценка осторожная: на БЧХ [31,16] замер даёт поимку
+// орбиты в 3,6 раза чаще, чем она обещает (testCyclicSymmetry).
+double orbitCatchProbability(int n, int k, int weight, int rows, int window,
+                             const Cyclic::Symmetry& symmetry);
+
+// Вероятности поимки для весов 0..maxWeight (у циклического кода — орбит).
+std::vector<double> catchProbabilities(int n, int k, int maxWeight, int rows, int window,
+                                       const Cyclic::Symmetry& symmetry);
+
 // Таблица найденных слов: само слово, вес и сколько раз поймано.
 // Не потокобезопасна — добавления серийные.
+//
+// С циклической симметрией (cyclic.h) таблица хранит орбиты: представителя,
+// вес, размер орбиты и поимки любого её слова. Слова считаются по орбитам
+// целиком, а наружу (appendWords) отдаются все слова каждой орбиты.
 class WordTable
 {
 public:
-    WordTable(int wordsPerRow, int maxWeight);
+    WordTable(int wordsPerRow, int maxWeight, const Cyclic::Symmetry& symmetry = Cyclic::Symmetry());
 
-    // true — слово новое. countHit = false — поимка не засчитывается: её
-    // считает таблица на видеокарте, а здесь слово только хранится (поимок
-    // у него 0, и в оценку Чао оно отсюда не попадает).
+    // true — слово (у циклического кода — его орбита) новое. countHit =
+    // false — поимка не засчитывается: её считает таблица на видеокарте, а
+    // здесь слово только хранится (поимок у него 0, и в оценку Чао оно
+    // отсюда не попадает).
     bool add(const quint64* word, int weight, bool countHit = true);
+    // То же для уже приведённого представителя орбиты размером orbit.
+    bool addCanonical(const quint64* canonical, int weight, int orbit, bool countHit = true);
     // Есть ли слово в таблице; поимки не считает.
     bool contains(const quint64* word) const;
 
+    // Записей в таблице: слов, а у циклического кода — орбит.
     quint64 size()  const { return m_count; }
     quint64 bytes() const;
 
-    // Найдено слов каждого веса, индекс — вес.
+    // Найдено слов каждого веса, индекс — вес. У циклического кода — вместе
+    // со всеми сдвигами.
     const std::vector<quint64>& countByWeight() const { return m_byWeight; }
+    // Записей каждого веса: у циклического кода — орбит, иначе — слов. По
+    // ним планируется число попыток.
+    const std::vector<quint64>& entriesByWeight() const { return m_entriesByWeight; }
 
     // Оценка Чао: сколько слов каждого веса ещё не найдено. По числу слов,
     // пойманных ровно один (f1) и ровно два (f2) раза: f1^2 / (2 f2). Это
@@ -186,12 +244,15 @@ private:
 
     int m_words;
     int m_maxWeight;
+    Cyclic::Symmetry m_symmetry;
 
     std::vector<quint64>  m_store;    // слова подряд, по m_words каждое
     std::vector<uint32_t> m_hits;     // поимок у слова
     std::vector<uint16_t> m_weight;   // вес слова
+    std::vector<uint16_t> m_orbit;    // размер орбиты; без симметрии — пусто
     std::vector<uint32_t> m_table;    // индекс слова + 1; 0 — пусто
     std::vector<quint64>  m_byWeight;
+    std::vector<quint64>  m_entriesByWeight;
     quint64               m_count = 0;
 };
 
@@ -207,7 +268,8 @@ std::vector<double> chaoUnseen(const std::vector<quint64>& f1, const std::vector
 class ShardedWordTable
 {
 public:
-    ShardedWordTable(int wordsPerRow, int maxWeight, int shards);
+    ShardedWordTable(int wordsPerRow, int maxWeight, int shards,
+                     const Cyclic::Symmetry& symmetry = Cyclic::Symmetry());
     ~ShardedWordTable();
     ShardedWordTable(const ShardedWordTable&)            = delete;
     ShardedWordTable& operator=(const ShardedWordTable&) = delete;
@@ -221,6 +283,7 @@ public:
     quint64 size()  const;
     quint64 bytes() const;
     std::vector<quint64> countByWeight()  const;
+    std::vector<quint64> entriesByWeight() const;
     std::vector<double>  unseenByWeight() const;
     // f1 и f2 по весам суммарно по частям — для оценки Чао, когда часть
     // поимок посчитана в другом месте.
@@ -234,6 +297,7 @@ private:
 
     int m_words;
     int m_maxWeight;
+    Cyclic::Symmetry m_symmetry;
     std::vector<WordTable> m_shards;
     std::vector<void*>     m_locks;   // omp_lock_t, без заголовка OpenMP здесь
 };

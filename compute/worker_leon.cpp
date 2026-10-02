@@ -52,8 +52,15 @@ void Worker::computeLeon(const CodeGeometry& g)
                 "строки матрицы зависимы: стохастическому поиску нужна матрица полного ранга");
     }
 
-    // Частей — по числу потоков: каждая наполняется своим.
-    Leon::ShardedWordTable table(words, maxWeight, std::max(1, omp_get_max_threads()));
+    // Частей — по числу потоков: каждая наполняется своим. У циклического
+    // кода в таблице орбиты (см. cyclic.h).
+    const Cyclic::Symmetry& symmetry = g.leonSymmetry;
+    Leon::ShardedWordTable table(words, maxWeight, std::max(1, omp_get_max_threads()), symmetry);
+
+    // Вероятность поимки каждого веса (у циклического кода — орбиты) — один
+    // раз: по орбитам она считается не мгновенно, а нужна после каждой пачки.
+    const std::vector<double> catchByWeight =
+        Leon::catchProbabilities(cols, rows, maxWeight, depth, g.leonWindow, symmetry);
 
     // Прогресс считается в словах, как везде: скорость тогда сравнима.
     // Число попыток растёт по ходу: чем больше слов какого-то веса нашлось,
@@ -70,9 +77,8 @@ void Worker::computeLeon(const CodeGeometry& g)
     quint64 collected = 0;   // попыток, чьи слова уже в таблице
 
     auto retarget = [&]() {
-        const quint64 needed = Leon::trialsForAll(cols, rows, maxWeight, depth, g.leonWindow,
-                                                  m_settings.leonMissProbability(),
-                                                  table.countByWeight());
+        const quint64 needed = Leon::trialsForAll(catchByWeight, m_settings.leonMissProbability(),
+                                                  table.entriesByWeight());
         if (needed > target) {
             target = needed;
             m_progress.setTotalOps(opsFor(target));
@@ -97,7 +103,8 @@ void Worker::computeLeon(const CodeGeometry& g)
     };
 
     auto publish = [&](bool force) {
-        const std::vector<quint64> found = table.countByWeight();
+        const std::vector<quint64> found   = table.countByWeight();
+        const std::vector<quint64> entries = table.entriesByWeight();
         m_buffers->h_spectrum.fillZero();
         m_buffers->h_spectrum[0] = 1;
         for (size_t w = 1; w < found.size() && w < g.spectrumSize; ++w)
@@ -113,17 +120,21 @@ void Worker::computeLeon(const CodeGeometry& g)
             updateSpectrum(cols);
 
             // Вероятность пропустить хотя бы одно слово: по модели, для
-            // каждого веса — найденные слова умножить на шанс пропуска
-            // одного слова, поделённый на шанс поимки. Сумма по весам.
+            // каждого веса — найденные слова (у циклического кода — орбиты)
+            // умножить на шанс пропуска одного, поделённый на шанс поимки.
+            // Сумма по весам. Оценка Чао тоже по орбитам — и переводится в
+            // слова средним размером найденной орбиты.
             double missTotal = 0.0;
             SpectrumFloat unseen(cols + 1, 0.0f);
             const std::vector<double> chao = chaoUnseen();
             for (int w = 1; w <= maxWeight && w <= cols; ++w) {
-                const double p = Leon::catchProbabilityFor(cols, rows, w, depth, g.leonWindow);
+                const double p = catchByWeight[size_t(w)];
                 const double q = std::exp(double(collected) * std::log1p(-p));   // (1-p)^collected
-                if (found[size_t(w)] > 0)
-                    missTotal += double(found[size_t(w)]) * q / std::max(1.0 - q, 1e-300);
-                unseen[w] = float(chao[size_t(w)]);
+                if (entries[size_t(w)] > 0)
+                    missTotal += double(entries[size_t(w)]) * q / std::max(1.0 - q, 1e-300);
+                const double perEntry = entries[size_t(w)] > 0
+                                      ? double(found[size_t(w)]) / double(entries[size_t(w)]) : 1.0;
+                unseen[w] = float(chao[size_t(w)] * perEntry);
             }
             emit searchEstimateUpdated(maxWeight, collected, target,
                                        std::min(1.0, missTotal), unseen);
@@ -313,7 +324,14 @@ void Worker::computeLeon(const CodeGeometry& g)
     // между скачиваниями отдаётся прошлый ответ.
     std::vector<quint64> seenF1, seenF2;
     auto seenStamp = std::chrono::steady_clock::now() - std::chrono::hours(1);
-    if (seen.capacity > 0) {
+    // У циклического кода таблица видеокарты хранит отдельные слова, а не
+    // орбиты, и её поимки к орбитам не сложить. Поимкой орбиты тогда
+    // считается каждое новое для видеокарты её слово — их хост и получает.
+    // Для оценки Чао это то же самое, пока орбита поймана раз-другой, а
+    // других f1 и f2 не бывает: повторно то же слово орбиты длиной в сотни
+    // попадается редко.
+    const bool hostCountsHits = seen.capacity == 0 || symmetry.active();
+    if (seen.capacity > 0 && !symmetry.active()) {
         deviceHitCounts = [&](std::vector<quint64>& f1, std::vector<quint64>& f2) {
             const auto now = std::chrono::steady_clock::now();
             if (!seenF1.empty() && now - seenStamp < std::chrono::seconds(2)) {
@@ -414,8 +432,8 @@ void Worker::computeLeon(const CodeGeometry& g)
                                       cudaMemcpyDeviceToHost, s.stream.get()));
             CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
             // С таблицей на видеокарте поимки посчитаны там; здесь слово
-            // только хранится.
-            table.addBatch(s.h_out.get(), usable, seen.capacity == 0);
+            // только хранится (кроме циклического кода — см. hostCountsHits).
+            table.addBatch(s.h_out.get(), usable, hostCountsHits);
         }
         adaptBatch(found, s.count);
         if (overflow)

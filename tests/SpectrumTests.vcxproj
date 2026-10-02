@@ -24,6 +24,7 @@
     <ClCompile Include="..\compute\bch.cpp" />
     <ClCompile Include="..\compute\hamming.cpp" />
     <ClCompile Include="..\compute\leon.cpp" />
+    <ClCompile Include="..\compute\cyclic.cpp" />
     <ClCompile Include="..\compute\product.cpp" />
   </ItemGroup>
   <ItemGroup>

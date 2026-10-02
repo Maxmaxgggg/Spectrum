@@ -81,6 +81,8 @@ struct CodeGeometry
     double                leonWordsPerTrial = 0.0;
     int                   leonWindow        = 0;     // окно Штерна–Дюмера; 0 — без окна
     double                leonPairs         = 0.0;   // пар списков за попытку по профилю ключей
+    // Циклическая симметрия кода: поиск тогда идёт по орбитам сдвигов (cyclic.h).
+    Cyclic::Symmetry      leonSymmetry;
 };
 
 // Внутренности для собственных .cpp Worker — см. worker_p.h.
@@ -147,6 +149,11 @@ public:
     // вложенным расчётом. Тесты занижают порог, чтобы гонять вложенный
     // расчёт на маленьких кодах.
     void setProductBruteForceMaxK(int k) { m_productBruteForceMaxK = k; }
+
+    // Случайный поиск по орбитам сдвигов у циклического кода (cyclic.h). По
+    // умолчанию включён; выключить нужно тестам — сравнить с поиском по
+    // отдельным словам.
+    void setCyclicSearch(bool on) { m_cyclicSearch = on; }
 
 public slots:
     void computeSpectrum( );
@@ -339,6 +346,7 @@ private:
     bool                        m_tuneVerbose        = false;
     Leon::WindowPolicy          m_windowPolicy;
     int                         m_productBruteForceMaxK = Product::BRUTE_FORCE_MAX_K;
+    bool                        m_cyclicSearch = true;
 
     // Память расчёта на хосте и на видеокарте, поток ядер и кольцо снимков
     // (worker_p.h). Владеющая: освобождается вместе с объектом, каким бы

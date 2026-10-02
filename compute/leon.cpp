@@ -77,6 +77,147 @@ double catchProbabilityStern(int n, int k, int weight, int rows, int window)
     return std::min(1.0, p);
 }
 
+namespace {
+
+// log n! для n до cols: таблица на вызов, считать её дешевле, чем лог-гамму в
+// шестикратном цикле.
+std::vector<double> logFactorials(int n)
+{
+    std::vector<double> f(size_t(std::max(n, 0)) + 1, 0.0);
+    for (int i = 1; i <= n; ++i)
+        f[size_t(i)] = f[size_t(i - 1)] + std::log(double(i));
+    return f;
+}
+
+} // namespace
+
+double jointCatchProbability(int n, int k, int weight, int overlap, int rows, int window)
+{
+    if (n <= 0 || k <= 0 || weight <= 0 || rows <= 0 || overlap < 0 || overlap > weight
+        || 2 * weight - overlap > n)
+        return 0.0;
+    const std::vector<double> lf = logFactorials(n);
+    auto f = [&](int x) { return lf[size_t(x)]; };
+    const int a = overlap, s = weight - overlap;   // общая часть и своя у каждого
+    const int other = n - (2 * weight - overlap);  // столбцы вне обоих носителей
+    double p = 0.0;
+
+    if (window <= 0) {
+        // Множество — k случайных столбцов. На нём i общих единиц, b своих у
+        // первого слова и c — у второго; у каждого слова не больше rows.
+        const double logTotal = f(n) - f(k) - f(n - k);
+        for (int i = 0; i <= rows && i <= a; ++i)
+            for (int b = 0; b + i <= rows && b <= s; ++b)
+                for (int c = 0; c + i <= rows && c <= s; ++c) {
+                    const int rest = k - i - b - c;
+                    if (rest < 0 || rest > other) continue;
+                    const double t = (f(a) - f(i) - f(a - i)) + (f(s) - f(b) - f(s - b))
+                                   + (f(s) - f(c) - f(s - c)) + (f(other) - f(rest) - f(other - rest))
+                                   - logTotal;
+                    p += std::exp(t);
+                }
+        return std::min(1.0, p);
+    }
+
+    if (window > n - k)
+        return 0.0;
+    // Окно Штерна–Дюмера: половины h1, h2, окно l и остаток — случайное
+    // разбиение столбцов. Слово ловится, если на каждой половине у него не
+    // больше rows единиц, а на окне ни одной. Общие единицы раскладываются по
+    // половинам (i1, i2), свои у первого слова — (b1, b2), у второго — (c1, c2).
+    const int h1 = k / 2, h2 = k - h1, l = window, r = n - k - l;
+    const double logTotal = f(n) - f(h1) - f(h2) - f(l) - f(r);
+    auto split = [&](int total, int x, int y) {   // total! / (x! y! (total−x−y)!)
+        return f(total) - f(x) - f(y) - f(total - x - y);
+    };
+    for (int i1 = 0; i1 <= rows && i1 <= a; ++i1)
+        for (int i2 = 0; i2 <= rows && i1 + i2 <= a; ++i2)
+            for (int b1 = 0; b1 + i1 <= rows && b1 <= s; ++b1)
+                for (int b2 = 0; b2 + i2 <= rows && b1 + b2 <= s; ++b2)
+                    for (int c1 = 0; c1 + i1 <= rows && c1 <= s; ++c1)
+                        for (int c2 = 0; c2 + i2 <= rows && c1 + c2 <= s; ++c2) {
+                            const int x1 = h1 - i1 - b1 - c1, x2 = h2 - i2 - b2 - c2;
+                            const int y  = other - x1 - x2 - l;   // остаток вне носителей
+                            if (x1 < 0 || x2 < 0 || y < 0) continue;
+                            const double t = split(a, i1, i2) + split(s, b1, b2) + split(s, c1, c2)
+                                           + (f(other) - f(x1) - f(x2) - f(l) - f(y))
+                                           - logTotal;
+                            p += std::exp(t);
+                        }
+    return std::min(1.0, p);
+}
+
+double orbitCatchProbability(int n, int k, int weight, int rows, int window,
+                             const Cyclic::Symmetry& symmetry)
+{
+    const double single = catchProbabilityFor(n, k, weight, rows, window);
+    if (!symmetry.active() || single <= 0.0 || weight <= 1)
+        return single;
+
+    // Совместные вероятности по числу общих единиц a = 0..weight−1 и их
+    // верхняя вогнутая оболочка: средняя по парам сдвигов оценивается сверху
+    // оболочкой в средней точке (неравенство Йенсена).
+    std::vector<double> joint(static_cast<size_t>(weight));
+    for (int a = 0; a < weight; ++a)
+        joint[size_t(a)] = jointCatchProbability(n, k, weight, a, rows, window);
+    std::vector<int> hull;   // вершины оболочки, по возрастанию a
+    for (int a = 0; a < weight; ++a) {
+        while (hull.size() >= 2) {
+            const int a1 = hull[hull.size() - 2], a2 = hull.back();
+            // a2 под отрезком (a1, a) — не вершина.
+            const double cross = (joint[size_t(a2)] - joint[size_t(a1)]) * double(a - a1)
+                               - (joint[size_t(a)] - joint[size_t(a1)]) * double(a2 - a1);
+            if (cross <= 0.0) hull.pop_back();
+            else break;
+        }
+        hull.push_back(a);
+    }
+    auto envelope = [&](double x) {
+        x = std::max(0.0, std::min(x, double(weight - 1)));
+        for (size_t i = 1; i < hull.size(); ++i)
+            if (x <= double(hull[i])) {
+                const int a1 = hull[i - 1], a2 = hull[i];
+                const double t = (x - double(a1)) / double(a2 - a1);
+                return joint[size_t(a1)] + t * (joint[size_t(a2)] - joint[size_t(a1)]);
+            }
+        return joint[size_t(hull.back())];
+    };
+
+    // Худший случай по всему, чего мы о слове не знаем: стоит ли единица на
+    // столбцах вне круга (их не больше одного) и какой у слова период.
+    const int L = symmetry.length, fixed = n - L;
+    double worst = 1.0;
+    for (int e = 0; e <= fixed && e <= weight; ++e) {
+        const int onCircle = weight - e;
+        for (int orbit : Cyclic::orbitSizes(symmetry, onCircle)) {
+            if (orbit <= 1) {
+                worst = std::min(worst, single);
+                continue;
+            }
+            // Пересечения разных сдвигов: на круге их сумма по сдвигам 1..p−1
+            // равна w(wp − L)/L (у слова периода p единиц на периоде поровну),
+            // и к каждому прибавляются общие единицы вне круга.
+            const double sumOnCircle = double(onCircle) * (double(onCircle) * orbit - L) / double(L);
+            const double mean = sumOnCircle / double(orbit - 1) + double(e);
+            const double pairs = envelope(mean);
+            // Чжун–Эрдёш: P(хоть одно) >= (Σ P_i)^2 / (Σ P_i + Σ_{i≠j} P_ij).
+            const double sum = double(orbit) * single;
+            const double bound = sum * sum / (sum + double(orbit) * double(orbit - 1) * pairs);
+            worst = std::min(worst, bound);
+        }
+    }
+    return std::max(single, std::min(1.0, worst));
+}
+
+std::vector<double> catchProbabilities(int n, int k, int maxWeight, int rows, int window,
+                                       const Cyclic::Symmetry& symmetry)
+{
+    std::vector<double> p(size_t(std::max(maxWeight, 0)) + 1, 0.0);
+    for (int w = 1; w <= maxWeight && w <= n; ++w)
+        p[size_t(w)] = orbitCatchProbability(n, k, w, rows, window, symmetry);
+    return p;
+}
+
 double sternListSize(int half, int rows)
 {
     double total = 1.0, term = 1.0;
@@ -174,11 +315,18 @@ double gaussCostInWords(int k, int wordsPerRow, bool gpu)
 quint64 trialsForAll(int n, int k, int weight, int rows, int window, double miss,
                      const std::vector<quint64>& foundByWeight)
 {
+    return trialsForAll(catchProbabilities(n, k, weight, rows, window, Cyclic::Symmetry()),
+                        miss, foundByWeight);
+}
+
+quint64 trialsForAll(const std::vector<double>& catchByWeight, double miss,
+                     const std::vector<quint64>& foundByWeight)
+{
     quint64 needed = 1;
-    for (int w = 1; w <= weight && w <= n; ++w) {
-        const quint64 found = size_t(w) < foundByWeight.size() ? foundByWeight[size_t(w)] : 0;
+    for (size_t w = 1; w < catchByWeight.size(); ++w) {
+        const quint64 found = w < foundByWeight.size() ? foundByWeight[w] : 0;
         const double  each  = miss / double(std::max<quint64>(1, found));
-        needed = std::max(needed, trialsFor(catchProbabilityFor(n, k, w, rows, window), each));
+        needed = std::max(needed, trialsFor(catchByWeight[w], each));
     }
     return needed;
 }
@@ -246,7 +394,7 @@ SternProfile sternProfile(const QStringList& matrix)
 }
 
 Plan plan(int n, int k, int weight, double miss, bool gpu, const SternProfile* profile,
-          WindowPolicy window)
+          WindowPolicy window, const Cyclic::Symmetry& symmetry)
 {
     Plan best;
     double bestCost = 0.0;
@@ -254,7 +402,7 @@ Plan plan(int n, int k, int weight, double miss, bool gpu, const SternProfile* p
     // Глубже четырёх строк за попытку не имеет смысла: столько уже дешевле
     // отдать Брауэру–Циммерману. Глубже k не бывает.
     for (int rows = 1; rows <= 4 && rows <= k; ++rows) {
-        const double  p      = catchProbability(n, k, weight, rows);
+        const double  p      = orbitCatchProbability(n, k, weight, rows, 0, symmetry);
         const quint64 trials = trialsFor(p, miss);
         const double  words  = wordsPerTrial(k, rows);
         const double  cost   = double(trials) * (words + gauss);
@@ -297,7 +445,7 @@ Plan plan(int n, int k, int weight, double miss, bool gpu, const SternProfile* p
     for (int rows = 1; rows <= 2 && rows <= int(h1); ++rows) {
         const double listA = sternListSize(int(h1), rows), listB = sternListSize(int(h2), rows);
         for (int window = 1; window <= profile->window && window < n - k; ++window) {
-            const double p = catchProbabilityStern(n, k, weight, rows, window);
+            const double p = orbitCatchProbability(n, k, weight, rows, window, symmetry);
             if (p <= 0.0) continue;
             const quint64 trials = trialsFor(p, miss);
             const double  pairs  = profile->pairs[rows][window];
@@ -320,11 +468,13 @@ Plan plan(int n, int k, int weight, double miss, bool gpu, const SternProfile* p
 
 // ------------------------------------------------------------- таблица
 
-WordTable::WordTable(int wordsPerRow, int maxWeight)
+WordTable::WordTable(int wordsPerRow, int maxWeight, const Cyclic::Symmetry& symmetry)
     : m_words(wordsPerRow)
     , m_maxWeight(maxWeight)
+    , m_symmetry(symmetry)
     , m_table(1u << 16, 0u)
     , m_byWeight(size_t(maxWeight) + 1, 0ULL)
+    , m_entriesByWeight(size_t(maxWeight) + 1, 0ULL)
 {
 }
 
@@ -359,6 +509,11 @@ void WordTable::grow()
 
 bool WordTable::contains(const quint64* word) const
 {
+    std::vector<quint64> canonical(static_cast<size_t>(m_words));
+    if (m_symmetry.active()) {
+        Cyclic::canonical(word, m_words, m_symmetry, canonical.data());
+        word = canonical.data();
+    }
     const quint64 mask = m_table.size() - 1;
     quint64 pos = hashWord(word, m_words) & mask;
     for (;;) {
@@ -372,6 +527,15 @@ bool WordTable::contains(const quint64* word) const
 }
 
 bool WordTable::add(const quint64* word, int weight, bool countHit)
+{
+    if (!m_symmetry.active())
+        return addCanonical(word, weight, 1, countHit);
+    std::vector<quint64> canonical(static_cast<size_t>(m_words));
+    const int orbit = Cyclic::canonical(word, m_words, m_symmetry, canonical.data());
+    return addCanonical(canonical.data(), weight, orbit, countHit);
+}
+
+bool WordTable::addCanonical(const quint64* word, int weight, int orbit, bool countHit)
 {
     const quint64 mask = m_table.size() - 1;
     quint64 pos = hashWord(word, m_words) & mask;
@@ -391,16 +555,20 @@ bool WordTable::add(const quint64* word, int weight, bool countHit)
     // пробирование при большем начинает ходить кругами.
     if ((m_count + 1) * 2 > m_table.size()) {
         grow();
-        return add(word, weight, countHit);
+        return addCanonical(word, weight, orbit, countHit);
     }
 
     m_store.insert(m_store.end(), word, word + m_words);
     m_hits.push_back(countHit ? 1u : 0u);
     m_weight.push_back(uint16_t(weight));
+    if (m_symmetry.active())
+        m_orbit.push_back(uint16_t(orbit));
     m_table[size_t(pos)] = uint32_t(m_count + 1);
     ++m_count;
-    if (weight >= 0 && weight <= m_maxWeight)
-        ++m_byWeight[size_t(weight)];
+    if (weight >= 0 && weight <= m_maxWeight) {
+        m_byWeight[size_t(weight)] += quint64(orbit);
+        ++m_entriesByWeight[size_t(weight)];
+    }
     return true;
 }
 
@@ -409,6 +577,7 @@ quint64 WordTable::bytes() const
     return quint64(m_store.capacity()) * sizeof(quint64)
          + quint64(m_hits.capacity())  * sizeof(uint32_t)
          + quint64(m_weight.capacity()) * sizeof(uint16_t)
+         + quint64(m_orbit.capacity()) * sizeof(uint16_t)
          + quint64(m_table.capacity()) * sizeof(uint32_t);
 }
 
@@ -428,8 +597,22 @@ void WordTable::hitCounts(std::vector<quint64>& f1, std::vector<quint64>& f2) co
 
 void WordTable::appendWords(std::vector<quint64>& words, std::vector<int>& weights) const
 {
-    words.insert(words.end(), m_store.begin(), m_store.begin() + ptrdiff_t(m_count * quint64(m_words)));
-    weights.insert(weights.end(), m_weight.begin(), m_weight.begin() + ptrdiff_t(m_count));
+    if (!m_symmetry.active()) {
+        words.insert(words.end(), m_store.begin(), m_store.begin() + ptrdiff_t(m_count * quint64(m_words)));
+        weights.insert(weights.end(), m_weight.begin(), m_weight.begin() + ptrdiff_t(m_count));
+        return;
+    }
+    // Орбита разворачивается в слова: сдвиги на 0..p−1, где p — её размер,
+    // все различны и других нет.
+    std::vector<quint64> turned(static_cast<size_t>(m_words));
+    for (quint64 i = 0; i < m_count; ++i) {
+        const quint64* word = m_store.data() + size_t(i) * m_words;
+        for (int shift = 0; shift < int(m_orbit[size_t(i)]); ++shift) {
+            Cyclic::rotate(word, m_words, m_symmetry, shift, turned.data());
+            words.insert(words.end(), turned.begin(), turned.end());
+            weights.push_back(int(m_weight[size_t(i)]));
+        }
+    }
 }
 
 std::vector<double> chaoUnseen(const std::vector<quint64>& f1, const std::vector<quint64>& f2)
@@ -456,14 +639,16 @@ std::vector<double> WordTable::unseenByWeight() const
 
 // ---------------------------------------------------------- части
 
-ShardedWordTable::ShardedWordTable(int wordsPerRow, int maxWeight, int shards)
+ShardedWordTable::ShardedWordTable(int wordsPerRow, int maxWeight, int shards,
+                                   const Cyclic::Symmetry& symmetry)
     : m_words(wordsPerRow)
     , m_maxWeight(maxWeight)
+    , m_symmetry(symmetry)
 {
     shards = std::max(1, shards);
     m_shards.reserve(size_t(shards));
     for (int i = 0; i < shards; ++i) {
-        m_shards.emplace_back(wordsPerRow, maxWeight);
+        m_shards.emplace_back(wordsPerRow, maxWeight, symmetry);
         omp_lock_t* lock = new omp_lock_t;
         omp_init_lock(lock);
         m_locks.push_back(lock);
@@ -487,10 +672,19 @@ int ShardedWordTable::shardOf(const quint64* word) const
 
 void ShardedWordTable::add(const quint64* word, int weight)
 {
-    const int j = shardOf(word);
+    // Часть выбирается по представителю орбиты: все её слова — в одну часть.
+    // Приводится до замка — это самая дорогая часть добавления.
+    quint64 canonical[64];
+    const quint64* key = word;
+    int orbit = 1;
+    if (m_symmetry.active()) {
+        orbit = Cyclic::canonical(word, m_words, m_symmetry, canonical);
+        key   = canonical;
+    }
+    const int j = shardOf(key);
     omp_lock_t* lock = static_cast<omp_lock_t*>(m_locks[size_t(j)]);
     omp_set_lock(lock);
-    m_shards[size_t(j)].add(word, weight);
+    m_shards[size_t(j)].addCanonical(key, weight, orbit);
     omp_unset_lock(lock);
 }
 
@@ -505,9 +699,20 @@ void ShardedWordTable::addBatch(const quint64* words, size_t count, bool countHi
 
     #pragma omp parallel
     {
+        // У циклического кода часть — по представителю орбиты. Он считается
+        // дважды (здесь и при добавлении), зато без копии пачки: она бывает
+        // в миллионы слов.
+        quint64 canonical[64];
+        const bool cyclic = m_symmetry.active();
         #pragma omp for schedule(static)
-        for (long long i = 0; i < (long long)count; ++i)
-            shard[size_t(i)] = uint8_t(shardOf(words + size_t(i) * m_words));
+        for (long long i = 0; i < (long long)count; ++i) {
+            const quint64* word = words + size_t(i) * m_words;
+            if (cyclic) {
+                Cyclic::canonical(word, m_words, m_symmetry, canonical);
+                word = canonical;
+            }
+            shard[size_t(i)] = uint8_t(shardOf(word));
+        }
 
         #pragma omp for schedule(dynamic, 1)
         for (int j = 0; j < shards; ++j) {
@@ -519,7 +724,12 @@ void ShardedWordTable::addBatch(const quint64* words, size_t count, bool countHi
                 int weight = 0;
                 for (int w = 0; w < m_words; ++w)
                     weight += BitOps::popcount64(word[w]);
-                table.add(word, weight, countHits);
+                if (cyclic) {
+                    const int orbit = Cyclic::canonical(word, m_words, m_symmetry, canonical);
+                    table.addCanonical(canonical, weight, orbit, countHits);
+                }
+                else
+                    table.addCanonical(word, weight, 1, countHits);
             }
         }
     }
@@ -550,6 +760,17 @@ quint64 ShardedWordTable::bytes() const
 {
     quint64 total = 0;
     for (const WordTable& t : m_shards) total += t.bytes();
+    return total;
+}
+
+std::vector<quint64> ShardedWordTable::entriesByWeight() const
+{
+    std::vector<quint64> total(size_t(m_maxWeight) + 1, 0ULL);
+    for (const WordTable& t : m_shards) {
+        const std::vector<quint64>& part = t.entriesByWeight();
+        for (size_t w = 0; w < total.size() && w < part.size(); ++w)
+            total[w] += part[w];
+    }
     return total;
 }
 

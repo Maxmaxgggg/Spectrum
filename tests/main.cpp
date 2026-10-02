@@ -8,6 +8,7 @@
 // не float, как у графика.
 
 #include <QCoreApplication>
+#include <set>
 #include <QDir>
 #include <QFile>
 #include <QJsonObject>
@@ -134,6 +135,8 @@ struct RunConfig
     int         productBruteForceMaxK = Product::BRUTE_FORCE_MAX_K;
     // Где стохастическому поиску можно брать окно Штерна–Дюмера.
     Leon::WindowPolicy window;
+    // Поиск по орбитам сдвигов у циклического кода.
+    bool        cyclicSearch = true;
 };
 
 static ComputationSettings makeSettings(const RunConfig& cfg)
@@ -214,6 +217,7 @@ static Spectrum runWorker(const RunConfig& cfg,
     worker.setSettings(makeSettings(cfg));
     worker.setWindowPolicy(cfg.window);
     worker.setProductBruteForceMaxK(cfg.productBruteForceMaxK);
+    worker.setCyclicSearch(cfg.cyclicSearch);
     worker.setCheckpointOpsPolicy(checkpointEveryOps, stopAfterOps);
     // Тестовые матрицы мелкие, и в боевом режиме подбор на них не запустился
     // бы вовсе — тесты про подбор стали бы пустыми.
@@ -1841,6 +1845,22 @@ static bool loadMatrixOrCase(const QString& which, RunConfig& cfg)
     if (sweepCase(which, cfg))
         return true;
 
+    // Классические коды по параметрам: «bch:m,представителей[,e]» и
+    // «hamming:r[,e]», e — расширить проверкой чётности.
+    const QStringList spec = which.section(QLatin1Char(':'), 1).split(QLatin1Char(','));
+    if (which.startsWith(QStringLiteral("bch:")) && spec.size() >= 2) {
+        cfg = RunConfig();
+        cfg.matrix = Bch::build(spec.at(0).toInt(), spec.at(1).toInt(),
+                                spec.size() > 2 && spec.at(2) == QStringLiteral("e"), 0).rows;
+        return !cfg.matrix.isEmpty();
+    }
+    if (which.startsWith(QStringLiteral("hamming:")) && !spec.isEmpty()) {
+        cfg = RunConfig();
+        cfg.matrix = Hamming::build(spec.at(0).toInt(),
+                                    spec.size() > 1 && spec.at(1) == QStringLiteral("e"), 0).rows;
+        return !cfg.matrix.isEmpty();
+    }
+
     QFile file(which);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         g_out << QStringLiteral("не открыть матрицу: ") << which << Qt::endl;
@@ -3327,6 +3347,313 @@ static void testLeonWorker()
 // Случайный поиск на матрице из файла.
 //
 // Запуск: SpectrumTests.exe --leon-run <файл матрицы> <вес> [<степень пропуска>] [cpu|gpu]
+// Циклическая симметрия (cyclic.h): находится ли она у циклических кодов и
+// только у них, совпадает ли представитель у всех сдвигов слова, и верна ли
+// оценка вероятности поймать орбиту — против прямого подсчёта по попыткам.
+static void testCyclicSymmetry()
+{
+    g_out << Qt::endl << QStringLiteral("Циклическая симметрия кода") << Qt::endl;
+
+    auto symmetryOf = [](const QStringList& rows) {
+        int words = 0;
+        const std::vector<quint64> packed = InfoSets::packRows(rows, words);
+        return Cyclic::find(packed.data(), rows.size(), rows.first().length(), words);
+    };
+    struct Expect { QString name; QStringList rows; int start; int length; };
+    const QVector<Expect> expect = {
+        { QStringLiteral("БЧХ [31,16]"),             Bch::build(5, 3, false, 0).rows, 0, 31 },
+        { QStringLiteral("БЧХ [63,36]"),             Bch::build(6, 5, false, 0).rows, 0, 63 },
+        { QStringLiteral("расширенный БЧХ [64,36]"), Bch::build(6, 5, true, 0).rows,  0, 63 },
+        { QStringLiteral("укороченный БЧХ [60,33]"), Bch::build(6, 5, false, 3).rows, 0, 0 },
+        { QStringLiteral("Хэмминг [15,11]"),         Hamming::build(4, false, 0).rows, 0, 15 },
+        { QStringLiteral("расширенный Хэмминг [16,11]"), Hamming::build(4, true, 0).rows, 0, 15 },
+        { QStringLiteral("случайный [40,16]"),       Bz::scramble(Bz::systematicRandom(16, 40, 7), 11), 0, 0 },
+    };
+    for (const Expect& e : expect) {
+        const Cyclic::Symmetry sym = symmetryOf(e.rows);
+        const bool ok = sym.length == e.length && (e.length == 0 || sym.start == e.start);
+        const QString what = QStringLiteral("%1: сдвиг [%2, %3)").arg(e.name).arg(sym.start).arg(sym.start + sym.length);
+        if (ok) { ++g_passed; g_out << "  ok       " << what << Qt::endl; }
+        else {
+            ++g_failed;
+            g_out << QStringLiteral("  ПРОВАЛ   ") << what
+                  << QStringLiteral("  (ожидался [%1, %2))").arg(e.start).arg(e.start + e.length) << Qt::endl;
+        }
+    }
+
+    // Представитель и размер орбиты: у всех сдвигов слова представитель
+    // один, размер — число различных сдвигов. Слова — случайные и с периодом.
+    {
+        Mixing::Xorshift64 rng{ 0xC1C1EULL };
+        int bad = 0, checked = 0;
+        for (int trial = 0; trial < 400; ++trial) {
+            const int n = 5 + int(rng.next() % 140);
+            const Cyclic::Symmetry sym{ int(rng.next() % 2), n - int(rng.next() % 2) };
+            if (sym.start + sym.length > n) continue;
+            const int words = (n + 63) / 64;
+            std::vector<quint64> word(size_t(words), 0ULL);
+            // Каждое третье слово — периодическое: узор повторяется с шагом p.
+            const int p = trial % 3 == 0 ? std::max(1, sym.length / std::max(1, 1 + int(rng.next() % 6))) : sym.length;
+            const bool periodic = p < sym.length && sym.length % p == 0;
+            for (int c = 0; c < n; ++c) {
+                bool bit = (rng.next() & 3) == 0;
+                if (periodic && c >= sym.start && c < sym.start + sym.length && c - sym.start >= p) {
+                    const int src = sym.start + (c - sym.start) % p;
+                    bit = (word[size_t(src >> 6)] >> (src & 63)) & 1ULL;
+                }
+                if (bit) word[size_t(c >> 6)] |= 1ULL << (c & 63);
+            }
+            std::vector<quint64> canon(static_cast<size_t>(words)), turned(canon), other(canon);
+            const int orbit = Cyclic::canonical(word.data(), words, sym, canon.data());
+            std::set<std::vector<quint64>> distinct;
+            for (int t = 0; t < sym.length; ++t) {
+                Cyclic::rotate(word.data(), words, sym, t, turned.data());
+                distinct.insert(turned);
+                const int o = Cyclic::canonical(turned.data(), words, sym, other.data());
+                ++checked;
+                if (other != canon || o != orbit) ++bad;
+            }
+            if (int(distinct.size()) != orbit) ++bad;
+        }
+        const QString what = QStringLiteral("представитель орбиты: %1 сдвигов").arg(checked);
+        if (bad == 0 && checked > 1000) { ++g_passed; g_out << "  ok       " << what << Qt::endl; }
+        else { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   ") << what << QStringLiteral(", расхождений %1").arg(bad) << Qt::endl; }
+    }
+
+    // Совместная вероятность: при полном совпадении носителей — не меньше
+    // одиночной, при пересечении — не больше; оценка орбиты не меньше
+    // одиночной вероятности.
+    {
+        bool ok = true;
+        QStringList problems;
+        for (int window : { 0, 6 }) {
+            const int n = 63, k = 36, w = 11, rows = 2;
+            const double single = Leon::catchProbabilityFor(n, k, w, rows, window);
+            const double same   = Leon::jointCatchProbability(n, k, w, w, rows, window);
+            if (same < single * (1.0 - 1e-9)) { ok = false; problems << QStringLiteral("окно %1: P(a=w) < P").arg(window); }
+            for (int a = 0; a < w; ++a)
+                if (Leon::jointCatchProbability(n, k, w, a, rows, window) > same * (1.0 + 1e-9)) {
+                    ok = false; problems << QStringLiteral("окно %1: P(a=%2) > P(a=w)").arg(window).arg(a);
+                }
+            const double orbit = Leon::orbitCatchProbability(n, k, w, rows, window, Cyclic::Symmetry{ 0, 63 });
+            if (orbit < single) { ok = false; problems << QStringLiteral("окно %1: орбита < слова").arg(window); }
+        }
+        expectLeon(QStringLiteral("совместная вероятность поимки и оценка орбиты"), ok, problems.join(QStringLiteral("; ")));
+
+        // Справка: во сколько раз оценка орбиты выше вероятности одного слова
+        // (во столько же раз меньше попыток) на кодах длиной до 1023.
+        struct Gain { int n, k, w; };
+        for (const Gain& c : { Gain{ 127, 92, 16 }, Gain{ 255, 131, 45 }, Gain{ 1023, 513, 80 } }) {
+            const double single = Leon::catchProbability(c.n, c.k, c.w, 2);
+            const double orbit  = Leon::orbitCatchProbability(c.n, c.k, c.w, 2, 0, Cyclic::Symmetry{ 0, c.n });
+            g_out << QStringLiteral("           [%1,%2] до веса %3, 2 строки: орбита ловится в %4 раза вероятнее слова")
+                         .arg(c.n).arg(c.k).arg(c.w).arg(orbit / single, 0, 'f', 1) << Qt::endl;
+        }
+    }
+
+    // Оценка орбиты против прямого счёта: орбита слова минимального веса
+    // БЧХ [31,16] и попытки Ли–Брикелла с одной строкой — какая доля попыток
+    // ловит хоть одно её слово. Оценка — нижняя граница по модели случайного
+    // множества, поэтому замер обязан быть не ниже её (с поправкой на шум).
+    {
+        const QStringList rows = Bch::build(5, 3, false, 0).rows;
+        const int k = rows.size(), n = rows.first().length();
+        int words = 0;
+        const std::vector<quint64> packed = InfoSets::packRows(rows, words);
+        const Cyclic::Symmetry sym = Cyclic::find(packed.data(), k, n, words);
+        // Слово минимального веса — полным перебором.
+        std::vector<quint64> target;
+        int d = n + 1;
+        for (quint64 mask = 1; mask < (1ULL << k); ++mask) {
+            std::vector<quint64> word(size_t(words), 0ULL);
+            for (int i = 0; i < k; ++i)
+                if ((mask >> i) & 1ULL)
+                    for (int w = 0; w < words; ++w) word[size_t(w)] ^= packed[size_t(i) * words + w];
+            int weight = 0;
+            for (quint64 x : word) weight += Isd::popcount64(x);
+            if (weight < d) { d = weight; target = word; }
+        }
+        std::vector<quint64> targetCanon(static_cast<size_t>(words));
+        Cyclic::canonical(target.data(), words, sym, targetCanon.data());
+
+        const int rowsPerTrial = 1;
+        const quint64 trials = 60000;
+        quint64 caughtOrbit = 0, caughtWord = 0;
+        std::vector<quint64> canon(static_cast<size_t>(words));
+        for (quint64 t = 0; t < trials; ++t) {
+            bool orbitHit = false, wordHit = false;
+            Leon::trial(packed.data(), k, n, words, rowsPerTrial, d, t, [&](const quint64* word, int weight) {
+                if (weight != d) return;
+                if (std::equal(word, word + words, target.data())) wordHit = true;
+                Cyclic::canonical(word, words, sym, canon.data());
+                if (canon == targetCanon) orbitHit = true;
+            });
+            caughtOrbit += orbitHit ? 1 : 0;
+            caughtWord  += wordHit ? 1 : 0;
+        }
+        const double bound   = Leon::orbitCatchProbability(n, k, d, rowsPerTrial, 0, sym);
+        const double single  = Leon::catchProbability(n, k, d, rowsPerTrial);
+        const double measured = double(caughtOrbit) / double(trials);
+        // Шум замера — три сигмы биномиального счёта.
+        const double sigma = std::sqrt(bound * (1.0 - bound) / double(trials));
+        const bool ok = measured >= bound - 3.0 * sigma;
+        expectLeon(QStringLiteral("БЧХ [31,16], вес %1: орбиту ловит %2 попыток, оценка снизу %3, "
+                                  "одно слово — %4 (модель %5)")
+                       .arg(d).arg(measured, 0, 'g', 3).arg(bound, 0, 'g', 3)
+                       .arg(double(caughtWord) / double(trials), 0, 'g', 3).arg(single, 0, 'g', 3),
+                   ok, QStringLiteral("замер ниже оценки"));
+    }
+}
+
+// Случайный поиск у циклических кодов: по орбитам спектр тот же, что
+// точный, а попыток меньше, чем по отдельным словам.
+static void testLeonCyclic()
+{
+    g_out << Qt::endl << QStringLiteral("Случайный поиск по орбитам сдвигов") << Qt::endl;
+
+    struct Case { QString name; QStringList rows; int weight; };
+    const QVector<Case> cases = {
+        { QStringLiteral("БЧХ [31,16]"),                 Bch::build(5, 3, false, 0).rows, 12 },
+        { QStringLiteral("БЧХ [63,45]"),                 Bch::build(6, 3, false, 0).rows, 11 },
+        { QStringLiteral("расширенный БЧХ [64,45]"),     Bch::build(6, 3, true, 0).rows,  12 },
+        { QStringLiteral("БЧХ [63,36]"),                 Bch::build(6, 5, false, 0).rows, 15 },
+        { QStringLiteral("Хэмминг [63,57]"),             Hamming::build(6, false, 0).rows, 5 },
+        { QStringLiteral("расширенный Хэмминг [64,57]"), Hamming::build(6, true, 0).rows,  6 },
+    };
+    for (const Case& c : cases) {
+        const int k = c.rows.size(), n = c.rows.first().length();
+        // Эталон — полный перебор или дуальный код, смотря что короче.
+        RunConfig exactCfg;
+        exactCfg.matrix    = c.rows;
+        exactCfg.algorithm = k <= n - k ? Algorithm::GrayCode : Algorithm::DualCode;
+        exactCfg.device    = ComputeDevice::Cpu;
+        exactCfg.threadsCpu = std::max(4, omp_get_num_procs());
+        clearCheckpoints();
+        const Spectrum exact = runWorker(exactCfg);
+
+        for (ComputeDevice device : { ComputeDevice::Cpu, ComputeDevice::Gpu }) {
+            const bool gpu = device == ComputeDevice::Gpu;
+            const QString who = gpu ? QStringLiteral("GPU") : QStringLiteral("CPU");
+            if (gpu && !g_gpuAvailable) {
+                g_out << QStringLiteral("  ПРОПУСК  ") << c.name << QStringLiteral(" GPU  (GPU недоступен)") << Qt::endl;
+                continue;
+            }
+            RunConfig cfg;
+            cfg.matrix     = c.rows;
+            cfg.algorithm  = Algorithm::RandomInfoSets;
+            cfg.leonWeight = c.weight;
+            cfg.leonMissExponent = 9;
+            cfg.device     = device;
+            cfg.threadsCpu = std::max(4, omp_get_num_procs());
+            cfg.window     = Leon::WindowPolicy::none();
+
+            cfg.cyclicSearch = false;
+            clearCheckpoints();
+            const auto t0 = std::chrono::steady_clock::now();
+            const Spectrum plain = runWorker(cfg);
+            const double plainSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            const quint64 plainTrials = g_searchTotal;
+
+            cfg.cyclicSearch = true;
+            clearCheckpoints();
+            const auto t1 = std::chrono::steady_clock::now();
+            const Spectrum orbits = runWorker(cfg);
+            const double orbitSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count();
+            const quint64 orbitTrials = g_searchTotal;
+            clearCheckpoints();
+
+            // Сравнивается работа, а не число попыток: с орбитами поимка
+            // вероятнее, и план берёт перебор помельче — попыток бывает и
+            // больше, зато каждая в разы дешевле.
+            int words = 0;
+            const std::vector<quint64> packed = InfoSets::packRows(c.rows, words);
+            const Cyclic::Symmetry sym = Cyclic::find(packed.data(), k, n, words);
+            const double miss = std::pow(10.0, -cfg.leonMissExponent);
+            const Leon::Plan planPlain = Leon::plan(n, k, c.weight, miss, gpu, nullptr, cfg.window);
+            const Leon::Plan planOrbit = Leon::plan(n, k, c.weight, miss, gpu, nullptr, cfg.window, sym);
+            const double plainWork = double(plainTrials) * planPlain.costPerTrial;
+            const double orbitWork = double(orbitTrials) * planOrbit.costPerTrial;
+            bool ok = !orbits.isEmpty() && sym.active() && orbitWork < plainWork;
+            QStringList problems;
+            if (!sym.active()) problems << QStringLiteral("симметрия не найдена");
+            if (orbitWork >= plainWork) problems << QStringLiteral("работы не меньше");
+            for (int w = 1; w <= c.weight; ++w) {
+                if (orbits.value(w, 0) != exact.value(w, 0)) {
+                    ok = false;
+                    problems << QStringLiteral("вес %1: точно %2, по орбитам %3").arg(w).arg(exact.value(w, 0)).arg(orbits.value(w, 0));
+                }
+                if (plain.value(w, 0) != exact.value(w, 0)) {
+                    ok = false;
+                    problems << QStringLiteral("вес %1: точно %2, по словам %3").arg(w).arg(exact.value(w, 0)).arg(plain.value(w, 0));
+                }
+            }
+            expectLeon(QStringLiteral("%1 %2 до веса %3: работы в %4 раза меньше (попыток %5 по %6 строк "
+                                      "против %7 по %8), %9 с против %10 с")
+                           .arg(c.name).arg(who).arg(c.weight)
+                           .arg(plainWork / std::max(1.0, orbitWork), 0, 'f', 1)
+                           .arg(orbitTrials).arg(planOrbit.rows).arg(plainTrials).arg(planPlain.rows)
+                           .arg(orbitSec, 0, 'f', 2).arg(plainSec, 0, 'f', 2),
+                       ok, problems.join(QStringLiteral("; ")));
+        }
+    }
+
+    // Список слов наружу — все слова каждой орбиты: код произведения строит
+    // из них наборы. Сверка с полным перебором компоненты.
+    {
+        const QStringList rows = Bch::build(5, 2, false, 0).rows;   // [31,21], d = 5
+        Worker worker;
+        RunConfig cfg;
+        cfg.matrix     = rows;
+        cfg.algorithm  = Algorithm::RandomInfoSets;
+        cfg.leonWeight = 8;
+        cfg.device     = ComputeDevice::Cpu;
+        worker.setSettings(makeSettings(cfg));
+        worker.setAutosaveRoot(autosaveRoot());
+        worker.setKeepFoundWords(true);
+        clearCheckpoints();
+        worker.computeSpectrum();
+        clearCheckpoints();
+        const Product::Component brute = Product::bruteForce(rows, 8);
+        std::set<std::vector<quint64>> listed, expected;
+        const int words = brute.wordsPerRow;
+        for (size_t i = 0; i < worker.foundWeights().size(); ++i)
+            listed.insert(std::vector<quint64>(worker.foundWords().begin() + ptrdiff_t(i * words),
+                                               worker.foundWords().begin() + ptrdiff_t((i + 1) * words)));
+        for (quint64 i = 0; i < brute.wordCount(); ++i)
+            expected.insert(std::vector<quint64>(brute.word(size_t(i)), brute.word(size_t(i)) + words));
+        expectLeon(QStringLiteral("БЧХ [31,21]: слова до веса 8 наружу — все сдвиги (%1 слов, перебором %2)")
+                       .arg(listed.size()).arg(expected.size()),
+                   listed == expected && worker.foundWeights().size() == listed.size(),
+                   QStringLiteral("списки разные"));
+    }
+}
+
+// Точный спектр через дуальный код (Мак-Вильямс), для сверки поиска на
+// кодах, где прямой перебор невозможен, а дуальный — да.
+//
+// Запуск: SpectrumTests.exe --dual-run <файл|bch:m,r|hamming:r> [до веса] [cpu|gpu]
+static int dualRun(const QString& path, int upTo, const QString& device)
+{
+    RunConfig cfg;
+    if (!loadMatrixOrCase(path, cfg))
+        return 2;
+    cfg.algorithm  = Algorithm::DualCode;
+    cfg.device     = device == QStringLiteral("gpu") ? ComputeDevice::Gpu : ComputeDevice::Cpu;
+    cfg.threadsCpu = omp_get_num_procs();
+    const int k = cfg.matrix.size(), n = cfg.matrix.first().length();
+    g_out << QStringLiteral("[%1,%2], дуальный перебор 2^%3").arg(n).arg(k).arg(n - k) << Qt::endl;
+    g_out.flush();
+    clearCheckpoints();
+    const auto t = std::chrono::steady_clock::now();
+    const Spectrum spectrum = runWorker(cfg);
+    const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
+    clearCheckpoints();
+    g_out << QStringLiteral("%1 с").arg(sec, 0, 'f', 1) << Qt::endl;
+    for (auto it = spectrum.cbegin(); it != spectrum.cend() && (upTo <= 0 || it.key() <= upTo); ++it)
+        g_out << QStringLiteral("   %1  %2").arg(it.key(), 3).arg(it.value(), 12) << Qt::endl;
+    return 0;
+}
+
 static int leonRun(const QString& path, int weight, int missExponent, const QString& device)
 {
     RunConfig cfg;
@@ -3338,15 +3665,24 @@ static int leonRun(const QString& path, int weight, int missExponent, const QStr
     cfg.device           = device.startsWith(QStringLiteral("gpu")) ? ComputeDevice::Gpu : ComputeDevice::Cpu;
     cfg.threadsCpu       = omp_get_num_procs();
     // «cpu-plain» — процессор без окна Штерна–Дюмера, для сравнения;
-    // «gpu-window» — видеокарта с окном.
-    cfg.window.cpu = device != QStringLiteral("cpu-plain");
-    cfg.window.gpu = device == QStringLiteral("gpu-window");
+    // «gpu-window» — видеокарта с окном; «-words» в конце — без поиска по
+    // орбитам у циклического кода.
+    cfg.window.cpu    = !device.startsWith(QStringLiteral("cpu-plain"));
+    cfg.window.gpu    = device.startsWith(QStringLiteral("gpu-window"));
+    cfg.cyclicSearch  = !device.endsWith(QStringLiteral("-words"));
 
     const int k = cfg.matrix.size();
     const int n = cfg.matrix.first().length();
+    int words = 0;
+    const std::vector<quint64> packed = InfoSets::packRows(cfg.matrix, words);
+    const Cyclic::Symmetry symmetry = cfg.cyclicSearch ? Cyclic::find(packed.data(), k, n, words)
+                                                       : Cyclic::Symmetry();
+    if (symmetry.active())
+        g_out << QStringLiteral("циклический код: сдвиг столбцов [%1, %2), поиск по орбитам")
+                     .arg(symmetry.start).arg(symmetry.start + symmetry.length) << Qt::endl;
     const Leon::SternProfile profile = Leon::sternProfile(cfg.matrix);
     const Leon::Plan plan = Leon::plan(n, k, weight, std::pow(10.0, -missExponent),
-                                       cfg.device == ComputeDevice::Gpu, &profile, cfg.window);
+                                       cfg.device == ComputeDevice::Gpu, &profile, cfg.window, symmetry);
     g_out << QStringLiteral("[%1,%2], все слова до веса %3, пропуск 10^-%4, %8: %5 строк за попытку%9, попыток %6, слов %7")
                  .arg(n).arg(k).arg(weight).arg(missExponent)
                  .arg(plan.rows).arg(plan.trials).arg(double(plan.trials) * plan.wordsPerTrial, 0, 'g', 3)
@@ -3968,6 +4304,15 @@ int main(int argc, char* argv[])
         return rc;
     }
 
+    const int dualAt = args.indexOf(QStringLiteral("--dual-run"));
+    if (dualAt >= 0 && dualAt + 1 < args.size()) {
+        const int upTo = dualAt + 2 < args.size() ? args.at(dualAt + 2).toInt() : 0;
+        const QString device = dualAt + 3 < args.size() ? args.at(dualAt + 3).toLower() : QStringLiteral("cpu");
+        const int rc = dualRun(args.at(dualAt + 1), upTo, device);
+        g_out.flush();
+        return rc;
+    }
+
     const int leonAt = args.indexOf(QStringLiteral("--leon-run"));
     if (leonAt >= 0 && leonAt + 2 < args.size()) {
         const int missExp = leonAt + 3 < args.size() ? args.at(leonAt + 3).toInt() : 9;
@@ -4074,6 +4419,8 @@ int main(int argc, char* argv[])
     testBzPartialLayer();
     testLeonModel();
     testLeonWorker();
+    testCyclicSymmetry();
+    testLeonCyclic();
     testBchCode();
     testHammingCode();
     testProductCode();
