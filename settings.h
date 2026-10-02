@@ -3,6 +3,31 @@
 #include <qjsonarray.h>
 #include <qhash.h>
 
+// Счётчики до 2^64 в JSON автосохранения.
+//
+// Пишутся строкой. Числом их писать нельзя: Qt 5 выводит JSON-числа в текст
+// через double, и всё, что больше 2^53, округляется. У кода Грея при k >= 54
+// это и точка продолжения, и сами числа спектра, а 2^63 и больше при
+// приведении к qint64 вдобавок становились отрицательными.
+//
+// Читаются и строки, и числа — записи, сделанные до перехода на строки.
+// Обратно тоже совместимо: прежняя версия читает эти поля через
+// toVariant().toULongLong(), а он разбирает и строку.
+namespace JsonU64
+{
+    inline QJsonValue write(quint64 value)
+    {
+        return QString::number(value);
+    }
+
+    inline quint64 read(const QJsonValue& value)
+    {
+        if (value.isString())
+            return value.toString().toULongLong();
+        return value.toVariant().toULongLong();
+    }
+}
+
 enum TimeInterval {
     OneSecond = 1,
     FiveSeconds = 5,
@@ -336,15 +361,15 @@ struct RunState {
     {
         QJsonObject obj;
 
-        obj["rOffset"] = static_cast<qint64>(rOffset);
-        obj["chunkOffset"] = static_cast<qint64>(chunkOffset);
-        obj["doneOps"] = static_cast<qint64>(doneOps);
+        obj["rOffset"] = JsonU64::write(rOffset);
+        obj["chunkOffset"] = JsonU64::write(chunkOffset);
+        obj["doneOps"] = JsonU64::write(doneOps);
         obj["elapsedSec"] = static_cast<qint64>(elapsedSec);
 
         // spectrum
         QJsonArray arr;
         for (quint64 v : spectrum) {
-            arr.append(static_cast<qint64>(v));
+            arr.append(JsonU64::write(v));
         }
         obj["spectrum"] = arr;
 
@@ -354,9 +379,9 @@ struct RunState {
     {
         RunState s;
 
-        s.rOffset = obj["rOffset"].toVariant().toULongLong();
-        s.chunkOffset = obj["chunkOffset"].toVariant().toULongLong();
-        s.doneOps = obj["doneOps"].toVariant().toULongLong();
+        s.rOffset = JsonU64::read(obj["rOffset"]);
+        s.chunkOffset = JsonU64::read(obj["chunkOffset"]);
+        s.doneOps = JsonU64::read(obj["doneOps"]);
         s.elapsedSec = obj["elapsedSec"].toVariant().toLongLong();
 
         // spectrum
@@ -365,7 +390,7 @@ struct RunState {
             s.spectrum.resize(arr.size());
 
             for (int i = 0; i < arr.size(); ++i) {
-                s.spectrum[i] = arr[i].toVariant().toULongLong();
+                s.spectrum[i] = JsonU64::read(arr[i]);
             }
         }
 

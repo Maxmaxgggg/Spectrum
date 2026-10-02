@@ -983,6 +983,49 @@ static void testAutosaveStore()
                        && back.maxRows == record.maxRows
                        && back.enumType == record.enumType);
 
+    // Счётчики больше 2^53 обязаны пережить запись без потерь. Числом в
+    // JSON-тексте Qt 5 выводит их через double: 2^53 + 1 читался обратно как
+    // 2^53, а 2^63 после приведения к qint64 становился отрицательным. У кода
+    // Грея при k >= 54 так округлялись и точка продолжения, и числа спектра.
+    {
+        const Matrix c = Reference::identity(9);
+        AutosaveRecord big = record;
+        big.state.chunkOffset = 1ULL << 63;
+        big.state.doneOps     = (1ULL << 53) + 1;
+        big.state.spectrum    = QVector<quint64>{ 1, (1ULL << 53) + 1, (1ULL << 63) + 5, ~0ULL };
+        AutosaveRecord leon = big;
+        leon.algorithm  = Algorithm::RandomInfoSets;
+        leon.leonTrials = (1ULL << 53) + 1;
+        store.save(c, big);
+        store.save(c, leon);
+
+        AutosaveRecord bigBack, leonBack;
+        const bool bigLoaded = store.load(c, Algorithm::SimpleXor, bigBack)
+                            && store.load(c, Algorithm::RandomInfoSets, leonBack);
+        expectStore(QStringLiteral("счётчики больше 2^53 читаются без потерь"),
+                    bigLoaded && bigBack.state.chunkOffset == big.state.chunkOffset
+                              && bigBack.state.doneOps == big.state.doneOps
+                              && bigBack.state.spectrum == big.state.spectrum
+                              && leonBack.leonTrials == leon.leonTrials);
+
+        // Записи прежнего формата, с числами вместо строк, читаются как раньше.
+        const QString folder = root + QLatin1Char('/') + AutosaveStore::folderName(c);
+        QFile old(folder + QStringLiteral("/gray.json"));
+        const bool written = old.open(QIODevice::WriteOnly)
+            && old.write("{\"version\":1,\"algorithm\":1,\"enumType\":0,\"maxRows\":0,"
+                         "\"finished\":false,\"savedAt\":\"2026-01-01T00:00:00\","
+                         "\"state\":{\"rOffset\":0,\"chunkOffset\":17,\"doneOps\":1234,"
+                         "\"elapsedSec\":42,\"spectrum\":[1,0,5,9]}}") > 0;
+        old.close();
+        AutosaveRecord oldBack;
+        expectStore(QStringLiteral("запись прежнего формата с числами читается"),
+                    written && store.load(c, Algorithm::GrayCode, oldBack)
+                            && oldBack.state.chunkOffset == 17
+                            && oldBack.state.doneOps == 1234
+                            && oldBack.state.spectrum == QVector<quint64>{ 1, 0, 5, 9 });
+        store.removeFolder(AutosaveStore::folderName(c));
+    }
+
     expectStore(QStringLiteral("чужой алгоритм не подхватывается"),
                 !store.load(a, Algorithm::GrayCode, back));
     expectStore(QStringLiteral("чужая матрица не подхватывается"),

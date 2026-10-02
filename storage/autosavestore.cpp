@@ -59,7 +59,7 @@ QJsonObject AutosaveRecord::toJson() const
     if (algorithm == ComputationSettings::RandomInfoSets) {
         obj["leonWeight"]       = leonWeight;
         obj["leonMissExponent"] = leonMissExponent;
-        obj["leonTrials"]       = qint64(leonTrials);
+        obj["leonTrials"]       = JsonU64::write(leonTrials);
     }
     if (algorithm == ComputationSettings::ProductCode) {
         obj["productWeight"]    = productWeight;
@@ -89,7 +89,7 @@ AutosaveRecord AutosaveRecord::fromJson(const QJsonObject& obj)
     }
     r.leonWeight       = obj["leonWeight"].toInt();
     r.leonMissExponent = obj["leonMissExponent"].toInt();
-    r.leonTrials       = quint64(obj["leonTrials"].toVariant().toLongLong());
+    r.leonTrials       = JsonU64::read(obj["leonTrials"]);
     r.productWeight    = obj["productWeight"].toInt();
     r.productRank      = obj["productRank"].toInt();
     r.productRows1     = obj["productRows1"].toInt();
