@@ -53,6 +53,18 @@
     <ClCompile Include="compute\worker.cpp">
       <Filter>compute</Filter>
     </ClCompile>
+    <ClCompile Include="compute\worker_cpu.cpp">
+      <Filter>compute</Filter>
+    </ClCompile>
+    <ClCompile Include="compute\worker_gpu.cpp">
+      <Filter>compute</Filter>
+    </ClCompile>
+    <ClCompile Include="compute\worker_leon.cpp">
+      <Filter>compute</Filter>
+    </ClCompile>
+    <ClCompile Include="compute\worker_product.cpp">
+      <Filter>compute</Filter>
+    </ClCompile>
     <ClCompile Include="compute\dualcode.cpp">
       <Filter>compute</Filter>
     </ClCompile>

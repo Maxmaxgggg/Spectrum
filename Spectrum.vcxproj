@@ -19,6 +19,10 @@
     <ClCompile Include="compute\leonsearch.cpp" />
     <ClCompile Include="compute\productcode.cpp" />
     <ClCompile Include="compute\worker.cpp" />
+    <ClCompile Include="compute\worker_cpu.cpp" />
+    <ClCompile Include="compute\worker_gpu.cpp" />
+    <ClCompile Include="compute\worker_leon.cpp" />
+    <ClCompile Include="compute\worker_product.cpp" />
     <ClCompile Include="helpers\workwithmatrix.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="qcustomplot.cpp" />

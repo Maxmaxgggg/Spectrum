@@ -2,6 +2,8 @@
 #define WORKER_H
 
 #include <atomic>
+#include <chrono>
+#include <functional>
 #include <QThread>
 #include <cmath>
 #include <omp.h>
@@ -23,7 +25,6 @@
 #include "spectrumring.h"
 #include "autosavestore.h"
 
-using namespace std::chrono;
 enum LoadMode {
     Reset,
     FromCheckpoint,
@@ -81,6 +82,42 @@ struct CodeGeometry
     double                leonWordsPerTrial = 0.0;
     int                   leonWindow        = 0;     // окно Штерна–Дюмера; 0 — без окна
     double                leonPairs         = 0.0;   // пар списков за попытку по профилю ключей
+};
+
+// Кусок слоя, уходящий в один запуск ядра или один параллельный проход.
+//
+// Слой r у Брауэра–Циммермана — это C(k, r) сочетаний на каждое множество,
+// подряд: сначала все сочетания первого, потом второго и так далее. Номер в
+// слое (chunkOffset) сквозной, поэтому чекпоинты устроены так же, как в
+// обычном расчёте. Кусок никогда не пересекает границу множества: ядру
+// нужна одна матрица и один номер множества на запуск. У кода Грея слой
+// один и множество одно — кусок задаёт номера масок.
+struct LayerSlice
+{
+    MatrixSlot slot;
+    quint64    offset = 0;   // номер первого сочетания внутри своего множества
+    quint64    size   = 0;
+};
+
+// Что перебирать и как — для Worker::runChunks. Общий цикл ведёт слои и
+// чанки, паузу и отмену, ход расчёта, снимки спектра и чекпоинты; путь
+// перебора задаёт только размеры и перебор одного чанка.
+struct ChunkPlan
+{
+    // Слои по числу складываемых строк: простой XOR и Брауэр–Циммерман. У
+    // кода Грея (и дуального расчёта) слой один — все 2^k масок подряд.
+    bool    layered     = true;
+    quint64 lastLayer   = 0;
+    quint64 totalOps    = 0;
+    quint64 chunkTarget = 0;
+    // Сочетаний в слое на одно множество.
+    std::function<quint64(quint64 layer)> layerSize;
+    // Перебор чанка. false — прерван отменой: результат чанка отброшен
+    // целиком и не попадает ни в спектр, ни в чекпоинт.
+    std::function<bool(quint64 layer, const LayerSlice& slice)> run;
+    // Поток видеокарты, в который идут ядра; nullptr — расчёт на процессоре,
+    // и спектр уже лежит в h_spectrum.
+    cudaStream_t stream = nullptr;
 };
 
 Q_DECLARE_METATYPE(LoadMode)
@@ -211,15 +248,23 @@ private:
     // Выбирает вычислительную функцию по алгоритму, устройству и длине кода.
     void dispatchComputation(const CodeGeometry& g);
     // Финальная выгрузка спектра, сигналы и освобождение ресурсов.
-    void finishComputation(const CodeGeometry& g, steady_clock::time_point startedAt);
+    void finishComputation(const CodeGeometry& g, std::chrono::steady_clock::time_point startedAt);
 
     /* Функции для расчета спектра кода */
+    // Общий цикл перебора по слоям и чанкам — см. ChunkPlan.
+    void runChunks(const CodeGeometry& g, const ChunkPlan& plan);
     void computeSpectrumGpuGrayShort  (const CodeGeometry& g);
     void computeSpectrumGpuNoGrayShort(const CodeGeometry& g);
     void computeSpectrumGpuNoGrayLong (const CodeGeometry& g);
     void computeSpectrumCpuGrayShort  (const CodeGeometry& g);
     void computeSpectrumCpuNoGrayShort(const CodeGeometry& g);
     void computeSpectrumCpuNoGrayLong (const CodeGeometry& g);
+    // Перебор одного чанка на процессоре; false — прерван отменой.
+    bool cpuGrayChunk    (const CodeGeometry& g, const LayerSlice& s);
+    bool cpuXorShortChunk(const CodeGeometry& g, quint64 r, const LayerSlice& s);
+    bool cpuXorLongChunk (const CodeGeometry& g, quint64 r, const LayerSlice& s, quint64 masksPerThread);
+    // Итоговая копия спектра с видеокарты в h_spectrum.
+    void copySpectrumFromDevice(int numOfCols);
     // Случайный поиск по информационным множествам, CPU и GPU.
     void computeSpectrumLeon          (const CodeGeometry& g);
     // Код произведения: низ спектра по компонентам.
@@ -252,17 +297,14 @@ private:
     // finished — расчёт дошёл до конца. Такая запись не удаляется: по ней
     // потом можно досчитать спектр до большего числа строк, а не с нуля.
     void    makeCheckpoint(int numOfCols, bool finished = false);
-    // Чекпоинт для GPU-путей: спектр надо забрать с устройства синхронно.
-    // Поток передаётся явно — длинный путь работает на собственном, а не на
-    // потоке класса. false — ошибка CUDA, расчёт продолжать нельзя.
-    bool    saveGpuCheckpoint(cudaStream_t s, int numOfCols,
-                              quint64 rOffset, quint64 chunkOffset);
-    // Чекпоинт для CPU-путей: спектр уже лежит в h_spectrum.
-    void    saveCpuCheckpoint(int numOfCols, quint64 rOffset, quint64 chunkOffset);
+    // Чекпоинт по ходу перебора. gpuStream — поток, после которого спектр
+    // забирается с видеокарты; nullptr — CPU, спектр уже в h_spectrum.
+    void    saveCheckpoint(cudaStream_t gpuStream, int numOfCols,
+                           quint64 rOffset, quint64 chunkOffset);
     // Останавливает расчёт, если задан порог из setCheckpointOpsPolicy.
     void    stopIfOpsLimitReached();
 
-    /* Отчёт о ходе расчёта — общий для всех шести вычислительных путей */
+    /* Отчёт о ходе расчёта */
     void    reportEstimate();
     void    reportProgressBar();
     // Ход шага, у которого своя единица работы (код произведения).
@@ -274,7 +316,6 @@ private:
 
     std::atomic<int> paused    { 0 };
     std::atomic<int> cancelled { 0 };
-    std::atomic_bool requestRunState = false;
 
     ComputationSettings         settings;
     RunState                    runState;
