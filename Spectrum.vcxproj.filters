@@ -67,6 +67,15 @@
     <ClInclude Include="compute\dualcode.h">
       <Filter>compute</Filter>
     </ClInclude>
+    <ClInclude Include="compute\bitops.h">
+      <Filter>compute</Filter>
+    </ClInclude>
+    <ClInclude Include="compute\mixing.h">
+      <Filter>compute</Filter>
+    </ClInclude>
+    <ClInclude Include="compute\wordvariants.h">
+      <Filter>compute</Filter>
+    </ClInclude>
     <ClInclude Include="helpers\workwithmatrix.h">
       <Filter>helpers</Filter>
     </ClInclude>

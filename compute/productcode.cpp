@@ -2,11 +2,9 @@
 
 #include "infosets.h"
 
-#include <omp.h>
+#include "bitops.h"
 
-#ifdef _MSC_VER
-    #include <intrin.h>
-#endif
+#include <omp.h>
 
 #include <algorithm>
 #include <atomic>
@@ -17,26 +15,6 @@ namespace Product {
 int bruteForceMaxK = 28;
 
 namespace {
-
-inline int popcount64(quint64 v)
-{
-#ifdef _MSC_VER
-    return int(__popcnt64(v));
-#else
-    return __builtin_popcountll(v);
-#endif
-}
-
-inline int trailingZeros(quint64 v)
-{
-#ifdef _MSC_VER
-    unsigned long index = 0;
-    _BitScanForward64(&index, v);
-    return int(index);
-#else
-    return __builtin_ctzll(v);
-#endif
-}
 
 // Ячейки профиля набора: для каждого ненулевого u — сколько позиций x, где
 // (a_1(x), …, a_r(x)) = u.
@@ -53,7 +31,7 @@ void cellsOf(const std::vector<const quint64*>& tuple, int words, std::vector<in
                 const quint64 a = tuple[size_t(i)][w];
                 acc &= (u >> i) & 1 ? a : ~a;
             }
-            total += popcount64(acc);
+            total += Bits::popcount64(acc);
         }
         // Дополнение за пределами n даёт единицы в старших битах, но хотя бы
         // один множитель у ненулевого u — само слово, там они нули.
@@ -105,7 +83,7 @@ Component bruteForce(const QStringList& rows, int wordsUpTo,
         for (quint64 idx = start; idx < end; ++idx) {
             int weight = 0;
             for (int w = 0; w < words; ++w)
-                weight += popcount64(word[size_t(w)]);
+                weight += Bits::popcount64(word[size_t(w)]);
             ++spectrum[size_t(weight)];
             if (weight > 0 && weight <= wordsUpTo) {
                 mine.insert(mine.end(), word.begin(), word.end());
@@ -125,7 +103,7 @@ Component bruteForce(const QStringList& rows, int wordsUpTo,
             const quint64 next = idx + 1;
             if (next >= total)
                 break;
-            const int flip = trailingZeros(next);
+            const int flip = Bits::lowestSetBit(next);
             for (int w = 0; w < words; ++w)
                 word[size_t(w)] ^= packed[size_t(flip) * words + w];
         }
@@ -302,7 +280,7 @@ struct ProfileWalker
                 quint64* dst = span.data() + size_t(base + 1 + j) * words;
                 for (int w = 0; w < words; ++w) {
                     dst[w] = a[w] ^ p[w];
-                    wt += popcount64(dst[w]);
+                    wt += Bits::popcount64(dst[w]);
                 }
                 if (wt == 0) { dependent = true; break; }
                 spanWeights[size_t(base + 1 + j)] = wt;
@@ -492,7 +470,7 @@ std::vector<quint64> rankR(const ProfileMap& p1, const ProfileMap& p2, int r, qu
         for (int u = 1; u <= cellCount; ++u) {
             int sum = 0;
             for (int v = 1; v <= cellCount; ++v)
-                if (popcount64(quint64(u & v)) & 1)
+                if (Bits::popcount64(quint64(u & v)) & 1)
                     sum += q[size_t(v - 1)];
             rt.wq[size_t(u - 1)] = sum;
         }

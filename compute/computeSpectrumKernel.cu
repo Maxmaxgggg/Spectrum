@@ -3,6 +3,8 @@
 #include <stdexcept>
 
 #include "computeSpectrumKernel.cuh"
+#include "bitops.h"
+#include "wordvariants.h"
 
 // Порождающая матрица в константной памяти.
 // Имя намеренно не d_matrix: так называется параметр ядра длинных кодов, и
@@ -87,27 +89,6 @@ __device__ inline quint64 generateBitMaskGPU(const quint64* binomTable, unsigned
     return mask;
 }
 
-__device__ inline int bitPosFromSingleBit(quint64 x) {
-    return __ffsll(x) - 1;
-}
-
-// Следующая маска с тем же числом единиц в возрастающем числовом порядке —
-// приём Госпера. Деление из классической записи заменено сдвигом: младший
-// установленный бит есть степень двойки, и его позиция и есть величина сдвига.
-//
-// Вызывать только при v != 0 и только когда следующая комбинация существует.
-__device__ __forceinline__ quint64 gosperNext(quint64 v)
-{
-    const int     t  = __ffsll(v) - 1;      // позиция младшей единицы
-    const quint64 rr = v + (1ULL << t);
-    return rr | ((v ^ rr) >> (t + 2));
-}
-
-// Разворот младших k бит: бит p переходит в позицию k-1-p.
-__device__ __forceinline__ quint64 reverseLowBits(quint64 v, int k)
-{
-    return __brevll(v) >> (64 - k);
-}
 // Функция для генерации следующего массива позиций из текущего
 __device__ __forceinline__ bool nextPositions(int16_t* a, int k, int n)
 {
@@ -257,18 +238,6 @@ __device__ __forceinline__ void xorRowFromShared(quint64* codeword,
     }
 }
 
-// Число слов, известное на этапе компиляции: округляем вверх до ближайшего
-// заготовленного варианта. Лишние слова дозаполняются нулями, что безопасно —
-// биты за numOfCols в матрице всегда нули, а XOR и popcount с нулём ничего не
-// меняют. Ноль означает «подходящего варианта нет, берём размер из аргумента».
-static int pickWordCount(int wordsPerRow)
-{
-    static const int sizes[] = { 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32 };
-    for (int candidate : sizes)
-        if (candidate >= wordsPerRow) return candidate;
-    return 0;
-}
-
 
 // Определение ниже; здесь оно нужно обёртке запуска.
 template <int WORDS>
@@ -301,7 +270,7 @@ __host__ void launchSpectrumKernelShort(
     // Выбираем вариант ядра, у которого число слов известно на этапе
     // компиляции. Округляем вверх до ближайшего заготовленного: лишние слова
     // заполняются нулями, а XOR и popcount с нулём результата не меняют.
-    const int words = pickWordCount(blockCount);
+    const int words = paddedWordCount(blockCount);
 
     // Гистограмма плюс копия матрицы: она уезжает в разделяемую память, потому
     // что нити варпа читают разные строки, а константная память такое дробит.
@@ -310,24 +279,15 @@ __host__ void launchSpectrumKernelShort(
     const size_t sharedBytes =
         (size_t)(((n + 2) & ~1) + k * (words > 0 ? words : blockCount)) * sizeof(quint64);
 
-    // Одной строкой намеренно: перенос со слэшем внутри define читается хуже,
-    // чем длинная строка.
-    #define LAUNCH_SHORT(W) computeSpectrumKernelShortT<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(d_spectrum, d_binomTable, n, k, blockCount, chunkOffset, chunkSize, r, slot)
-
-    switch (words) {
-        case  1: LAUNCH_SHORT( 1); break;   case  2: LAUNCH_SHORT( 2); break;
-        case  3: LAUNCH_SHORT( 3); break;   case  4: LAUNCH_SHORT( 4); break;
-        case  5: LAUNCH_SHORT( 5); break;   case  6: LAUNCH_SHORT( 6); break;
-        case  7: LAUNCH_SHORT( 7); break;   case  8: LAUNCH_SHORT( 8); break;
-        case 10: LAUNCH_SHORT(10); break;   case 12: LAUNCH_SHORT(12); break;
-        case 14: LAUNCH_SHORT(14); break;   case 16: LAUNCH_SHORT(16); break;
-        case 20: LAUNCH_SHORT(20); break;   case 24: LAUNCH_SHORT(24); break;
-        case 28: LAUNCH_SHORT(28); break;   case 32: LAUNCH_SHORT(32); break;
-        // Запасной путь: размер берётся из аргумента, кодовое слово живёт в
-        // локальной памяти. Сюда попасть не должно.
-        default: LAUNCH_SHORT( 0); break;
-    }
-    #undef LAUNCH_SHORT
+    auto launch = [&](auto w) {
+        constexpr int W = decltype(w)::value;
+        computeSpectrumKernelShortT<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(
+            d_spectrum, d_binomTable, n, k, blockCount, chunkOffset, chunkSize, r, slot);
+    };
+    // Запасной путь: размер берётся из аргумента, кодовое слово живёт в
+    // локальной памяти. Сюда попасть не должно.
+    if (!dispatchWords(words, launch))
+        launch(std::integral_constant<int, 0>());
 
     checkLaunch("ядро коротких кодов", numOfBlocks, threadsPerBlock, sharedBytes);
 }
@@ -416,14 +376,14 @@ __global__ void computeSpectrumKernelShortT(
         // числовой индекс) и идём Госпером вперёд. Внутри нити порядок обхода
         // получается обратным, но для гистограммы это безразлично: набор
         // комбинаций тот же самый.
-        quint64 revMask = reverseLowBits(
+        quint64 revMask = Bits::reverseLowBits(
             generateBitMaskGPU(d_binomTable, (unsigned)k, (unsigned)r,
                                chunkOffset + end - 1), k);
 
         // Бит p развёрнутой маски соответствует строке k-1-p.
         quint64 temp = revMask;
         while (temp) {
-            const int p = bitPosFromSingleBit(temp & -temp);
+            const int p = Bits::lowestSetBit(temp);
             temp &= (temp - 1);
             xorRowFromShared<WORDS>(codeword, &s_matrix[(k - 1 - p) * words], words);
         }
@@ -450,13 +410,13 @@ __global__ void computeSpectrumKernelShortT(
         // При r = 0 и r = k комбинация всего одна, и цикл не выполняется —
         // gosperNext на нулевой маске звать нельзя.
         for (quint64 i = 1; i < count; ++i) {
-            const quint64 nextRev = gosperNext(revMask);
+            const quint64 nextRev = Bits::gosperNext(revMask);
 
             // Вошедшие и вышедшие строки XOR-ятся одинаково: XOR сам себе
             // обратен, разделять их незачем.
             quint64 changed = revMask ^ nextRev;
             while (changed) {
-                const int p = bitPosFromSingleBit(changed & -changed);
+                const int p = Bits::lowestSetBit(changed);
                 changed &= (changed - 1);
                 xorRowFromShared<WORDS>(codeword, &s_matrix[(k - 1 - p) * words], words);
             }
@@ -526,7 +486,7 @@ __host__ void launchSpectrumKernelLong(
     // строки, а и константная память такой запрос дробит, и глобальная тут не
     // лучший вариант. Но у длинных кодов матрица бывает до полумегабайта, и
     // тогда она туда просто не помещается — в этом случае читаем как раньше.
-    const int words = pickWordCount(wordsPerRow);
+    const int words = paddedWordCount(wordsPerRow);
 
     // Матрицу выгодно держать в разделяемой памяти: нити варпа читают разные
     // строки, а константная память такой запрос дробит. Но у длинных кодов
@@ -539,20 +499,14 @@ __host__ void launchSpectrumKernelLong(
     const bool   stageMatrix = (histogramBytes + matrixBytes) <= Constants::MAX_SHARED_BYTES;
     const size_t sharedBytes = histogramBytes + (stageMatrix ? matrixBytes : 0);
 
-    #define LAUNCH_LONG(W) computeSpectrumKernelLongT<W><<<numBlocks, threadsPerBlock, sharedBytes, stream>>>(d_spectrum, matrixGlobal, numCols, numRows, wordsPerRow, chunkSize, d_startPositions, masksPerThread, numStartMasks, numOfOnes, d_maskCounter, stageMatrix, slot)
-
-    switch (words) {
-        case  1: LAUNCH_LONG( 1); break;   case  2: LAUNCH_LONG( 2); break;
-        case  3: LAUNCH_LONG( 3); break;   case  4: LAUNCH_LONG( 4); break;
-        case  5: LAUNCH_LONG( 5); break;   case  6: LAUNCH_LONG( 6); break;
-        case  7: LAUNCH_LONG( 7); break;   case  8: LAUNCH_LONG( 8); break;
-        case 10: LAUNCH_LONG(10); break;   case 12: LAUNCH_LONG(12); break;
-        case 14: LAUNCH_LONG(14); break;   case 16: LAUNCH_LONG(16); break;
-        case 20: LAUNCH_LONG(20); break;   case 24: LAUNCH_LONG(24); break;
-        case 28: LAUNCH_LONG(28); break;   case 32: LAUNCH_LONG(32); break;
-        default: LAUNCH_LONG( 0); break;
-    }
-    #undef LAUNCH_LONG
+    auto launch = [&](auto w) {
+        constexpr int W = decltype(w)::value;
+        computeSpectrumKernelLongT<W><<<numBlocks, threadsPerBlock, sharedBytes, stream>>>(
+            d_spectrum, matrixGlobal, numCols, numRows, wordsPerRow, chunkSize, d_startPositions,
+            masksPerThread, numStartMasks, numOfOnes, d_maskCounter, stageMatrix, slot);
+    };
+    if (!dispatchWords(words, launch))
+        launch(std::integral_constant<int, 0>());
 
     checkLaunch("ядро длинных кодов", numBlocks, threadsPerBlock, sharedBytes);
 }
@@ -739,27 +693,20 @@ __host__ void launchSpectrumKernelGrayShort(
     quint64 chunkSize      // сколько Gray-элементов в чанке
 ) {
     validateLaunchParams(blockCount, n);
-    const int words = pickWordCount(blockCount);
+    const int words = paddedWordCount(blockCount);
     // Гистограмма плюс копия матрицы — см. ядро простого XOR.
     // Гистограмма дополнена до чётного числа слов: так строка матрицы ложится
     // на адрес, кратный 16, и читается по два слова за раз.
     const size_t sharedBytes =
         (size_t)(((n + 2) & ~1) + k * (words > 0 ? words : blockCount)) * sizeof(quint64);
 
-    #define LAUNCH_GRAY(W) computeSpectrumKernelGrayShortT<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(d_spectrum, n, k, blockCount, chunkOffset, chunkSize)
-
-    switch (words) {
-        case  1: LAUNCH_GRAY( 1); break;   case  2: LAUNCH_GRAY( 2); break;
-        case  3: LAUNCH_GRAY( 3); break;   case  4: LAUNCH_GRAY( 4); break;
-        case  5: LAUNCH_GRAY( 5); break;   case  6: LAUNCH_GRAY( 6); break;
-        case  7: LAUNCH_GRAY( 7); break;   case  8: LAUNCH_GRAY( 8); break;
-        case 10: LAUNCH_GRAY(10); break;   case 12: LAUNCH_GRAY(12); break;
-        case 14: LAUNCH_GRAY(14); break;   case 16: LAUNCH_GRAY(16); break;
-        case 20: LAUNCH_GRAY(20); break;   case 24: LAUNCH_GRAY(24); break;
-        case 28: LAUNCH_GRAY(28); break;   case 32: LAUNCH_GRAY(32); break;
-        default: LAUNCH_GRAY( 0); break;
-    }
-    #undef LAUNCH_GRAY
+    auto launch = [&](auto w) {
+        constexpr int W = decltype(w)::value;
+        computeSpectrumKernelGrayShortT<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(
+            d_spectrum, n, k, blockCount, chunkOffset, chunkSize);
+    };
+    if (!dispatchWords(words, launch))
+        launch(std::integral_constant<int, 0>());
 
     checkLaunch("ядро кода Грея", numOfBlocks, threadsPerBlock, sharedBytes);
 }
@@ -825,7 +772,7 @@ __global__ void computeSpectrumKernelGrayShortT(
         // 6) полный XOR для начальной маски
         quint64 temp = mask;
         while (temp) {
-            const int pos = bitPosFromSingleBit(temp & (~temp + 1ULL));
+            const int pos = Bits::lowestSetBit(temp);
             temp &= (temp - 1ULL);
             xorRowFromShared<WORDS>(codeword, &s_matrix[pos * words], words);
         }
@@ -845,7 +792,7 @@ __global__ void computeSpectrumKernelGrayShortT(
 
             quint64 changed = mask ^ next_mask;
             while (changed) {
-                const int pos = bitPosFromSingleBit(changed & (~changed + 1ULL));
+                const int pos = Bits::lowestSetBit(changed);
                 changed &= (changed - 1ULL);
                 xorRowFromShared<WORDS>(codeword, &s_matrix[pos * words], words);
             }

@@ -1,4 +1,5 @@
 #include "leonsearch.h"
+#include "mixing.h"
 
 #ifdef Q_OS_WIN
     #ifndef NOMINMAX
@@ -30,28 +31,6 @@ double logBinom(int a, int b)
     return std::lgamma(double(a) + 1.0) - std::lgamma(double(b) + 1.0)
          - std::lgamma(double(a - b) + 1.0);
 }
-
-// Перемешивание номера попытки в затравку: соседние номера дают несвязанные
-// последовательности (splitmix64).
-quint64 seedFor(quint64 index)
-{
-    quint64 z = index + 0x9E3779B97F4A7C15ULL;
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-    return z ^ (z >> 31);
-}
-
-struct Xorshift
-{
-    quint64 state;
-    quint64 next()
-    {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        return state;
-    }
-};
 
 } // namespace
 
@@ -353,12 +332,9 @@ WordTable::WordTable(int wordsPerRow, int maxWeight)
 
 quint64 hashWord(const quint64* word, int wordsPerRow)
 {
-    quint64 h = 0x9E3779B97F4A7C15ULL;
-    for (int w = 0; w < wordsPerRow; ++w) {
-        h ^= word[w];
-        h *= 0xFF51AFD7ED558CCDULL;
-        h ^= h >> 33;
-    }
+    quint64 h = Mix::wordHashSeed();
+    for (int w = 0; w < wordsPerRow; ++w)
+        h = Mix::wordHashStep(h, word[w]);
     return h;
 }
 
@@ -543,13 +519,8 @@ void ShardedWordTable::addBatch(const quint64* words, size_t count, bool countHi
                     continue;
                 const quint64* word = words + i * m_words;
                 int weight = 0;
-                for (int w = 0; w < m_words; ++w) {
-#ifdef _MSC_VER
-                    weight += int(__popcnt64(word[w]));
-#else
-                    weight += __builtin_popcountll(word[w]);
-#endif
-                }
+                for (int w = 0; w < m_words; ++w)
+                    weight += Bits::popcount64(word[w]);
                 table.add(word, weight, countHits);
             }
         }
@@ -612,26 +583,13 @@ std::vector<double> ShardedWordTable::unseenByWeight() const
     return chaoUnseen(f1, f2);
 }
 
-// Случайный индекс из [0, range): старшие 64 бита произведения — без
-// деления. На видеокарте 64-битный остаток — сотни инструкций, и тасование
-// одной нитью стоило как весь Гаусс блока; здесь та же формула, чтобы
-// порядок столбцов совпадал с ядром бит в бит.
-static inline quint64 belowRange(quint64 random, quint64 range)
-{
-#ifdef _MSC_VER
-    return __umulh(random, range);
-#else
-    return quint64((unsigned __int128(random) * range) >> 64);
-#endif
-}
-
+// Порядок столбцов — тот же, что у ядра (Mix::shuffleForTrial): попытка с
+// одним номером даёт одно и то же множество на CPU и на GPU.
 void shuffledColumns(int cols, quint64 trialIndex, std::vector<int>& order)
 {
     order.resize(size_t(cols));
     std::iota(order.begin(), order.end(), 0);
-    Xorshift rng{ seedFor(trialIndex) | 1ULL };
-    for (int c = cols - 1; c > 0; --c)
-        std::swap(order[size_t(c)], order[size_t(belowRange(rng.next(), quint64(c + 1)))]);
+    Mix::shuffleForTrial(order.data(), cols, trialIndex);
 }
 
 } // namespace Leon

@@ -1,4 +1,5 @@
 #include "infosets.h"
+#include "mixing.h"
 
 #include <algorithm>
 #include <numeric>
@@ -11,21 +12,6 @@ inline bool bitAt(const quint64* row, int c)
 {
     return (row[c >> 6] >> (c & 63)) & 1ULL;
 }
-
-// Свой генератор, а не std::mt19937: поиск обязан давать одни и те же
-// множества на любой сборке, а перемешивание стандартной библиотеки этого не
-// обещает.
-struct Xorshift
-{
-    quint64 state;
-    quint64 next()
-    {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        return state;
-    }
-};
 
 // Сумма C(rows, r) по r <= maxRows, в double: точность тут не нужна, а для
 // длинных кодов сумма ни во что целое не помещается.
@@ -130,7 +116,10 @@ std::vector<InfoSet> find(const quint64* matrix, int rows, int cols, int wordsPe
     const double gaussCost = double(rows) * double(rows) * double(wordsPerRow);
     const int attempts = int(std::min(64.0, std::max(2.0, 2.0e8 / std::max(gaussCost, 1.0))));
 
-    Xorshift rng{ 0x9E3779B97F4A7C15ULL };
+    // Свой генератор, а не std::mt19937: поиск обязан давать одни и те же
+    // множества на любой сборке, а перемешивание стандартной библиотеки
+    // этого не обещает.
+    Mix::Xorshift64 rng{ 0x9E3779B97F4A7C15ULL };
     std::vector<int>     order(static_cast<size_t>(cols));
     std::vector<quint64> used(size_t(wordsPerRow), 0ULL);
 

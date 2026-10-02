@@ -55,7 +55,7 @@ struct LeonLaunch
     unsigned*       seenCount    = nullptr;   // занятых ячеек
     uint64_t        seenMask     = 0;
     // Рабочий буфер варианта с матрицей в глобальной памяти:
-    // trials x rows x leonPaddedWords(wordsPerRow) слов. Не нужен, если
+    // trials x rows x paddedWordCount(wordsPerRow) слов. Не нужен, если
     // матрица помещается в разделяемую память.
     uint64_t*       scratch      = nullptr;
     // Гаусс (ставит launchLeonTrials): ширина группы столбцов (1 — по
@@ -88,15 +88,9 @@ struct LeonLaunch
 // и место в разделяемой памяти (leonSharedBytes).
 constexpr int LEON_THREADS = 256;
 
-// Слов в строке рабочей копии: число слов округляется вверх до одного из
-// заготовленных вариантов ядра, хвост нулевой. Ноль — строка длиннее, чем
-// ядро умеет (MAX_BLOCKWORDS).
-int leonPaddedWords(int wordsPerRow);
-
-// Слов на строку в рабочем буфере (с учётом шага: нечётное число слов,
-// чтобы строки не сталкивались в банках разделяемой памяти). Ноль — как у
-// leonPaddedWords.
-int leonRowStride(int wordsPerRow);
+// Слов в строке рабочей копии — paddedWordCount (wordvariants.h): число
+// слов округляется вверх до одного из заготовленных вариантов ядра, хвост
+// нулевой; ноль — строка длиннее, чем ядро умеет (MAX_BLOCKWORDS).
 
 // Где живёт рабочая копия матрицы: 0 — в глобальной памяти (свой кусок
 // рабочего буфера у блока), 1 — в разделяемой (до MAX_SHARED_BYTES),

@@ -50,6 +50,9 @@
     <ClInclude Include="compute\productcode.h" />
     <ClInclude Include="compute\leonkernel.cuh" />
     <ClInclude Include="compute\spectrumring.h" />
+    <ClInclude Include="compute\bitops.h" />
+    <ClInclude Include="compute\mixing.h" />
+    <ClInclude Include="compute\wordvariants.h" />
     <ClInclude Include="defines.h" />
     <ClInclude Include="storage\autosavestore.h" />
     <ClInclude Include="ui\axisticks.h" />

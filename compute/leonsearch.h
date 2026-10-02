@@ -17,14 +17,11 @@
 //
 // Предел метода — память, а не время: всё найденное надо хранить.
 
+#include "bitops.h"
 #include "infosets.h"
 
 #include <QStringList>
 #include <QtGlobal>
-
-#ifdef _MSC_VER
-    #include <intrin.h>
-#endif
 
 #include <algorithm>
 #include <cstdint>
@@ -268,7 +265,7 @@ bool trial(const quint64* matrix, int rows, int cols, int wordsPerRow,
                 int weight = 0;
                 for (int w = 0; w < words; ++w) {
                     word[size_t(w)] ^= row[w];
-                    weight += int(popcount64(word[size_t(w)]));
+                    weight += Bits::popcount64(word[size_t(w)]);
                 }
                 if (weight > 0 && weight <= maxWeight)
                     visit(word.data(), weight);
@@ -277,14 +274,6 @@ bool trial(const quint64* matrix, int rows, int cols, int wordsPerRow,
                 for (int w = 0; w < words; ++w)
                     word[size_t(w)] ^= row[w];
             }
-        }
-        static int popcount64(quint64 v)
-        {
-#ifdef _MSC_VER
-            return int(__popcnt64(v));
-#else
-            return __builtin_popcountll(v);
-#endif
         }
     };
     Walker walker{ g, rows, wordsPerRow, rowsPerTrial, maxWeight, word, visit };
@@ -425,11 +414,7 @@ bool trialStern(const quint64* matrix, int rows, int cols, int wordsPerRow,
             for (int w = 0; w < words; ++w) {
                 const quint64 x = r0[w] ^ r1[w] ^ r2[w] ^ r3[w];
                 word[size_t(w)] = x;
-#ifdef _MSC_VER
-                weight += int(__popcnt64(x));
-#else
-                weight += __builtin_popcountll(x);
-#endif
+                weight += Bits::popcount64(x);
             }
             if (weight > 0 && weight <= maxWeight)
                 visit(word.data(), weight);

@@ -1,4 +1,5 @@
 #include "worker.h"
+#include "bitops.h"
 #include "gridtuner.h"
 
 #ifdef Q_OS_WIN
@@ -86,35 +87,6 @@ static quint64 unrankCombination( unsigned K, unsigned R, quint64 rank, const Bi
 
     return mask;
 }
-// Следующая маска с тем же числом единиц в возрастающем числовом порядке —
-// приём Госпера. Деление из классической записи заменено сдвигом: младший
-// установленный бит есть степень двойки, его позиция и есть величина сдвига.
-// Вызывать только при v != 0 и когда следующая комбинация существует.
-static inline quint64 gosperNext(quint64 v)
-{
-    unsigned long t;
-    _BitScanForward64(&t, v);
-    const quint64 rr = v + (1ULL << t);
-    return rr | ((v ^ rr) >> (t + 2));
-}
-
-// Разворот всех 64 бит.
-static inline quint64 reverseBits64(quint64 v)
-{
-    v = ((v >> 1)  & 0x5555555555555555ULL) | ((v & 0x5555555555555555ULL) << 1);
-    v = ((v >> 2)  & 0x3333333333333333ULL) | ((v & 0x3333333333333333ULL) << 2);
-    v = ((v >> 4)  & 0x0F0F0F0F0F0F0F0FULL) | ((v & 0x0F0F0F0F0F0F0F0FULL) << 4);
-    v = ((v >> 8)  & 0x00FF00FF00FF00FFULL) | ((v & 0x00FF00FF00FF00FFULL) << 8);
-    v = ((v >> 16) & 0x0000FFFF0000FFFFULL) | ((v & 0x0000FFFF0000FFFFULL) << 16);
-    return (v >> 32) | (v << 32);
-}
-
-// Разворот младших k бит: бит p переходит в позицию k-1-p.
-static inline quint64 reverseLowBits(quint64 v, quint64 k)
-{
-    return reverseBits64(v) >> (64 - k);
-}
-
 // Полное число кодовых слов при переборе до maxComb строк включительно.
 //
 // Раньше считалось инкрементально: comb = comb * (k - r + 1) / r. Формула
@@ -171,7 +143,7 @@ static inline bool bzKeepHost(const quint64* codeword, const CodeGeometry& g,
         const quint64* mask = g.setMasks.data() + size_t(i) * g.wordsPerRow;
         int ones = 0;
         for (quint64 w = 0; w < g.wordsPerRow; ++w)
-            ones += int(__popcnt64(codeword[w] & mask[w]));
+            ones += Bits::popcount64(codeword[w] & mask[w]);
         if (i < setIndex ? ones <= r : ones < r)
             return false;
     }
@@ -815,7 +787,7 @@ void Worker::computeSpectrumCpuNoGrayLong(const CodeGeometry& g)
 
                     // посчитать вес и добавить в локальный спектр
                     quint64 weight = 0;
-                    for (size_t w = 0; w < (size_t)wordsPerRow; ++w) weight += __popcnt64(codeword[w]);
+                    for (size_t w = 0; w < (size_t)wordsPerRow; ++w) weight += Bits::popcount64(codeword[w]);
                     if (weight <= numOfCols
                         && (g.setCount <= 1 || bzKeepHost(codeword.data(), g, int(r), slice.slot.setIndex)))
                         localSpectrum[(size_t)weight]++;
@@ -866,7 +838,7 @@ void Worker::computeSpectrumCpuNoGrayLong(const CodeGeometry& g)
 
                         // считаем вес
                         quint64 weight2 = 0;
-                        for (size_t w = 0; w < (size_t)wordsPerRow; ++w) weight2 += __popcnt64(codeword[w]);
+                        for (size_t w = 0; w < (size_t)wordsPerRow; ++w) weight2 += Bits::popcount64(codeword[w]);
                         if (weight2 <= numOfCols
                             && (g.setCount <= 1 || bzKeepHost(codeword.data(), g, int(r), slice.slot.setIndex)))
                             localSpectrum[(size_t)weight2]++;
@@ -989,11 +961,8 @@ void Worker::computeSpectrumCpuGrayShort(const CodeGeometry& g)
                 // Пока в маске есть единицы
                 while (tmp)
                 {
-                    // Выделяем младший установленный бит
-                    quint64 single = tmp & (~tmp + 1ULL);
-                    // Находим его позицию
-                    unsigned long pos;
-                    _BitScanForward64(&pos, single);
+                    // Позиция младшего установленного бита
+                    const int pos = Bits::lowestSetBit(tmp);
                     // Ставим младший бит в 0
                     tmp &= (tmp - 1);
                     // Получаем строку матрицы
@@ -1007,7 +976,7 @@ void Worker::computeSpectrumCpuGrayShort(const CodeGeometry& g)
                 // Считаем вес полученного кодового слова
                 quint64 weight = 0;
                 for (quint64 b = 0; b < wordsPerRow; ++b)
-                    weight += __popcnt64(localCodeword[b]);
+                    weight += Bits::popcount64(localCodeword[b]);
                 if (weight <= numOfCols)
                     localSpectrum[weight]++;
 
@@ -1033,9 +1002,7 @@ void Worker::computeSpectrumCpuGrayShort(const CodeGeometry& g)
                     // Находим разницу между масками
                     quint64 diff = g ^ g_next;
                     // Так маски отличаются только в одной позиции (Код Грея), то находим её
-                    unsigned long pos;
-                    // Находим её индекс
-                    _BitScanForward64(&pos, diff);
+                    const int pos = Bits::lowestSetBit(diff);
 
                     // Получаем строку матрицы 
                     quint64* rowData =
@@ -1049,7 +1016,7 @@ void Worker::computeSpectrumCpuGrayShort(const CodeGeometry& g)
                     // Считаем вес
                     weight = 0;
                     for (quint64 b = 0; b < wordsPerRow; ++b)
-                        weight += __popcnt64(localCodeword[b]);
+                        weight += Bits::popcount64(localCodeword[b]);
                     // Записываем в спектр
                     if (weight <= numOfCols)
                         localSpectrum[weight]++;
@@ -1184,15 +1151,14 @@ void Worker::computeSpectrumCpuNoGrayShort(const CodeGeometry& g)
                     QVector<quint64> localSpectrum(numOfCols + 1, 0);
                     QVector<quint64> localCodeword(wordsPerRow, 0);
 
-                    quint64 revMask = reverseLowBits(
+                    quint64 revMask = Bits::reverseLowBits(
                         unrankCombination(unsigned(numOfRows), unsigned(r),
-                                          endIdx - 1, binomTable), numOfRows);
+                                          endIdx - 1, binomTable), int(numOfRows));
 
                     // Бит p развёрнутой маски отвечает строке numOfRows-1-p.
                     auto xorRows = [&](quint64 bits) {
                         while (bits) {
-                            unsigned long p;
-                            _BitScanForward64(&p, bits);
+                            const int p = Bits::lowestSetBit(bits);
                             bits &= (bits - 1);
                             const quint64* rowData =
                                 h_matrix.get() + (slice.slot.rowBase + numOfRows - 1 - p) * wordsPerRow;
@@ -1203,7 +1169,7 @@ void Worker::computeSpectrumCpuNoGrayShort(const CodeGeometry& g)
                     auto accumulate = [&]() {
                         quint64 weight = 0;
                         for (quint64 b = 0; b < wordsPerRow; ++b)
-                            weight += __popcnt64(localCodeword[b]);
+                            weight += Bits::popcount64(localCodeword[b]);
                         if (weight <= numOfCols
                             && (g.setCount <= 1
                                 || bzKeepHost(localCodeword.data(), g, int(r), slice.slot.setIndex)))
@@ -1217,7 +1183,7 @@ void Worker::computeSpectrumCpuNoGrayShort(const CodeGeometry& g)
                     // выполняется — gosperNext на нулевой маске звать нельзя.
                     const quint64 count = endIdx - startIdx;
                     for (quint64 i = 1; i < count; ++i) {
-                        const quint64 nextRev = gosperNext(revMask);
+                        const quint64 nextRev = Bits::gosperNext(revMask);
                         xorRows(revMask ^ nextRev);
                         accumulate();
                         revMask = nextRev;

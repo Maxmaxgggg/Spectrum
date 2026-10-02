@@ -1,6 +1,8 @@
 #include "leonkernel.cuh"
 
 #include "defines.h"
+#include "mixing.h"
+#include "wordvariants.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -21,34 +23,10 @@
 
 namespace {
 
-// Заготовленные варианты числа слов в строке — до MAX_BLOCKWORDS, что в
-// разделяемой памяти, что в глобальной.
-
-
 // Шаг строки в рабочей копии — слов. Нечётный: 64-битные обращения варпа
 // к соседним строкам тогда попадают в разные банки разделяемой памяти, а с
 // чётным шагом (6 слов = 48 байт) половина обращений сталкивалась.
 __host__ __device__ constexpr int rowStride(int words) { return (words & 1) ? words : words + 1; }
-
-// Генератор порядка столбцов. Обязан совпадать с Leon::shuffledColumns на
-// хосте бит в бит: тогда попытка с одним номером даёт одно и то же множество
-// на CPU и на GPU, и результаты двух путей сравнимы напрямую — этим и
-// проверяется ядро.
-__device__ __forceinline__ uint64_t seedFor(uint64_t index)
-{
-    uint64_t z = index + 0x9E3779B97F4A7C15ULL;
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-    return z ^ (z >> 31);
-}
-
-__device__ __forceinline__ uint64_t xorshiftNext(uint64_t& state)
-{
-    state ^= state << 13;
-    state ^= state >> 7;
-    state ^= state << 17;
-    return state;
-}
 
 __device__ __forceinline__ bool bitAt(const uint64_t* row, int c)
 {
@@ -61,12 +39,9 @@ __device__ __forceinline__ bool bitAt(const uint64_t* row, int c)
 // Тот же хеш, что Leon::hashWord на хосте — по wordsPerRow словам.
 __device__ __forceinline__ uint64_t fingerprint(const LeonLaunch& P, const uint64_t* a, const uint64_t* b)
 {
-    uint64_t h = 0x9E3779B97F4A7C15ULL;
-    for (int w = 0; w < P.wordsPerRow; ++w) {
-        h ^= a[w] ^ (b ? b[w] : 0ULL);
-        h *= 0xFF51AFD7ED558CCDULL;
-        h ^= h >> 33;
-    }
+    uint64_t h = Mix::wordHashSeed();
+    for (int w = 0; w < P.wordsPerRow; ++w)
+        h = Mix::wordHashStep(h, a[w] ^ (b ? b[w] : 0ULL));
     return h == 0ULL ? 1ULL : h;   // ноль значит «пусто»
 }
 
@@ -178,13 +153,12 @@ __global__ void __launch_bounds__(LEON_THREADS, WORDS <= 8 ? 4 : 2) leonTrialsKe
     for (int c = tid; c < n; c += B)
         colPivot[c] = 0;
     // 2. Случайный порядок столбцов — Фишер–Йетс одной нитью, n обменов.
+    //    Тот же, что Leon::shuffledColumns на хосте (mixing.h): попытка с
+    //    одним номером даёт одно и то же множество на CPU и на GPU, и
+    //    результаты двух путей сравнимы напрямую — этим и проверяется ядро.
     if (tid == 0) {
         for (int c = 0; c < n; ++c) order[c] = uint16_t(c);
-        uint64_t state = seedFor(P.firstTrial + blockIdx.x) | 1ULL;
-        for (int c = n - 1; c > 0; --c) {
-            const int j = int(__umul64hi(xorshiftNext(state), uint64_t(c + 1)));
-            const uint16_t t = order[c]; order[c] = order[j]; order[j] = t;
-        }
+        Mix::shuffleForTrial(order, n, P.firstTrial + blockIdx.x);
     }
     __syncthreads();
 
@@ -878,23 +852,9 @@ int gaussGroupFor(int rows, int cols, int words, bool global, int threadsPerBloc
 
 } // namespace
 
-int leonPaddedWords(int wordsPerRow)
-{
-    static const int sizes[] = { 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32 };
-    for (int candidate : sizes)
-        if (candidate >= wordsPerRow) return candidate;
-    return 0;
-}
-
-int leonRowStride(int wordsPerRow)
-{
-    const int padded = leonPaddedWords(wordsPerRow);
-    return padded == 0 ? 0 : rowStride(padded);
-}
-
 int leonSharedTier(int rows, int cols, int wordsPerRow, int window)
 {
-    const int words = leonPaddedWords(wordsPerRow);
+    const int words = paddedWordCount(wordsPerRow);
     if (rows <= 0 || cols <= 0 || words == 0)
         return 0;
     const size_t bytes = sharedBytesFor(rows, cols, words, false, 0, window);
@@ -915,7 +875,7 @@ bool leonFitsShared(int rows, int cols, int wordsPerRow)
 
 size_t leonSharedBytes(int rows, int cols, int wordsPerRow)
 {
-    const int words = leonPaddedWords(wordsPerRow);
+    const int words = paddedWordCount(wordsPerRow);
     if (rows <= 0 || cols <= 0 || words == 0)
         return 0;
     const int  tier   = leonSharedTier(rows, cols, wordsPerRow, 0);
@@ -955,7 +915,7 @@ GaussMode gaussModeFor(int rows, int cols, int words, int tier, int threadsPerBl
 size_t leonScratchWords(int rows, int cols, int wordsPerRow, int rowsPerTrial, int window,
                         unsigned pairCapacity, uint64_t* hashSlots, unsigned* listA)
 {
-    const int    words  = leonPaddedWords(wordsPerRow);
+    const int    words  = paddedWordCount(wordsPerRow);
     const bool   global = leonSharedTier(rows, cols, wordsPerRow, window) == 0;
     size_t       total  = global ? size_t(rows) * size_t(rowStride(words)) : 0;
     uint64_t     slots  = 0;
@@ -992,7 +952,7 @@ void launchSeenRehash(const uint64_t* oldFp, const unsigned* oldHits, const uint
 
 void launchLeonTrials(const LeonLaunch& launch, int threadsPerBlock, cudaStream_t stream)
 {
-    const int  words  = leonPaddedWords(launch.wordsPerRow);
+    const int  words  = paddedWordCount(launch.wordsPerRow);
     const int  tier   = leonSharedTier(launch.rows, launch.cols, launch.wordsPerRow, launch.window);
     const bool global = tier == 0;
     if (words == 0)
@@ -1019,42 +979,31 @@ void launchLeonTrials(const LeonLaunch& launch, int threadsPerBlock, cudaStream_
     for (uint64_t v = L.hashSlots; v > 1; v >>= 1) --L.hashShift;
 
     // Большая разделяемая память — по опт-ину: ядру разрешается больше
-    // обычных 48 КБ (один раз на вариант; статическая память ядра — в тот
-    // же предел).
-    #define LAUNCH_LEON(W, G)                                                                       \
-        do {                                                                                        \
-            if (tier == 2) {                                                                        \
-                static bool optedIn = false;                                                        \
-                if (!optedIn) {                                                                     \
-                    optedIn = true;                                                                 \
-                    cudaFuncAttributes fa{};                                                        \
-                    cudaFuncGetAttributes(&fa, leonTrialsKernel<W, G>);                             \
-                    cudaFuncSetAttribute(leonTrialsKernel<W, G>,                                    \
-                                         cudaFuncAttributeMaxDynamicSharedMemorySize,               \
-                                         int(sharedLimits().optIn - fa.sharedSizeBytes));           \
-                    cudaFuncSetAttribute(leonTrialsKernel<W, G>,                                    \
-                                         cudaFuncAttributePreferredSharedMemoryCarveout, 100);      \
-                }                                                                                   \
-            }                                                                                       \
-            leonTrialsKernel<W, G><<<L.trials, threadsPerBlock, sharedBytes, stream>>>(L);          \
-        } while (0)
-    #define LAUNCH_LEON_WORDS(G)                                                                    \
-        switch (words) {                                                                            \
-            case  1: LAUNCH_LEON( 1, G); break;   case  2: LAUNCH_LEON( 2, G); break;               \
-            case  3: LAUNCH_LEON( 3, G); break;   case  4: LAUNCH_LEON( 4, G); break;               \
-            case  5: LAUNCH_LEON( 5, G); break;   case  6: LAUNCH_LEON( 6, G); break;               \
-            case  7: LAUNCH_LEON( 7, G); break;   case  8: LAUNCH_LEON( 8, G); break;               \
-            case 10: LAUNCH_LEON(10, G); break;   case 12: LAUNCH_LEON(12, G); break;               \
-            case 14: LAUNCH_LEON(14, G); break;   case 16: LAUNCH_LEON(16, G); break;               \
-            case 20: LAUNCH_LEON(20, G); break;   case 24: LAUNCH_LEON(24, G); break;               \
-            case 28: LAUNCH_LEON(28, G); break;   default: LAUNCH_LEON(32, G); break;               \
+    // обычных 48 КБ (один раз на вариант — static у каждого варианта лямбды
+    // свой; статическая память ядра — в тот же предел).
+    auto launchVariant = [&](auto w, auto inGlobal) {
+        constexpr int  W = decltype(w)::value;
+        constexpr bool G = decltype(inGlobal)::value;
+        if (tier == 2) {
+            static bool optedIn = false;
+            if (!optedIn) {
+                optedIn = true;
+                cudaFuncAttributes fa{};
+                cudaFuncGetAttributes(&fa, leonTrialsKernel<W, G>);
+                cudaFuncSetAttribute(leonTrialsKernel<W, G>,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     int(sharedLimits().optIn - fa.sharedSizeBytes));
+                cudaFuncSetAttribute(leonTrialsKernel<W, G>,
+                                     cudaFuncAttributePreferredSharedMemoryCarveout, 100);
+            }
         }
-    if (!global)
-        LAUNCH_LEON_WORDS(false)
-    else
-        LAUNCH_LEON_WORDS(true)
-    #undef LAUNCH_LEON_WORDS
-    #undef LAUNCH_LEON
+        leonTrialsKernel<W, G><<<L.trials, threadsPerBlock, sharedBytes, stream>>>(L);
+    };
+    // words проверено выше: ноль отсеян, а ненулевой — всегда из ряда вариантов.
+    dispatchWords(words, [&](auto w) {
+        if (global) launchVariant(w, std::true_type());
+        else        launchVariant(w, std::false_type());
+    });
 
     const cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
