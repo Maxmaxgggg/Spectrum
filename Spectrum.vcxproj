@@ -53,6 +53,7 @@
     <ClInclude Include="compute\bitops.h" />
     <ClInclude Include="compute\mixing.h" />
     <ClInclude Include="compute\wordvariants.h" />
+    <ClInclude Include="compute\combinations.h" />
     <ClInclude Include="defines.h" />
     <ClInclude Include="storage\autosavestore.h" />
     <ClInclude Include="ui\axisticks.h" />

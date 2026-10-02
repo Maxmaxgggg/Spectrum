@@ -4,6 +4,7 @@
 
 #include "computeSpectrumKernel.cuh"
 #include "bitops.h"
+#include "combinations.h"
 #include "wordvariants.h"
 
 // Порождающая матрица в константной памяти.
@@ -60,82 +61,17 @@ __device__ __forceinline__ bool bzKeep(const quint64* codeword, int words, int r
     return true;
 }
 
-__device__ inline quint64 getBinome(const quint64* binomTable, int n, int k) {
-    return binomTable[n * (Constants::MAX_SHORT_CODE_LENGTH + 1) + k];
-}
-
-// Функция для генерации битовых масок на GPU
-__device__ inline quint64 generateBitMaskGPU(const quint64* binomTable, unsigned k, unsigned r, quint64 idx) {
-    if (r == 0) return 0ULL;
-    if (r > k) return 0ULL;
-
-    quint64 mask = 0ULL;
-    unsigned nextPos = 0;
-    quint64 rank = idx;
-
-    for (unsigned i = r; i > 0; --i) {
-        unsigned j = nextPos;
-        while (j <= k - i) {
-            quint64 c = getBinome(binomTable, k - j - 1, i - 1);
-            if (c <= rank) {
-                rank -= c;
-                ++j;
-            }
-            else break;
-        }
-        mask |= (1ULL << j);
-        nextPos = j + 1;
-    }
-    return mask;
-}
-
-// Функция для генерации следующего массива позиций из текущего
-__device__ __forceinline__ bool nextPositions(int16_t* a, int k, int n)
+// Таблица биномов в памяти устройства: C(n, m) лежит в строке n с шагом
+// MAX_SHORT_CODE_LENGTH + 1 — так её раскладывает BinomTable на хосте.
+struct DeviceBinom
 {
-    // a[0..k-1] — строго возрастающий массив позиций
-
-    int i = k - 1;
-
-    // Ищем самый правый элемент, который ещё можно увеличить
-    while (i >= 0 && a[i] == n - k + i)
-        --i;
-
-    // Если такого нет — это последняя комбинация
-    if (i < 0)
-        return false;
-
-    // Увеличиваем его
-    ++a[i];
-
-    for (int j = i + 1; j < k; ++j)
-        a[j] = a[i] + (j - i);
-
-    return true;
-}
-// Функция для получения отличающихся элементов между двумя массивами позиций
-__device__ __forceinline__ void diffPositions(
-    const int16_t* prevPositions,
-    const int16_t* currPositions,
-    int            numOfPositions,
-    int16_t*       changedPositions,
-    int&           numChanged
-) {
-    int i = 0, j = 0;
-    numChanged = 0;
-
-    while ( i < numOfPositions || j < numOfPositions ) {
-        if ( j == numOfPositions || (i < numOfPositions && prevPositions[i] < currPositions[j]) ) {
-            changedPositions[numChanged++] = prevPositions[i++];
-        }
-        else if (i == numOfPositions || currPositions[j] < prevPositions[i]) {
-            changedPositions[numChanged++] = currPositions[j++];
-        }
-        else {
-            ++i;
-            ++j;
-        }
+    const quint64* table;
+    __device__ __forceinline__ quint64 operator()(unsigned n, unsigned m) const
+    {
+        return table[n * (Constants::MAX_SHORT_CODE_LENGTH + 1) + m];
     }
-}
+};
+
 __host__ cudaError_t copyMasksToConstant(const quint64* h_masks, int setCount, int wordsPerRow)
 {
     if (setCount < 1 || setCount > Constants::MAX_INFO_SETS
@@ -377,8 +313,8 @@ __global__ void computeSpectrumKernelShortT(
         // получается обратным, но для гистограммы это безразлично: набор
         // комбинаций тот же самый.
         quint64 revMask = Bits::reverseLowBits(
-            generateBitMaskGPU(d_binomTable, (unsigned)k, (unsigned)r,
-                               chunkOffset + end - 1), k);
+            Comb::unrankMask((unsigned)k, (unsigned)r, chunkOffset + end - 1,
+                             DeviceBinom{ d_binomTable }), k);
 
         // Бит p развёрнутой маски соответствует строке k-1-p.
         quint64 temp = revMask;
@@ -623,12 +559,12 @@ __global__ void computeSpectrumKernelLongT(
             for (int i = 0; i < numOfOnes; ++i)
                 old_a[i] = a[i];
 
-            if (!nextPositions(a, numOfOnes, numRows))
+            if (!Comb::nextPositions(a, int(numOfOnes), numRows))
                 break;
 
             int16_t changed[2 * Constants::MAX_POSITIONS];
             int numChanged;
-            diffPositions(old_a, a, numOfOnes, changed, numChanged);
+            Comb::diffPositions(old_a, a, int(numOfOnes), changed, numChanged);
 
             if (numChanged > numOfOnes) {
                 #pragma unroll

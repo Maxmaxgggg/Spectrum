@@ -1,5 +1,6 @@
 #include "worker.h"
 #include "bitops.h"
+#include "combinations.h"
 #include "gridtuner.h"
 
 #ifdef Q_OS_WIN
@@ -25,67 +26,6 @@ Worker::Worker(QObject *parent)
 
 Worker::~Worker()
 {
-}
-// Для длинных кодов
-void generateStartPositions(
-    uint64_t rank,
-    int numOfRows,
-    int numOfOnes,
-    int16_t* slot,
-    const BinomTable& C
-) {
-    int x = 0;
-    for (int i = 0; i < numOfOnes; ++i) {
-        for (int v = x; v <= numOfRows - numOfOnes + i; ++v) {
-            uint64_t cnt = C(numOfRows - v - 1, numOfOnes - i - 1);
-            if (rank < cnt) {
-                slot[i] = (int16_t)v;
-                x = v + 1;
-                break;
-            }
-            rank -= cnt;
-        }
-    }
-
-    for (int i = numOfOnes; i < Constants::MAX_POSITIONS; ++i)
-        slot[i] = 0;
-}
-// Получение битовой маски длины k с r единицами с индексом rank
-static quint64 unrankCombination( unsigned K, unsigned R, quint64 rank, const BinomTable& binomTable )
-{
-    if (R == 0) return 0ULL;
-
-    quint64 mask = 0ULL;
-    unsigned nextPos = 0;
-
-    for (unsigned i = 0; i < R; ++i)
-    {
-        for (unsigned pos = nextPos; pos < K; ++pos)
-        {
-            unsigned remainingPositions = K - pos - 1;
-            unsigned remainingToChoose = R - i - 1;
-
-            quint64 count = 0;
-
-            if (remainingToChoose == 0)
-                count = 1;
-            else if (remainingPositions >= remainingToChoose)
-                count = binomTable(remainingPositions, remainingToChoose);
-
-            if (rank >= count)
-            {
-                rank -= count;
-            }
-            else
-            {
-                mask |= (1ULL << pos);
-                nextPos = pos + 1;
-                break;
-            }
-        }
-    }
-
-    return mask;
 }
 // Полное число кодовых слов при переборе до maxComb строк включительно.
 //
@@ -540,7 +480,9 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
                 quint64 globalRank = slice.offset + tid * masksPerThread;
                 assert(globalRank < perSet);
                 // Генерируем стартовую комбинацию для ранга globalRank
-                generateStartPositions(globalRank, numOfRows, r, hostSlots + tid * Constants::MAX_POSITIONS, binomTable);
+                Comb::unrankPositions(globalRank, int(numOfRows), int(r),
+                                      hostSlots + tid * Constants::MAX_POSITIONS,
+                                      Constants::MAX_POSITIONS, binomTable);
             }
 
             // Копируем только те стартовые маски, которые нужны в этом чанке
@@ -658,42 +600,6 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
 
 
 
-bool nextPositions(int16_t* a, int numOnes, int numRows) {
-    // a[0] < a[1] < ... < a[numOnes-1]
-    for (int i = numOnes - 1; i >= 0; --i) {
-        if (a[i] < (int16_t)(numRows - numOnes + i)) {
-            a[i] += 1;
-            for (int j = i + 1; j < numOnes; ++j)
-                a[j] = a[j - 1] + 1;
-            return true;
-        }
-    }
-    return false;
-}
-
-// diffPositions: находит симметрическую разницу между old_a и a,
-// результат записывается в changed (уникальные номера строк).
-// Возвращает число элементов в changed через numChanged (по ссылке).
-void diffPositions(const int16_t* old_a, const int16_t* a, int numOnes, int16_t* changed, int& numChanged) {
-    // Поскольку массивы отсортированы, можно пройти двумя указателями и собрать элементы,
-    // которые присутствуют в одном массиве, но не в другом (симметрическая разность).
-    int i = 0, j = 0;
-    numChanged = 0;
-    while (i < numOnes && j < numOnes) {
-        if (old_a[i] == a[j]) {
-            ++i; ++j;
-        }
-        else if (old_a[i] < a[j]) {
-            changed[numChanged++] = old_a[i++];
-        }
-        else { // old_a[i] > a[j]
-            changed[numChanged++] = a[j++];
-        }
-    }
-    while (i < numOnes) changed[numChanged++] = old_a[i++];
-    while (j < numOnes) changed[numChanged++] = a[j++];
-}
-
 void Worker::computeSpectrumCpuNoGrayLong(const CodeGeometry& g)
 {
     const quint64 numOfRows   = g.numOfRows;
@@ -772,7 +678,8 @@ void Worker::computeSpectrumCpuNoGrayLong(const CodeGeometry& g)
                     uint64_t globalRank = slice.offset + startRank; // ранг внутри своего множества
 
                     // 1) Сгенерировать стартовые позиции
-                    generateStartPositions(globalRank, (int)numOfRows, (int)r, a_local, binomTable);
+                    Comb::unrankPositions(globalRank, int(numOfRows), int(r), a_local,
+                                          Constants::MAX_POSITIONS, binomTable);
 
                     // 2) Построить начальное codeword XOR-ом строк
                     // обнуляем codeword
@@ -806,14 +713,14 @@ void Worker::computeSpectrumCpuNoGrayLong(const CodeGeometry& g)
                         for (int i = 0; i < (int)r; ++i) old_a_local[i] = a_local[i];
 
                         // получить следующую комбинацию позиций (возведение в следующий лекс. порядок)
-                        if (!nextPositions(a_local, (int)r, (int)numOfRows)) {
+                        if (!Comb::nextPositions(a_local, (int)r, (int)numOfRows)) {
                             // больше комбинаций нет (на границе) — выходим
                             break;
                         }
 
                         // найдем разницу old_a_local <-> a_local
                         int numChanged = 0;
-                        diffPositions(old_a_local, a_local, (int)r, changed, numChanged);
+                        Comb::diffPositions(old_a_local, a_local, (int)r, changed, numChanged);
 
                         // если изменений много — перестроим codeword полностью
                         if (numChanged > (int)r) {
@@ -1122,7 +1029,7 @@ void Worker::computeSpectrumCpuNoGrayShort(const CodeGeometry& g)
             // Каждый поток берёт непрерывный кусок диапазона рангов и идёт по
             // нему приёмом Госпера — так же, как ядро коротких кодов.
             //
-            // Раньше на каждую комбинацию звался unrankCombination (разбор
+            // Раньше на каждую комбинацию звался разбор номера (Comb::unrankMask,
             // ранга по таблице биномов, O(k)) и кодовое слово собиралось с
             // нуля перебором всех numOfRows строк. Теперь ранг разбирается
             // один раз на поток, а дальше маска шагает за несколько операций,
@@ -1152,8 +1059,8 @@ void Worker::computeSpectrumCpuNoGrayShort(const CodeGeometry& g)
                     QVector<quint64> localCodeword(wordsPerRow, 0);
 
                     quint64 revMask = Bits::reverseLowBits(
-                        unrankCombination(unsigned(numOfRows), unsigned(r),
-                                          endIdx - 1, binomTable), int(numOfRows));
+                        Comb::unrankMask(unsigned(numOfRows), unsigned(r), endIdx - 1, binomTable),
+                        int(numOfRows));
 
                     // Бит p развёрнутой маски отвечает строке numOfRows-1-p.
                     auto xorRows = [&](quint64 bits) {
@@ -2539,9 +2446,9 @@ void Worker::tuneGrid(CodeGeometry& g)
 
         #pragma omp parallel for schedule(static)
         for (long long i = 0; i < (long long)slotCount; ++i) {
-            generateStartPositions(layerRank + quint64(i) * task.measureMasksPerThread,
-                                   rows, ones,
-                                   host + i * Constants::MAX_POSITIONS, binomTable);
+            Comb::unrankPositions(layerRank + quint64(i) * task.measureMasksPerThread,
+                                  rows, ones, host + i * Constants::MAX_POSITIONS,
+                                  Constants::MAX_POSITIONS, binomTable);
         }
 
         CUDA_CALL(cudaMemcpy(d_tuneSlots.get(), host,
