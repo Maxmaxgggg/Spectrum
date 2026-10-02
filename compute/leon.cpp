@@ -185,7 +185,7 @@ double orbitCatchProbability(int n, int k, int weight, int rows, int window,
 
     // Худший случай по всему, чего мы о слове не знаем: стоит ли единица на
     // столбцах вне круга (их не больше одного) и какой у слова период.
-    const int L = symmetry.length, fixed = n - L;
+    const int circleLength = symmetry.length, fixed = n - circleLength;
     double worst = 1.0;
     for (int e = 0; e <= fixed && e <= weight; ++e) {
         const int onCircle = weight - e;
@@ -195,9 +195,11 @@ double orbitCatchProbability(int n, int k, int weight, int rows, int window,
                 continue;
             }
             // Пересечения разных сдвигов: на круге их сумма по сдвигам 1..p−1
-            // равна w(wp − L)/L (у слова периода p единиц на периоде поровну),
-            // и к каждому прибавляются общие единицы вне круга.
-            const double sumOnCircle = double(onCircle) * (double(onCircle) * orbit - L) / double(L);
+            // равна w(wp − L)/L, где L — длина круга (у слова периода p
+            // единиц на периоде поровну), и к каждому прибавляются общие
+            // единицы вне круга.
+            const double sumOnCircle = double(onCircle) * (double(onCircle) * orbit - circleLength)
+                                     / double(circleLength);
             const double mean = sumOnCircle / double(orbit - 1) + double(e);
             const double pairs = envelope(mean);
             // Чжун–Эрдёш: P(хоть одно) >= (Σ P_i)^2 / (Σ P_i + Σ_{i≠j} P_ij).

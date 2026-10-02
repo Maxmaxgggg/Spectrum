@@ -174,7 +174,7 @@ int canonical(const quint64* word, int wordsPerRow, const Symmetry& symmetry, qu
         return 1;
     }
     const Circle circle(symmetry, wordsPerRow);
-    const int L = circle.length;
+    const int circleLength = circle.length;
     quint64 bits[MAX_WORDS];
     circle.extract(word, wordsPerRow, bits);
 
@@ -184,7 +184,7 @@ int canonical(const quint64* word, int wordsPerRow, const Symmetry& symmetry, qu
     for (int i = 0; i < circle.words; ++i) {
         for (quint64 rest = bits[i]; rest; rest &= rest - 1) {
             const int j = i * 64 + BitOps::lowestSetBit(rest);
-            circle.rotate(bits, L - j, candidate);
+            circle.rotate(bits, circleLength - j, candidate);
             if (!found || less(candidate, best, circle.words)) {
                 std::copy(candidate, candidate + circle.span, best);
                 found = true;
@@ -196,11 +196,11 @@ int canonical(const quint64* word, int wordsPerRow, const Symmetry& symmetry, qu
         return 1;
     }
 
-    // Размер орбиты — наименьший период: делитель L, сдвиг на который
+    // Размер орбиты — наименьший период: делитель длины круга, сдвиг на который
     // оставляет круг на месте.
-    int orbit = L;
-    for (int p = 1; p < L; ++p) {
-        if (L % p != 0)
+    int orbit = circleLength;
+    for (int p = 1; p < circleLength; ++p) {
+        if (circleLength % p != 0)
             continue;
         circle.rotate(best, p, candidate);
         if (std::equal(candidate, candidate + circle.words, best)) {
@@ -216,10 +216,10 @@ std::vector<int> orbitSizes(const Symmetry& symmetry, int cyclicWeight)
 {
     if (!symmetry.active() || cyclicWeight <= 0)
         return { 1 };
-    const int L = symmetry.length;
+    const int circleLength = symmetry.length;
     std::vector<int> sizes;
-    for (int p = 1; p <= L; ++p)
-        if (L % p == 0 && cyclicWeight % (L / p) == 0)
+    for (int p = 1; p <= circleLength; ++p)
+        if (circleLength % p == 0 && cyclicWeight % (circleLength / p) == 0)
             sizes.push_back(p);
     return sizes;
 }
