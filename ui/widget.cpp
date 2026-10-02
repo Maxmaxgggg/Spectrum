@@ -1,8 +1,27 @@
 #include "widget.h"
+#include "infosets.h"
+#include "filterplaintextedit.h"
+#include "spectrumtextedit.h"
+#include "tabswapbutton.h"
+
+#include <QStackedWidget>
+#include <QTabBar>
+#include "docktitlebar.h"
+#include "fonticons.h"
+
+#include <QHeaderView>
+#include <QApplication>
+#include <QDockWidget>
+#include "format.h"
+#include "matrixlibrary.h"
+#include "autosavedialog.h"
+#include "format.h"
+#include "matrixmenu.h"
+#include "spectrumplot.h"
+#include "statspanel.h"
 #include "ui_widget.h"
 
 
-QStringList Colors{ "Blue", "Green", "Red" };
 
 
 
@@ -12,14 +31,6 @@ MainWindow::MainWindow(QWidget* parent)
 {
     ui->setupUi(this);
     /********      УБРАТЬ В UI     ********/
-        splitter = new QSplitter(this);
-        splitter->setOrientation(Qt::Horizontal);
-        splitter->addWidget( ui->spectrumPTE );
-        splitter->addWidget( ui->spectrumCPT );
-        ui->verticalLayout->insertWidget( 3, splitter );
-        ui->verticalLayout->setStretch(1, 1);
-        ui->verticalLayout->setStretch(3, 1);
-        splitter->setSizes({ 1, 1 });
         saveLBLOpacityEffect = new QGraphicsOpacityEffect(ui->saveLBL);
         ui->saveLBL->setGraphicsEffect(saveLBLOpacityEffect);
         ui->saveLBL->setToolTip("В момент сохранения спектра тут появится значок");
@@ -27,32 +38,10 @@ MainWindow::MainWindow(QWidget* parent)
     /********                      ********/
     if( settingsDialog == nullptr )
         settingsDialog = new SettingsDialog(this);
-    msg = new QCPItemText(ui->spectrumCPT);
-    msg->position->setType(QCPItemPosition::ptAxisRectRatio);
-    msg->position->setCoords(0.5, 0.5);
-
-    msg->setPositionAlignment(Qt::AlignCenter);
-
-    msg->setText(QString::fromUtf8(
-        "Спектральные компоненты слишком велики\n"
-        "Невозможно отобразить графически"));
-    //ui->saveLBL->setVisible(false);
-    QFont f;
-    f.setPointSize(12);
-    f.setBold(true);
-    msg->setFont(f);
-
-    // Инициализация QCustomPlot и QCPBars (предполагается, что в ui есть spectrumCPT)
-    ui->spectrumCPT->xAxis->setTickLabelRotation(0);
-    ui->spectrumCPT->yAxis->setNumberFormat("eb");
-    ui->spectrumCPT->yAxis->setNumberPrecision(2);
-    // Создаём QCPBars единожды (если в .ui Plottables уже нет)
-    if ( spectrumBars == nullptr ) {
-        spectrumBars = new QCPBars(ui->spectrumCPT->xAxis, ui->spectrumCPT->yAxis);
-        spectrumBars->setPen(QPen(Qt::black));
-        spectrumBars->setBrush(QBrush(Qt::blue));
-    }
+    spectrumPlot = std::make_unique<SpectrumPlot>(ui->spectrumCPT);
     connect( ui->matrixPTE, &FilterPlainTextEdit::textChanged, this,  &MainWindow::handleMatrixChanged    );
+    connect(ui->autosaveACN, &QAction::triggered,
+        this, &MainWindow::showAutosaveDialog);
     connect(ui->settingsACN, &QAction::triggered,
         this, [this]() {
             settingsDialog->exec();
@@ -60,37 +49,36 @@ MainWindow::MainWindow(QWidget* parent)
         });
 
 
+    setupDocks();
     loadSettings();
+    plotRefreshTimer = new QTimer(this);
+    plotRefreshTimer->setSingleShot(true);
+    plotRefreshTimer->setInterval(Constants::PLOT_REFRESH_DELAY_MS);
+    connect(plotRefreshTimer, &QTimer::timeout, this, [this]() {
+        // Пока кнопка мыши зажата, панель ещё тащат. Перерисовка на этом
+        // месте переразмечает окно, и разделитель теряет захват мыши — со
+        // стороны это выглядит как «тянется через раз». Ждём дальше.
+        if (QApplication::mouseButtons() != Qt::NoButton) {
+            plotRefreshTimer->start();
+            return;
+        }
+        spectrumPlot->refresh();
+    });
+
     ui->spectrumCPT->installEventFilter(this);
     connectSettingsDialog();
     setWorker();
     setMatrixMenu();
     setToolTips();
+    // Настройки диалога нужны окну сразу: от алгоритма зависит, показывать ли
+    // панель второй матрицы. Пустая матрица сигнала о смене не даёт.
+    emit requestSettings();
     emit handleMatrixChanged();
-    #ifdef Q_OS_WIN
-        hwnd = reinterpret_cast<HWND>(this->winId());
+    // Старые чекпоинты лежали в реестре, по мегабайту с матрицей на запись.
+    // Переносим их в файлы один раз и вычищаем ветку.
+    autosave.migrateFromRegistry();
 
-        HRESULT hr = CoCreateInstance(
-            CLSID_TaskbarList,
-            nullptr,
-            CLSCTX_ALL,
-            IID_ITaskbarList3,
-            (void**)&taskbar
-        );
-
-        if (SUCCEEDED(hr) && taskbar) {
-            if (SUCCEEDED(taskbar->HrInit())) {
-                taskbarAvailable = true;
-            }
-            else {
-                taskbar->Release();
-                taskbar = nullptr;
-            }
-        }
-        else {
-            taskbar = nullptr;
-        }
-    #endif
+    taskbar = std::make_unique<TaskbarProgress>(this);
 }
 
 MainWindow::~MainWindow()
@@ -108,104 +96,308 @@ MainWindow::~MainWindow()
         workerPtr = nullptr;
     }
     this->setWindowTitle(UIStrings::MAIN_TITLE);
-    #ifdef Q_OS_WIN
-        if (taskbar) {
-            taskbar->Release();
-            taskbar = nullptr;
-        }
-    #endif
     delete ui;
 }
-void MainWindow::rebuildMatrixMenuActions()
+
+void MainWindow::setMatrixMenu()
 {
-    if (!matrixMenu) return;
 
-    // 1) Подгружаем актуальные данные
-    loadMatricesArray();
-    QStringList names = listMatrixNames(); // текущие имена
+    matrixMenu = new MatrixMenu(ui->loadMatrixACN, ui->saveMatrixACN, ui->createMatrixACN, this);
+    // Загрузка и сохранение — в ту матрицу, чья вкладка открыта: у кода
+    // произведения их две.
+    auto currentEditor = [this]() -> QPlainTextEdit* {
+        return (matrixPages && matrixPages->currentIndex() == 1) ? static_cast<QPlainTextEdit*>(matrix2PTE)
+                                                                  : static_cast<QPlainTextEdit*>(ui->matrixPTE);
+    };
+    matrixMenu->setMatrixSource([currentEditor]() { return currentEditor()->toPlainText(); });
+    connect(matrixMenu, &MatrixMenu::matrixChosen, this, [currentEditor](const QString& text) {
+        currentEditor()->setPlainText(text);
+    });
+}
 
-    // 2) Удаляем любые динамические действия (все, кроме addMatrix и действия подменю deleteMenu)
-    QAction* deleteMenuAction = ui->deleteMatrixMNU ? ui->deleteMatrixMNU->menuAction() : nullptr;
-    const QList<QAction*> actsSnapshot = matrixMenu->actions();
-    for (QAction* a : actsSnapshot) {
-        if ( a == ui->addMatrixACN || a == deleteMenuAction )
-            continue;
-        matrixMenu->removeAction(a);
+void MainWindow::showAutosaveDialog()
+{
+    AutosaveDialog dialog(&autosave, this);
+    connect(&dialog, &AutosaveDialog::entryChosen, this, &MainWindow::applyAutosave);
+    dialog.exec();
+}
+
+// Поднимает состояние из записи: матрицу, настройки расчёта, накопленный
+// спектр и прогресс. Дальше кнопка предлагает продолжить с этого места.
+void MainWindow::applyAutosave(const Matrix& matrix, const AutosaveRecord& record)
+{
+    // Пока идёт расчёт, чужое состояние поднимать нельзя. Воркер считает
+    // прежний код и продолжит слать свой спектр и свой прогресс поверх
+    // загруженных — на экране получится смесь двух расчётов: подпись от одной
+    // записи, цифры от другой. Поэтому сначала остановка, а подстановка —
+    // после неё, из handleFinished.
+    if (runState == RunState::Running || runState == RunState::Paused) {
+        const auto reply = QMessageBox::question(this,
+            tr("Идёт расчёт"),
+            tr("Чтобы загрузить сохранение, текущий расчёт придётся остановить.\n"
+               "Его состояние сохранится, и продолжить можно будет позже.\n\n"
+               "Остановить и загрузить?"),
+            QMessageBox::Yes | QMessageBox::No);
+        if (reply != QMessageBox::Yes)
+            return;
+
+        pendingMatrix   = matrix;
+        pendingRecord   = record;
+        pendingAutosave = true;
+        on_cancelPBN_clicked();
+        return;
     }
 
-    // 3) Очищаем подменю удаления
-    if (ui->deleteMatrixMNU)
-        ui->deleteMatrixMNU->clear();
+    applyAutosaveNow(matrix, record);
+}
 
-    // 4) Если есть имена — добавляем динамические пункты и включаем deleteMenu (учитываем флаг)
-    if (!names.isEmpty()) {
-        matrixMenu->addSeparator();
-
-        // пункты в основном меню — загрузка матрицы
-        for (const QString& nm : names) {
-            QAction* act = new QAction(nm, matrixMenu);
-            act->setData(nm);
-            act->setIcon(QIcon(":/ui/icons/newspaper.png"));
-            act->setEnabled(matrixActionsEnabled); // учитываем флаг
-
-            connect(act, &QAction::triggered, this, [this, nm]() {
-                const QString code = getMatrixByName(nm);
-                ui->matrixPTE->setPlainText(code);
-                });
-
-            matrixMenu->addAction(act);
-        }
-
-        // пункты в подменю удаления (родитель = deleteMenu)
-        for (const QString& nm : names) {
-            QAction* delAct = new QAction(nm, ui->deleteMatrixMNU);
-            delAct->setIcon(QIcon(":/ui/icons/newspaper.png"));
-            delAct->setEnabled(matrixActionsEnabled); // учитываем флаг
-
-            connect(delAct, &QAction::triggered, this, [this, nm]() {
-                if (!removeMatrixByName(nm)) {
-                    QMessageBox::warning(this, tr("Ошибка"), tr("Не удалось удалить матрицу \"%1\"").arg(nm));
-                    return;
-                }
-
-                loadMatricesArray();
-
-                QAction* caller = qobject_cast<QAction*>(sender());
-                if (caller) {
-                    ui->deleteMatrixMNU->removeAction(caller);
-                    caller->deleteLater();
-                }
-
-                for (QAction* ma : matrixMenu->actions()) {
-                    if (ma == ui->addMatrixACN) continue;
-                    if (ma == ui->deleteMatrixMNU->menuAction()) continue;
-                    if (ma->data().toString() == nm || ma->text() == nm) {
-                        matrixMenu->removeAction(ma);
-                        ma->deleteLater();
-                        break;
-                    }
-                }
-
-                ui->deleteMatrixMNU->setEnabled(matrixActionsEnabled && !ui->deleteMatrixMNU->actions().isEmpty());
-                });
-
-            ui->deleteMatrixMNU->addAction(delAct);
-        }
-
-        ui->deleteMatrixMNU->setEnabled(matrixActionsEnabled && !ui->deleteMatrixMNU->actions().isEmpty());
+void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& record)
+{
+    // handleMatrixChanged сбрасывает поднятое состояние — он для того и нужен,
+    // чтобы ловить правку матрицы руками. Своя подстановка правкой не считается.
+    applyingAutosave = true;
+    if (record.algorithm == ComputationSettings::ProductCode
+        && record.productRows1 > 0 && record.productRows1 < matrix.size()) {
+        // В записи произведения обе компоненты подряд — по своим панелям.
+        ui->matrixPTE->setPlainText(matrix.mid(0, record.productRows1).join(QLatin1Char('\n')));
+        matrix2PTE->setPlainText(matrix.mid(record.productRows1).join(QLatin1Char('\n')));
+    } else {
+        ui->matrixPTE->setPlainText(matrix.join(QLatin1Char('\n')));
     }
-    else {
-        // нет сохранённых матриц
-        if (ui->deleteMatrixMNU)
-            ui->deleteMatrixMNU->setEnabled(false);
+    applyingAutosave = false;
+
+    // Настройки берутся из записи. Без этого «Продолжить» искал бы сохранение
+    // другого алгоритма, не нашёл и молча начал бы с нуля.
+    // У произведения в полях записи — свой вес и ранг; диалогу они уходят
+    // через те же два числа.
+    const bool product = record.algorithm == ComputationSettings::ProductCode;
+    int weight = record.bzWeight;
+    if (record.algorithm == ComputationSettings::RandomInfoSets) weight = record.leonWeight;
+    if (product)                                                  weight = record.productWeight;
+    emit applySettingsFromAutosave(int(record.algorithm), int(record.enumType),
+                                   product ? record.productRank : record.maxRows, weight,
+                                   product ? (record.productMissExponent > 0
+                                                  ? int(ComputationSettings::RandomInfoSets)
+                                                  : int(ComputationSettings::BrouwerZimmermann))
+                                           : 0);
+
+    unseenByWeight.clear();
+    // Как и по ходу расчёта: Брауэр–Циммерман — только до заказанного веса.
+    const int shownUpTo = record.algorithm == ComputationSettings::BrouwerZimmermann
+                              ? record.bzWeight : -1;   // -1 — весь спектр записи
+
+    // Спектр показывается сырым — ровно так же, как во время расчёта: у
+    // дуального кода преобразование Мак-Вильямс делается только в конце.
+    SpectrumFloat plot;
+    SpectrumText  text;
+    for (int w = 0; w < record.state.spectrum.size(); ++w) {
+        const quint64 value = shownUpTo >= 0 && w > shownUpTo ? 0 : record.state.spectrum.at(w);
+        plot.append(float(value));
+        if (value != 0)
+            text.append(QString::number(w) + " - " + QString::number(value));
+    }
+    handleUpdateSpectrumPlot(plot);
+    handleUpdateSpectrumPTE(text);
+
+    const double total = totalOperations(record, matrix.size());
+    const int percent = total > 0.0 ? int(100.0 * double(record.state.doneOps) / total) : 0;
+    ui->infoPBR->setValue(qBound(0, percent, 100));
+    statsPanel->showState(tr("Загружено сохранение: перебрано %1 слов")
+                             .arg(Format::count(record.state.doneOps)));
+
+    runState = RunState::Loaded;
+    updateExecuteButton();
+}
+
+void MainWindow::updateExecuteButton()
+{
+    switch (runState) {
+        case RunState::Running:
+            ui->executePBN->setText(UIStrings::PAUSE_TEXT);
+            ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP);
+            ui->executePBN->setIcon(FluentIcons::icon(this, FluentIcons::PAUSE));
+            break;
+
+        case RunState::Paused:
+        case RunState::Loaded:
+            ui->executePBN->setText(UIStrings::CONTINUE_TEXT);
+            ui->executePBN->setToolTip(UIStrings::CONTINUE_TOOLTIP);
+            ui->executePBN->setIcon(FluentIcons::icon(this, FluentIcons::PLAY));
+            break;
+
+        case RunState::Idle:
+            ui->executePBN->setText(UIStrings::START_TEXT);
+            ui->executePBN->setToolTip(UIStrings::START_TOOLTIP);
+            ui->executePBN->setIcon(FluentIcons::icon(this, FluentIcons::PLAY));
+            break;
     }
 }
+
+// Спектр выводится так же, как его присылает воркер: строками «вес - число».
+//
+// Веса, которых не заказывали, сюда не приходят — воркер режет спектр по
+// заказанному весу сам, и помечать на экране нечего.
+void MainWindow::setSpectrumRows(const SpectrumText& lines)
+{
+    lastSpectrum = lines;
+
+    // Позиция прокрутки сохраняется: спектр обновляется раз в секунду, и без
+    // этого список дёргался бы в начало на каждом обновлении.
+    QScrollBar* const bar = ui->spectrumPTE->verticalScrollBar();
+    const int scroll = bar->value();
+
+    // Числа — с разбивкой по три цифры; копируются они без неё
+    // (SpectrumTextEdit), в lastSpectrum лежат сырые строки.
+    SpectrumText shown;
+    shown.reserve(lines.size());
+    for (const QString& raw : lines) {
+        const QString weightText = raw.section(QStringLiteral(" - "), 0, 0);
+        const QString countText  = raw.section(QStringLiteral(" - "), 1);
+        QString line = countText.isEmpty()
+            ? raw
+            : weightText + QStringLiteral(" - ") + SpectrumTextEdit::grouped(countText);
+        // Случайный поиск: у весов, где по словам, пойманным по одному разу,
+        // видно недобор, дописывается оценка — сколько ещё не найдено.
+        if (!unseenByWeight.isEmpty()) {
+            const int weight = weightText.toInt();
+            if (weight >= 0 && weight < unseenByWeight.size()
+                && unseenByWeight.at(weight) >= 0.5f)
+                line += tr("   (осталось ≈%1)")
+                            .arg(SpectrumTextEdit::grouped(
+                                QString::number(qRound64(double(unseenByWeight.at(weight))))));
+        }
+        shown.append(line);
+    }
+
+    ui->spectrumPTE->setPlainText(shown.join(QLatin1Char('\n')));
+    bar->setValue(scroll);
+}
+
+void MainWindow::setupDocks()
+{
+    auto makeDock = [this](QWidget* content, const QString& title,
+                           const QString& tip, const char* name) {
+        QDockWidget* const dock = new QDockWidget(title, this);
+        dock->setObjectName(QLatin1String(name));   // без имени Qt не сохранит раскладку
+        dock->setWidget(content);
+        dock->setToolTip(tip);
+        // Свой заголовок вместо системной рамки: без него вытащенная панель
+        // получает оформление Windows и красный крестик вместо привычной
+        // серой полосы. Подробности в docktitlebar.h.
+        dock->setTitleBarWidget(new DockTitleBar(dock));
+        return dock;
+    };
+
+    matrix2PTE   = new FilterPlainTextEdit(this);
+    matrix2PTE->setFont(ui->matrixPTE->font());
+    // Как у первой: строка матрицы не переносится, а уходит за край с
+    // прокруткой — перенесённая строка нулей и единиц нечитаема.
+    matrix2PTE->setLineWrapMode(ui->matrixPTE->lineWrapMode());
+    connect(matrix2PTE, &FilterPlainTextEdit::textChanged, this, [this]() { updateMatrixTitles(); });
+
+    matrixPages = new QStackedWidget(this);
+    matrixPages->addWidget(ui->matrixPTE);
+    matrixPages->addWidget(matrix2PTE);
+    matrixDock   = makeDock(matrixPages, tr("Матрица"),
+                            UIStrings::MATRIX_TOOLTIP,   "matrixDock");
+
+    // Вкладки — в заголовке панели, в одной строке с её кнопками.
+    matrixTabBar = new QTabBar;
+    matrixTabBar->addTab(tr("Матрица 1"));
+    matrixTabBar->addTab(tr("Матрица 2"));
+    matrixTabBar->setTabToolTip(1, UIStrings::MATRIX2_TOOLTIP);
+    connect(matrixTabBar, &QTabBar::currentChanged, matrixPages, &QStackedWidget::setCurrentIndex);
+    static_cast<DockTitleBar*>(matrixDock->titleBarWidget())->setTabBar(matrixTabBar);
+
+    // На стыке вкладок — кнопка «поменять местами»: компоненты произведения
+    // легко загрузить не в те вкладки. На спектр порядок не влияет.
+    auto* const swap = new TabSwapButton(matrixTabBar, tr("Поменять матрицы местами"));
+    connect(swap, &TabSwapButton::clicked, this, [this]() {
+        const QString first  = ui->matrixPTE->toPlainText();
+        const QString second = matrix2PTE->toPlainText();
+        ui->matrixPTE->setPlainText(second);
+        matrix2PTE->setPlainText(first);
+    });
+    spectrumDock = makeDock(ui->spectrumPTE, tr("Спектр кодовых слов"),
+                            UIStrings::SPECTRUM_TOOLTIP, "spectrumDock");
+    plotDock     = makeDock(ui->spectrumCPT, tr("График спектра"),
+                            UIStrings::PLOT_TOOLTIP,     "plotDock");
+
+    statsPanel = new StatsPanel(this);
+    statsDock  = makeDock(statsPanel, tr("Ход расчёта"),
+                          UIStrings::STATS_TOOLTIP, "statsDock");
+
+    // Швартуется только первый док; остальные добавляет splitDockWidget. Если
+    // добавить все три через addDockWidget, они складываются в одну область
+    // стопкой, и последующее деление даёт не то, что нужно.
+    addDockWidget(Qt::TopDockWidgetArea, matrixDock);
+    // Панель показали снова — догоняем всё, что накопилось, пока её не было.
+    connect(plotDock, &QDockWidget::visibilityChanged, this, [this](bool shown) {
+        if (shown)
+            spectrumPlot->refresh();
+    });
+
+    // Порядок делений важен. Сначала окно делится по высоте, и только потом
+    // верхняя половина — по ширине: иначе панель хода отрезает себе колонку во
+    // всю высоту окна и встаёт не рядом с матрицей, а сбоку от всего сразу.
+    splitDockWidget(matrixDock,   spectrumDock, Qt::Vertical);
+    splitDockWidget(matrixDock,   statsDock,    Qt::Horizontal);
+    splitDockWidget(spectrumDock, plotDock,     Qt::Horizontal);
+
+    // Ширины задаются явно. Сам Qt делит место по sizeHint, а у графика он
+    // крошечный, у текстовых полей — во всю строку, и график получал узкую
+    // полоску у правого края. Числа относительные, Qt подгоняет их под окно;
+    // левая колонка шире — матрице и спектру нужна ширина под строки цифр.
+    resizeDocks({ matrixDock,   statsDock }, { 600, 400 }, Qt::Horizontal);
+    resizeDocks({ spectrumDock, plotDock  }, { 600, 400 }, Qt::Horizontal);
+
+    // Fixed, а не Maximum: Maximum разрешает сжаться до нуля, и полоса с
+    // кнопками исчезала, отдав всю высоту панелям.
+    ui->centralwidget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+
+    defaultLayout = saveState(Constants::LAYOUT_VERSION);
+    updateMatrixTabs();
+
+    // Меню «Вид»: галочки Qt делает сам, они же возвращают закрытую панель.
+    ui->viewMNU->addAction(matrixDock->toggleViewAction());
+    ui->viewMNU->addAction(spectrumDock->toggleViewAction());
+    ui->viewMNU->addAction(plotDock->toggleViewAction());
+    ui->viewMNU->addAction(statsDock->toggleViewAction());
+    ui->viewMNU->addSeparator();
+    ui->viewMNU->addAction(UIStrings::VIEW_RESET_TEXT, this, &MainWindow::resetLayout);
+}
+
+void MainWindow::updateMatrixTabs()
+{
+    if (!matrixTabBar)
+        return;
+    const bool product = settings.algorithmType == ComputationSettings::ProductCode;
+    matrixTabBar->setTabVisible(1, product);
+    matrixTabBar->setVisible(product);
+    if (!product) {
+        matrixTabBar->setCurrentIndex(0);
+        matrixPages->setCurrentIndex(0);
+    }
+    updateMatrixTitles();
+}
+
+void MainWindow::resetLayout()
+{
+    restoreState(defaultLayout, Constants::LAYOUT_VERSION);
+
+    // restoreState возвращает положение, но закрытую панель не открывает.
+    matrixDock->show();
+    spectrumDock->show();
+    plotDock->show();
+}
+
 void MainWindow::setToolTips() {
-    ui->matrixLBL->setToolTip(UIStrings::MATRIX_TOOLTIP);
-    ui->spectrumLBL->setToolTip(UIStrings::SPECTRUM_TOOLTIP);
-    ui->executePBN->setToolTip(UIStrings::START_TOOLTIP);
     ui->cancelPBN->setToolTip(UIStrings::CANCEL_TOOLTIP);
+    // Квадрат остановки у отмены не меняется, поэтому ставится один раз.
+    ui->cancelPBN->setIcon(FluentIcons::icon(this, FluentIcons::STOP));
+    updateExecuteButton();
     ui->exitPBN->setToolTip(UIStrings::EXIT_TOOLTIP);
+    ui->exitPBN->setIcon(FluentIcons::icon(this, FluentIcons::EXIT));
 }
 
 void MainWindow::setWorker()
@@ -223,6 +415,20 @@ void MainWindow::setWorker()
     connect( workerPtr,       &Worker::errorOccurred,                  this,      &MainWindow::handleError,                          Qt::QueuedConnection );
     connect( workerPtr,       &Worker::finished,                       this,      &MainWindow::handleFinished,                       Qt::QueuedConnection );
     connect( workerPtr,       &Worker::showSaveLBL,                    this,      &MainWindow::showSaveLBL,                          Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::gridTuned,                      this,      &MainWindow::handleGridTuned,                      Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::planReady,                      this,      &MainWindow::handlePlanReady,                      Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::searchEstimate,                 this,      &MainWindow::handleSearchEstimate,                 Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::productPlan,                    this,      &MainWindow::handleProductPlan,                    Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::updateRateMeasured,             settingsDialog, &SettingsDialog::applyMeasuredRate,            Qt::QueuedConnection );
+    // Проба останавливается тем же способом, которым пользователь останавливает
+    // расчёт. Отсчёт начинается по сигналу воркера, а не с самой просьбы: перед
+    // замером может пройти подбор сетки, и он занимает секунды.
+    connect( workerPtr, &Worker::updateRateProbeStarted, this, [this]() {
+        QTimer::singleShot(Constants::PROBE_DURATION_MS, this, [this]() {
+            if (workerPtr)
+                workerPtr->cancel();
+        });
+    }, Qt::QueuedConnection );
 
     connect( this, static_cast<void (MainWindow::*)(const QJsonObject&)>( &MainWindow::sendSettingsToWorker ), workerPtr, &Worker::setSettings, Qt::QueuedConnection);
 
@@ -230,105 +436,6 @@ void MainWindow::setWorker()
     // DirectConnection для того, чтобы частоту обновления можно было изменять в реальном времени
     //connect( this,            &MainWindow::refreshProgressbarValueChanged, workerPtr, &Worker::handleRefreshProgressbarValueChanged, Qt::DirectConnection );
     //connect( this,            &MainWindow::refreshSpectrumValueChanged,    workerPtr, &Worker::handleRefreshSpectrumValueChanged,    Qt::DirectConnection );
-}
-
-void MainWindow::setMatrixMenu()
-{
-    ui->matrixLBL->setContextMenuPolicy(Qt::CustomContextMenu);
-
-    // Создаём меню и базовые действия один раз
-    matrixMenu = ui->matrixMNU;
-
-    connect(ui->addMatrixACN, &QAction::triggered, this, &MainWindow::onAddMatrixTriggered);
-    ui->addMatrixACN->setIcon(QIcon(":/ui/icons/newspaper--plus.png"));
-    ui->deleteMatrixMNU->setIcon(QIcon(":/ui/icons/newspaper--minus.png"));
-    // функция-утилита для обновления состояния доступности пунктов
-    auto updateMenuEnabledState = [this]() {
-        loadMatricesArray(); // обновим массив, чтобы проверить наличие
-        ui->deleteMatrixMNU->setEnabled(matrixActionsEnabled && !matrices.isEmpty());
-        };
-
-    // По умолчанию включаем/выключаем подменю — учитываем флаг matrixActionsEnabled
-    loadMatricesArray();
-    ui->deleteMatrixMNU->setEnabled(matrixActionsEnabled && !matrices.isEmpty());
-
-    matrixMenu->setMouseTracking(true);
-
-    // Таймер для отложенного открытия подменю
-    matrixMenuTimer = new QTimer(this);
-    matrixMenuTimer->setSingleShot(true);
-    matrixMenuTimer->setInterval(120);
-
-    connect(matrixMenu, &QMenu::hovered, this, [this](QAction* act) {
-        pendingHover = act;
-        if (pendingHover && pendingHover->menu() && matrixActionsEnabled)
-            matrixMenuTimer->start();
-        else
-            matrixMenuTimer->stop();
-        });
-
-    connect(matrixMenuTimer, &QTimer::timeout, this, [this]() {
-        if (!matrixMenu || !pendingHover || !pendingHover->menu()) return;
-        QPoint global = QCursor::pos();
-        QPoint local = matrixMenu->mapFromGlobal(global);
-        QAction* under = matrixMenu->actionAt(local);
-        if (under == pendingHover) {
-            matrixMenu->setActiveAction(pendingHover);
-            return;
-        }
-        QRect rect = matrixMenu->actionGeometry(pendingHover);
-        if (!rect.isNull()) {
-            const int margin = 6;
-            QRect expanded = rect.adjusted(-margin, -margin, margin, margin);
-            if (expanded.contains(local))
-                matrixMenu->setActiveAction(pendingHover);
-        }
-        });
-
-    // Обновляем только динамическую часть перед показом
-    connect(matrixMenu, &QMenu::aboutToShow, this, [this]() {
-        rebuildMatrixMenuActions();
-    });
-    // синхронизируем стартовое состояние (на случай, если matrixActionsEnabled уже false)
-    updateMenuEnabledState();
-}
-
-void MainWindow::setMatrixActionsEnabled(bool enabled)
-{
-    matrixActionsEnabled = enabled;
-
-    if (!matrixMenu) return;
-
-    // действие, которое представляет подменю удаления
-    QAction* deleteMenuAction = ui->deleteMatrixMNU ? ui->deleteMatrixMNU->menuAction() : nullptr;
-
-    // 1) Обновим уже существующие динамические пункты (если они есть)
-    for (QAction* a : matrixMenu->actions()) {
-        if (a == ui->addMatrixACN || a == deleteMenuAction)
-            continue;
-        a->setEnabled(enabled);
-    }
-
-    // 2) Обновим действия внутри подменю "Удалить"
-    if (ui->deleteMatrixMNU) {
-        for (QAction* a : ui->deleteMatrixMNU->actions()) {
-            a->setEnabled(enabled);
-        }
-        ui->deleteMatrixMNU->setEnabled(enabled && !ui->deleteMatrixMNU->actions().isEmpty());
-    }
-
-    // 3) Если меню видно — перестроим динамику прямо сейчас, чтобы новые enabled/disabled вступили в силу.
-    if (matrixMenu->isVisible()) {
-        if (!enabled) {
-            // если отключаем — безопаснее закрыть меню, чтобы не было неконсистентных взаимодействий
-            matrixMenu->close();
-        }
-        else {
-            // если включаем — перестроим пункты (rebuild сделает act->setEnabled(matrixActionsEnabled) для новых)
-            rebuildMatrixMenuActions();
-            // возможно, стоит обновить вид: matrixMenu->update(); но обычно rebuild достаточно
-        }
-    }
 }
 
 void MainWindow::connectSettingsDialog()
@@ -339,119 +446,192 @@ void MainWindow::connectSettingsDialog()
     connect( this,     &MainWindow::matrixChanged,            settingsDialog, &SettingsDialog::handleMatrixChanged     );
     connect( this,     &MainWindow::setInterfaceEnabled,      settingsDialog, &SettingsDialog::setInterfaceEnabled     );
     connect( this,     &MainWindow::requestSettings,          settingsDialog, &SettingsDialog::handleSettingsRequested );
+    connect( this,     &MainWindow::applySettingsFromAutosave, settingsDialog, &SettingsDialog::applyFromAutosave       );
 
     // Записываем матрицу при получении
+    // Замер потолка обновления: короткий расчёт на настройках, которые сейчас
+    // выставлены в диалоге, — не на тех, что подтверждены кнопкой.
+    connect( settingsDialog, &SettingsDialog::measureUpdateRateRequested,
+        this, [this]( const QJsonObject& obj ) {
+            if (!workerPtr)
+                return;
+            // Без матрицы пробе не с чем работать, а описание задачи на пустой
+            // матрице лезет за её первую строку.
+            const QString error = matrixError();
+            if (!error.isEmpty()) {
+                QMessageBox::warning(this, UIStrings::ERROR_TITLE, error);
+                settingsDialog->applyMeasuredRate(0.0);
+                return;
+            }
+
+            ComputationSettings probe = ComputationSettings::fromJson(obj);
+            probe.matrix  = ui->matrixPTE->toStringList();
+            probe.matrix2 = matrix2PTE->toStringList();
+
+            workerThreadPtr->start();
+            QMetaObject::invokeMethod(workerPtr, "setSettings", Qt::QueuedConnection,
+                                      Q_ARG(QJsonObject, probe.toJson()));
+            QMetaObject::invokeMethod(workerPtr, "measureUpdateRate", Qt::QueuedConnection);
+        });
+
     connect( settingsDialog, &SettingsDialog::sendSettingsToWidget,
         this, [this]( const QJsonObject& obj ) {
+            const ComputationSettings::Algorithm before = settings.algorithmType;
             settings = ComputationSettings::fromJson(obj);
-            settings.matrix = ui->matrixPTE->toStringList();
+            settings.matrix  = ui->matrixPTE->toStringList();
+            settings.matrix2 = matrix2PTE->toStringList();
+            spectrumPlot->setMaxBars(settings.maxPlotBars);
+            updateMatrixTabs();
+
+            // Поднятая запись — про свой алгоритм. Сменили алгоритм — кнопка
+            // «Продолжить» больше не про неё: иначе расчёт стартовал бы как
+            // продолжение и тащил бы за собой состояние прежнего показа.
+            if (runState == RunState::Loaded && settings.algorithmType != before) {
+                runState = RunState::Idle;
+                updateExecuteButton();
+            }
             MainWindow::sendSettingsToWorker(settings.toJson());
+
+            // Идущему расчёту настройки через очередь не доходят: воркер до
+            // самого конца не возвращается в свой цикл событий. Живые интервалы
+            // передаются напрямую.
+            if (workerPtr && (runState == RunState::Running || runState == RunState::Paused))
+                workerPtr->setLiveIntervals(settings.timeIntSet.updateSpectrumInterval,
+                                            settings.timeIntSet.saveSpectrumInterval);
         });
 }
 
 
 void MainWindow::on_executePBN_clicked()
 {
+    // Одна и та же кнопка запускает, ставит на паузу и продолжает расчёт.
     switch (runState) {
-        case RunState::Idle: {
-            
-            // Блокируем интерфейс
-            emit setInterfaceEnabled(   false );
-            ui->matrixPTE->setReadOnly( true  );
-            ui->cancelPBN->setEnabled(  true  );
-            setMatrixActionsEnabled(    false );
-            ui->infoLBL->setText("");
-            ui->infoLBL->show();
-            ui->infoPBR->setValue(0);
+        case RunState::Idle:
+        case RunState::Loaded:  startComputation();  break;
+        case RunState::Running: pauseComputation();  break;
+        case RunState::Paused:  resumeComputation(); break;
+    }
+}
 
-            if (!workerPtr) {
-                QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString::fromUtf8("Worker не подключён"));
-                handleFinished(-1);
-                return;
-            }
-            Matrix rows = ui->matrixPTE->toStringList();
-            if ( rows.isEmpty()) {
-                QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString::fromUtf8("Матрица пустая"));
-                handleFinished(-1);
-                return;
-            }
-            quint64 numOfRows = rows.size();
-            if ( numOfRows > Constants::MAX_ROWS ) {
-                QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString("Число строк матрицы больше чем %1").arg(Constants::MAX_ROWS));
-                handleFinished(-1);
-                return;
-            }
-            quint64 numOfCols = (quint64)rows.first().length();
-            for (const QString& r : rows) {
-                if ((quint64)r.length() != numOfCols) {
-                    QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString("Все строки должны быть одинаковой длины"));
-                    handleFinished(-1);
-                    return;
-                }
-            }
-            if ( numOfCols > Constants::MAX_COLS ) {
-                QMessageBox::warning(this, UIStrings::ERROR_TITLE, QString("Число столбцов матрицы больше чем %1").arg(Constants::MAX_COLS));
-                handleFinished(-1);
-                return;
-            }
-            // Запускаем поток, чтобы отправить в него настройки
-            workerThreadPtr->start();
-            // Запрашиваем настройки для расчета
-            emit requestSettings();
+// Проверяет матрицу перед запуском. Пустая строка — всё в порядке.
+QString MainWindow::matrixError() const
+{
+    auto check = [this](const Matrix& rows, const QString& who) -> QString {
+        if (rows.isEmpty())
+            return tr("%1 пустая").arg(who);
 
-            // Если есть чекпоинт для данных настроек - выводим диалог
-            if (hasCheckpoint()) {
-                QMessageBox::StandardButton reply;
-                reply = QMessageBox::question(
-                    this,
-                    "Найден спектр",
-                    "Для текущих настроек обнаружен сохранённый спектр\nПродолжить вычисление с сохранённого состояния?",
-                    QMessageBox::Yes | QMessageBox::No
-                );
-                // Загружаем RunState в зависимости от выбора пользователя
-                QMetaObject::invokeMethod(
-                    workerPtr,
-                    "initializeRunState",
-                    Qt::QueuedConnection,
-                    Q_ARG(LoadMode, reply == QMessageBox::Yes
-                        ? LoadMode::FromCheckpoint
-                        : LoadMode::Reset)
-                );
-            }
-            // Начинаем расчет
-            QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection );
+        if (quint64(rows.size()) > Constants::MAX_ROWS)
+            return tr("%1: число строк больше чем %2").arg(who).arg(Constants::MAX_ROWS);
 
-            
-            runState = RunState::Running;
-            ui->executePBN->setText(UIStrings::PAUSE_TEXT    );
-            ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP );
-        } break;
+        const int cols = rows.first().length();
+        for (const QString& row : rows) {
+            if (row.length() != cols)
+                return tr("%1: все строки должны быть одинаковой длины").arg(who);
+        }
 
-        case RunState::Running: {
-            if (workerPtr)
-                workerPtr->pause();
+        if (quint64(cols) > Constants::MAX_COLS)
+            return tr("%1: число столбцов больше чем %2").arg(who).arg(Constants::MAX_COLS);
+        return QString();
+    };
 
-            runState = RunState::Paused;
-            this->setWindowTitle(UIStrings::PAUSE_TEXT);
-            ui->executePBN->setText(UIStrings::CONTINUE_TEXT);
-            ui->executePBN->setToolTip(UIStrings::CONTINUE_TOOLTIP);
-        } break;
+    const QString first = check(ui->matrixPTE->toStringList(),
+                                settings.algorithmType == ComputationSettings::ProductCode
+                                    ? tr("Матрица 1") : tr("Матрица"));
+    if (!first.isEmpty())
+        return first;
+    // Код произведения: компоненты проверяются каждая сама по себе, само
+    // произведение в памяти не строится, и его размер ничем не ограничен.
+    if (settings.algorithmType == ComputationSettings::ProductCode)
+        return check(matrix2PTE->toStringList(), tr("Матрица 2 (вторая компонента)"));
+    return QString();
+}
 
-        case RunState::Paused: {
-            if (workerPtr)
-                workerPtr->resume();
+void MainWindow::startComputation()
+{
+    const bool resuming = runState == RunState::Loaded;
 
-            runState = RunState::Running;
-            ui->executePBN->setText(UIStrings::PAUSE_TEXT);
-            ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP);
-            if (remainingMinutes != -1)
-                this->setWindowTitle(formatRemainingTime(remainingMinutes));
-            else
-                this->setWindowTitle(UIStrings::MAIN_TITLE);
-        } break;
+    if (!workerPtr) {
+        QMessageBox::warning(this, UIStrings::ERROR_TITLE, tr("Worker не подключён"));
+        return;
+    }
 
+    // Проверка идёт до блокировки интерфейса: иначе при ошибке в матрице он
+    // успевал погаснуть и тут же зажечься, а в строке состояния оставалось
+    // «Готово» о расчёте, которого не было.
+    const QString error = matrixError();
+    if (!error.isEmpty()) {
+        QMessageBox::warning(this, UIStrings::ERROR_TITLE, error);
+        return;
+    }
 
-    } 
+    emit setInterfaceEnabled(false);
+    ui->matrixPTE->setReadOnly(true);
+    matrix2PTE->setReadOnly(true);
+    ui->cancelPBN->setEnabled(true);
+    matrixMenu->setActionsEnabled(false);
+    statsPanel->showState(tr("Идёт расчёт"));
+    ui->infoPBR->setValue(0);
+
+    // Поток нужен уже сейчас: настройки уходят воркеру через очередь событий.
+    workerThreadPtr->start();
+    emit requestSettings();
+
+    // Запись подняли из диалога — пользователь уже сказал, что продолжает,
+    // и спрашивать второй раз незачем.
+    LoadMode mode = LoadMode::Reset;
+    if (resuming) {
+        mode = LoadMode::FromCheckpoint;
+    }
+    else if (hasCheckpoint()) {
+        const auto reply = QMessageBox::question(this,
+            tr("Найден спектр"),
+            tr("Для текущих настроек обнаружен сохранённый спектр\n"
+               "Продолжить вычисление с сохранённого состояния?"),
+            QMessageBox::Yes | QMessageBox::No);
+        if (reply == QMessageBox::Yes)
+            mode = LoadMode::FromCheckpoint;
+    }
+
+    // Режим задаётся всегда, а не только при найденном сохранении: иначе
+    // воркер начинал бы с того состояния, что осталось от прошлого запуска.
+    QMetaObject::invokeMethod(workerPtr, "initializeRunState", Qt::QueuedConnection,
+                              Q_ARG(LoadMode, mode));
+
+    // Настройки к этому моменту уже пришли от диалога по requestSettings.
+    statsPanel->showTask(settings);
+    statsPanel->clearProgress();
+    unseenByWeight.clear();
+
+    QMetaObject::invokeMethod(workerPtr, "computeSpectrum", Qt::QueuedConnection);
+
+    runState = RunState::Running;
+    updateExecuteButton();
+}
+
+void MainWindow::pauseComputation()
+{
+    if (workerPtr)
+        workerPtr->pause();
+
+    runState = RunState::Paused;
+    setWindowTitle(UIStrings::PAUSE_TEXT);
+    statsPanel->showState(tr("Пауза"));
+    updateExecuteButton();
+}
+
+void MainWindow::resumeComputation()
+{
+    if (workerPtr)
+        workerPtr->resume();
+
+    runState = RunState::Running;
+    statsPanel->showState(tr("Идёт расчёт"));
+    updateExecuteButton();
+
+    // Оценка времени с прошлого запуска ещё актуальна — возвращаем её
+    // в заголовок вместо «Пауза».
+    setWindowTitle(remainingMinutes != -1 ? Format::remainingTime(remainingMinutes)
+                                          : UIStrings::MAIN_TITLE);
 }
 
 void MainWindow::on_exitPBN_clicked()
@@ -467,6 +647,7 @@ void MainWindow::on_exitPBN_clicked()
     emit setInterfaceEnabled(   true  );
     saveSettings();
     ui->matrixPTE->setReadOnly( false );
+    matrix2PTE->setReadOnly( false );
     qApp->exit();
 }
 
@@ -488,94 +669,8 @@ void MainWindow::on_cancelPBN_clicked()
 
     emit setInterfaceEnabled(   true  );
     ui->matrixPTE->setReadOnly( false );
+    matrix2PTE->setReadOnly( false );
     ui->cancelPBN->setEnabled(  false );
-}
-
-void MainWindow::on_saveSpectrumACN_triggered()
-{
-    //// 1. Путь к exe
-    //QString basePath = QCoreApplication::applicationDirPath();
-    //
-    //// 2. Базовое имя (размер матрицы)
-    //QString baseName = buildBaseName(settings.matrix);
-    //
-    //// 3. Ищем папку с такой же матрицей
-    //QString foundFolder = findFirstMatchingFolder(basePath, settings.matrix);
-    //
-    //// Если нашли папку с матрицей, для которой сохраняем - предлагаем сохранить в неё
-    //if (!foundFolder.isEmpty()) {
-    //    QMessageBox::StandardButton reply = QMessageBox::question(
-    //        this,
-    //        "Найдена папка",
-    //        "Найдена папка «" + foundFolder + "» для данной матрицы.\nСохранить спектр в неё?",
-    //        QMessageBox::Yes | QMessageBox::No
-    //    );
-    //
-    //    if (reply == QMessageBox::Yes) {
-    //        QString fullPath = QDir(basePath).filePath(foundFolder);
-    //
-    //        // TODO: сохранить спектр сюда
-    //        // saveSpectrum(fullPath);
-    //
-    //        return;
-    //    }
-    //}
-    //
-    //// 4. Генерируем уникальное имя
-    //QString uniqueName = makeUniqueFolderName(basePath, baseName);
-    //
-    //// 5. Диалог
-    //QInputDialog dialog(this);
-    //dialog.setWindowTitle("Создать папку со спектром");
-    //dialog.setLabelText("Введите имя папки:");
-    //dialog.setTextValue(uniqueName);
-    //
-    //// Убираем кнопку "?"
-    //dialog.setWindowFlags(dialog.windowFlags() & ~Qt::WindowContextHelpButtonHint);
-    //QString folderName = uniqueName;
-    //if (dialog.exec() == QDialog::Accepted) {
-    //    folderName = dialog.textValue();
-    //}
-    //
-    //
-    //// 6. Ещё раз проверка уникальности
-    //folderName = makeUniqueFolderName(basePath, folderName);
-    //
-    //QString fullPath = QDir(basePath).filePath(folderName);
-    //
-    //// 7. Создаём папку
-    //if (!QDir().mkpath(fullPath)) {
-    //    QMessageBox::warning(this, "Ошибка", "Не удалось создать папку");
-    //    return;
-    //}
-    //
-    //// 8. (опционально) создаём структуру
-    //QDir dir(fullPath);
-    //dir.mkdir(QString::fromUtf8("Спектры"));
-    //dir.mkdir(QString::fromUtf8("Сохранения"));
-    //
-    //// 9. сохраняем матрицу
-    //QString matrixPath = dir.filePath( baseName += ".mtrx" );
-    //
-    //if (!writeMatrixFile(matrixPath, settings.matrix)) {
-    //    QMessageBox::warning(this, "Ошибка", "Не удалось сохранить матрицу");
-    //}
-    //// 9. TODO: сохранить спектр
-    //// saveSpectrum(fullPath);
-}
-
-void MainWindow::handleStrValChanged()
-{
-    if( workerPtr )
-        workerPtr->cancel();
-    if( workerThreadPtr ){
-        workerThreadPtr->quit();
-        workerThreadPtr->wait();
-    }
-    runState = RunState::Idle;
-    ui->infoPBR->setValue(0);
-    ui->executePBN->setText(UIStrings::START_TEXT);
-
 }
 
 //
@@ -587,18 +682,7 @@ void MainWindow::handleUpdateInfoPBR(int percent)
     // Обновляем прогрессбар в ui
     ui->infoPBR->setValue(percent);
 
-    // Обновляем прогрессбар под иконкой приложения
-    #ifdef Q_OS_WIN
-        if (!taskbarAvailable) return;
-    
-        if (percent <= 0 || percent >= 100) {
-            taskbar->SetProgressState(hwnd, TBPF_NOPROGRESS);
-        }
-        else {
-            taskbar->SetProgressState(hwnd, TBPF_NORMAL);
-            taskbar->SetProgressValue(hwnd, percent, 100);
-        }
-    #endif
+    taskbar->setPercent(percent);
 }
 
 void MainWindow::sendSettingsToWorker()
@@ -608,51 +692,55 @@ void MainWindow::sendSettingsToWorker()
 
 void MainWindow::handleUpdateSpectrumPlot(const SpectrumFloat spectrum)
 {
-    updatePlot(spectrum);
+    spectrumPlot->setSpectrum(spectrum);
 }
 
 void MainWindow::handleUpdateSpectrumPTE( const SpectrumText spectrum )
 {
-    QString str = spectrum.join('\n');
-    if (!str.isEmpty() && str.endsWith('\n'))
-        str.chop(1);
-    QScrollBar *vbar = ui->spectrumPTE->verticalScrollBar();
-    int pos = vbar->value();
-    ui->spectrumPTE->setPlainText( str );
-    vbar->setValue(pos);
+    setSpectrumRows(spectrum);
 }
-void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed)
+// Сетку показываем: иначе при включённом автоподборе непонятно, на чём
+// программа в итоге считает и почему время отличается от прошлого запуска.
+void MainWindow::handleGridTuned(int blocks, int threads)
+{
+    statsPanel->showGrid(blocks, threads);
+}
+
+void MainWindow::handlePlanReady(int sets, int rows, int exactUpToWeight)
+{
+    // Строки «Гарантия» в панели больше нет: план виден в записи расчёта и
+    // в тестовом харнессе, на экране от него просили только вес.
+    Q_UNUSED(sets); Q_UNUSED(rows); Q_UNUSED(exactUpToWeight);
+}
+
+void MainWindow::handleSearchEstimate(int weight, quint64 trialsDone, quint64 trialsTotal,
+                                      double missProbability, SpectrumFloat unseenByWeight)
+{
+    Q_UNUSED(weight); Q_UNUSED(trialsDone); Q_UNUSED(trialsTotal); Q_UNUSED(missProbability);
+    this->unseenByWeight = unseenByWeight;
+    setSpectrumRows(lastSpectrum);
+}
+
+void MainWindow::handleProductPlan(const QString& text, int exactUpToWeight)
+{
+    // Что сейчас считается — в строке состояния: другой строки под это нет.
+    statsPanel->showState(text);
+    Q_UNUSED(exactUpToWeight);
+}
+
+void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed,
+                                              quint64 doneOps, quint64 totalOps)
 {
     remainingMinutes = minutesLeft;
 
-    int days = elapsedSec / 86400;
-    int hours = (elapsedSec % 86400) / 3600;
-    int minutes = (elapsedSec % 3600) / 60;
-    int seconds = elapsedSec % 60;
+    const QString elapsedStr = Format::duration(elapsedSec);
 
-    QStringList parts;
+    statsPanel->showProgress(elapsedSec, minutesLeft, speed, doneOps, totalOps);
 
-    if (days > 0)
-        parts << QString("%1 д").arg(days);
-    if (hours > 0)
-        parts << QString("%1 ч").arg(hours);
-    if (minutes > 0)
-        parts << QString("%1 мин").arg(minutes);
-    if (seconds > 0 || parts.isEmpty())
-        parts << QString("%1 с").arg(seconds);
-
-    QString elapsedStr = parts.join(' ');
-
-    QString infoText =
-        tr("Прошло времени:     %1").arg(elapsedStr) + "\n" +
-        tr("Осталось времени:   %1").arg(formatRemainingTime(remainingMinutes)) + "\n" +
-        tr("Средняя скорость:   %1").arg(formatSpeed(speed));
-
-    ui->infoLBL->setText(infoText);
-
-    // В заголовок можно оставить только ETA (это правильно)
-    this->setWindowTitle(formatRemainingTime(remainingMinutes));
-    ui->infoLBL->show();
+    // Имя программы в заголовке остаётся: раньше он превращался просто в
+    // "2 ч 15 мин", и в панели задач было непонятно, что это за окно.
+    this->setWindowTitle(tr("%1 — осталось %2")
+                             .arg(UIStrings::MAIN_TITLE, Format::remainingTime(remainingMinutes)));
 }
 void MainWindow::showSaveLBL()
 {
@@ -678,6 +766,12 @@ void MainWindow::showSaveLBL()
 }
 void MainWindow::handleMatrixChanged()
 {
+    // Матрицу правят руками — поднятое сохранение к ней больше не относится.
+    if (runState == RunState::Loaded && !applyingAutosave) {
+        runState = RunState::Idle;
+        updateExecuteButton();
+    }
+
     Matrix rows = ui->matrixPTE->toStringList();
     int maxLen = 0;
     for (const QString& row : rows)
@@ -685,16 +779,34 @@ void MainWindow::handleMatrixChanged()
     // При изменении размеров матрицы автоматически вызовется слот в settingsDialog-е, который отправит новые настройки
     if (rows.size() != 0 && maxLen != 0)
         emit matrixChanged( rows.size(), maxLen );
-    ui->matrixLBL->setText(QString::fromUtf8("Матрица (%1,%2):").arg(maxLen).arg(rows.size()));
-    
-    
+    // Размеры показывает заголовок дока — отдельной подписи над редактором
+    // больше нет.
+    updateMatrixTitles();
+}
+
+// «Матрица (n,k)» у произвольного кода; у произведения панель зовётся
+// «Матрицы», а размеры — на вкладках.
+void MainWindow::updateMatrixTitles()
+{
+    if (!matrixDock || !matrixTabBar)
+        return;
+    auto size = [](const Matrix& rows) {
+        int maxLen = 0;
+        for (const QString& row : rows) maxLen = qMax(maxLen, row.length());
+        return QStringLiteral(" (%1,%2)").arg(maxLen).arg(rows.size());
+    };
+    const bool product = settings.algorithmType == ComputationSettings::ProductCode;
+    matrixDock->setWindowTitle(product ? tr("Матрицы")
+                                       : tr("Матрица") + size(ui->matrixPTE->toStringList()));
+    matrixTabBar->setTabText(0, tr("Матрица 1") + size(ui->matrixPTE->toStringList()));
+    matrixTabBar->setTabText(1, tr("Матрица 2") + size(matrix2PTE->toStringList()));
 }
 void MainWindow::handleError(const QString& message)
 {
     QMessageBox::critical(this, UIStrings::ERROR_TITLE, message);
     // reset UI
     runState = RunState::Idle;
-    ui->executePBN->setText(UIStrings::START_TEXT);
+    updateExecuteButton();
 }
 
 void MainWindow::handleFinished(int elapsedSec)
@@ -708,36 +820,33 @@ void MainWindow::handleFinished(int elapsedSec)
     workerPtr->resume();
     emit setInterfaceEnabled(   true  );
     ui->matrixPTE->setReadOnly( false );
+    matrix2PTE->setReadOnly( false );
     ui->cancelPBN->setEnabled(  false );
-    setMatrixActionsEnabled(    true  );
+    matrixMenu->setActionsEnabled(true);
 
-    ui->executePBN->setText( UIStrings::START_TEXT  );
-    ui->executePBN->setToolTip( UIStrings::START_TOOLTIP );
+    updateExecuteButton();
     this->setWindowTitle( UIStrings::MAIN_TITLE  );
     if ( workerPtr->isCancelled() ) {
         workerPtr->uncancel();
-        ui->infoLBL->setText( UIStrings::CANCEL_TEXT );
+        // Расчёт останавливали ради загрузки сохранения — вот теперь можно.
+        if (pendingAutosave) {
+            pendingAutosave = false;
+            applyAutosaveNow(pendingMatrix, pendingRecord);
+            return;
+        }
+        statsPanel->showState( UIStrings::CANCEL_TEXT );
         return;
     }
-    int days = elapsedSec / 86400;
-    int hours = (elapsedSec % 86400) / 3600;
-    int minutes = (elapsedSec % 3600) / 60;
-    int seconds = elapsedSec % 60;
-    QStringList parts;
-    if (days > 0)
-        parts << QString("%1 д").arg(days);
-    if (hours > 0)
-        parts << QString("%1 ч").arg(hours);
-    if (minutes > 0)
-        parts << QString("%1 мин").arg(minutes);
-    if (seconds > 0 )
-        parts << QString("%1 с").arg(seconds);
-    if (parts.isEmpty()) {
-        ui->infoLBL->setText( UIStrings::READY_TEXT + QString( "< 1 с" ) );
-        return;
+    // Меньше секунды — «0 с» выглядело бы как сбой замера.
+    const QString elapsedStr = elapsedSec > 0 ? Format::duration(elapsedSec)
+                                              : tr("< 1 с");
+    statsPanel->showState( UIStrings::READY_TEXT + elapsedStr );
+
+    // Расчёт успел добежать до конца, пока пользователь выбирал запись.
+    if (pendingAutosave) {
+        pendingAutosave = false;
+        applyAutosaveNow(pendingMatrix, pendingRecord);
     }
-    QString elapsedStr = parts.join(' ');
-    ui->infoLBL->setText( UIStrings::READY_TEXT + elapsedStr );
 }
 
 
@@ -746,230 +855,49 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
     // При изменение размера обновляем подписи под графиком
     if (watched == ui->spectrumCPT && event->type() == QEvent::Resize) {
-        SpectrumFloat vec(yCache.size());
-        for (int i = 0; i < yCache.size(); ++i) {
-            vec[i] = (float) yCache.at(i);
-        }
-        updatePlot(vec);
+        // Не перерисовываем сразу: пока панель тащат, размер меняется
+        // непрерывно. Таймер сбрасывается на каждом событии и срабатывает
+        // один раз, когда размер устоялся.
+        plotRefreshTimer->start();
         return false;
     }
     // Для всех остальных событий — стандартная обработка
     return QMainWindow::eventFilter(watched, event);
 }
 
-void MainWindow::onAddMatrixTriggered()
-{
-    // Формируем дефолтное имя по текущему содержимому
-    const QString defName = defaultMatrixName();
-
-    // Создаём QInputDialog вручную, чтобы убрать кнопку "?" в заголовке
-    QInputDialog dlg(this);
-    dlg.setWindowTitle(tr("Сохранить матрицу"));
-    dlg.setLabelText(tr("Имя матрицы:"));
-    dlg.setTextValue(defName);
-    dlg.setWindowFlags(dlg.windowFlags() & ~Qt::WindowContextHelpButtonHint);
-
-    if (dlg.exec() != QDialog::Accepted)
-        return; // пользователь нажал Отмена
-
-    const QString name = dlg.textValue().trimmed();
-    if (name.isEmpty()) {
-        QMessageBox::warning(this, tr("Ошибка"), tr("Имя не может быть пустым"));
-        return;
-    }
-
-    // Убедимся, что у нас актуальные данные
-    loadMatricesArray();
-
-    int idx = findMatrixIndexByName(name);
-    if (idx >= 0) {
-        // уже есть — спросим, перезаписать ли
-        const auto resp = QMessageBox::question(this, tr("Перезапись"),
-            tr("Матрица с именем \"%1\" уже существует. Перезаписать?").arg(name),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (resp != QMessageBox::Yes)
-            return;
-    }
-
-    // Собираем объект и записываем в массив (перезапись или добавление)
-    QJsonObject obj;
-    obj["matrixName"] = name;
-    obj["matrix"] = ui->matrixPTE->toPlainText();
-
-    if (idx >= 0)
-        matrices[idx] = obj;
-    else
-        matrices.append(obj);
-
-    // Сохраняем в QSettings
-    saveMatricesArray();
-
-    // Включаем подменю удаления (если оно было выключено)
-    if (deleteMenu)
-        deleteMenu->setEnabled(!matrices.isEmpty());
-}
-
 bool MainWindow::hasCheckpoint() const
 {
-    // Считаем хеш текущих настроек
-    quint64 hash = settings.computeHash();
-    // Хеш - имя чекпоинта
-    QString group = QString("checkpoints/%1").arg(hash);
-
-    QSettings s;
-    s.beginGroup(group);
-
-    // Проверяем, есть ли чекпоинт вообще
-    if (!s.contains("settings")) {
-        s.endGroup();
+    AutosaveRecord record;
+    const Matrix key = settings.algorithmType == ComputationSettings::ProductCode
+                           ? settings.matrix + settings.matrix2 : settings.matrix;
+    if (!autosave.load(key, settings.algorithmType, record))
         return false;
-    }
 
-    // Защита от коллизий
-    QJsonObject savedSettingsObj = s.value("settings").toJsonObject();
-    ComputationSettings saved = ComputationSettings::fromJson(savedSettingsObj);
-    // Переписать
-    if (!(saved == settings)/* && !(saved <= settings) */) {
-        s.endGroup();
-        return false;
-    }
-    return true;
+    // Запись может оказаться непригодной: она ушла дальше, чем просят сейчас.
+    return canResume(record, settings);
 }
-
-void MainWindow::updatePlot(const SpectrumFloat& spectrum)
-{
-    if (spectrum.isEmpty()) return;
-    
-    
-    const int size = spectrum.size();
-    if (sizeCache != size) {
-        sizeCache = size;
-        xCache.resize(size);
-        for (int i = 0; i < size; ++i) xCache[i] = i;
-        yCache.resize(size);
-        tickerCache.clear();
-        tickerStepCache = -1;
-    }
-
-    int step = 1;
-    int width = ui->spectrumCPT->width();
-    double pixelsPerBar = double(width) / double(size);
-    step = int(ceil(30.0 / pixelsPerBar));
-
-    if (tickerStepCache != step || tickerCache.isNull()) {
-        tickerStepCache = step;
-        QVector<double> ticks;
-        QVector<QString> labels = buildAxisLabels(size, step);
-        for (int i = 0; i < size; ++i) if (i % step == 0) ticks << i;
-        QSharedPointer<QCPAxisTickerText> tt(new QCPAxisTickerText);
-        tt->addTicks(ticks, labels);
-        tickerCache = tt;
-        ui->spectrumCPT->xAxis->setTicker(tickerCache);
-    }
-
-    // fill yCache and compute min/max non-zero
-    qint64 minIdx = -1;
-    qint64 maxIdx = -1;
-    double maxVal = 0.0;
-    bool invalidSpectrum = false;
-    for (int i = 0; i < size; ++i) {
-       
-        double v = double(spectrum.at(i));
-        if (std::isinf(v) || std::isnan(v)) {
-            invalidSpectrum = true;
-        }
-        yCache[i] = v;
-        if (v != 0.0) {
-            if (minIdx == -1) minIdx = i;
-            maxIdx = i;
-        }
-        if (v > maxVal) maxVal = v;
-    }
-
-    QCPBars* bars = nullptr;
-    if (ui->spectrumCPT->plottableCount() > 0)
-        bars = qobject_cast<QCPBars*>(ui->spectrumCPT->plottable());
-
-    if (invalidSpectrum) {
-        msg->setVisible(true);
-        if (bars)
-            bars->setVisible(false);
-        ui->spectrumCPT->replot();
-        return;
-    }
-    else {
-        msg->setVisible(false);
-        if (bars)
-            bars->setVisible(true);
-    }
-    if (bars) {
-        bars->setData(xCache, yCache);
-
-        QColor c = Colors[DefaultValues::SPECTRUM_COLOR];
-        //c = QColor(Colors[settings->getHistoColorValue()]);
-        //c.setAlpha( ( 100- settings->getTransparencyValue() )*255/100 );
-        bars->setBrush(QBrush(c));
-        bars->setPen(QPen(Qt::black));
-    }
-    
-    // axes range
-    if (minIdx == -1) ui->spectrumCPT->xAxis->setRange(0, size);
-    else ui->spectrumCPT->xAxis->setRange( minIdx - 1, maxIdx + 1 );
-
-    ui->spectrumCPT->yAxis->setRange(0.0, maxVal * 1.1);
-    ui->spectrumCPT->yAxis->setNumberFormat("eb");
-    ui->spectrumCPT->yAxis->setNumberPrecision(2);
-
-    ui->spectrumCPT->replot(QCustomPlot::rpQueuedReplot);
-}
-
-QVector<QString> MainWindow::buildAxisLabels(int size, int step) const
-{
-    QVector<QString> labels;
-    labels.reserve(size);
-    for (int i = 0; i < size; ++i) {
-        if (i % step == 0) labels << QString::number(i);
-        //else labels << QString();
-    }
-    return labels;
-}
-
-
 
 // Применить настройки
 void MainWindow::applySettings()
 {
-    applySpectrumColor();
-}
-// Применить цвет спектра
-void MainWindow::applySpectrumColor()
-{
-    QSettings s;
-    QColor c = Qt::blue;
+    spectrumPlot->setMaxBars(settings.maxPlotBars);
 
-    
-    //c = QColor(Colors[settings->getHistoColorValue()]);
-    //c.setAlpha( ( 100-settings->getTransparencyValue() )*255/100);
-    if ( ui->spectrumCPT->plottableCount() > 0 ) {
-        QCPBars *bars = qobject_cast<QCPBars*>(ui->spectrumCPT->plottable());
-        if (bars) {
-            bars->setBrush(QBrush(c));
-            //bars->setPen(QPen(Qt::black));
-            ui->spectrumCPT->replot();
-        }
-    }
+    // Точка, где настройки из диалога попадают в интерфейс. Сейчас
+    // единственное, что сюда просилось, — цвет и прозрачность столбцов,
+    // но эти поля в диалоге пока не подключены.
 }
+
 // Сохранить настройки в реестр
 void MainWindow::saveSettings()
 {
     QSettings s;
-    if( splitter )
-        s.setValue(SettingsKeys::SPLITTER_STATE,  this->splitter->saveState()    );
+    s.setValue(SettingsKeys::WINDOW_STATE,    this->saveState(Constants::LAYOUT_VERSION));
     s.setValue(SettingsKeys::CODE_MATRIX,     ui->matrixPTE->toPlainText()   );
-    s.setValue(SettingsKeys::SPECTRUM_TEXT,   ui->spectrumPTE->toPlainText() );
+    s.setValue(SettingsKeys::CODE_MATRIX2,    matrix2PTE->toPlainText()      );
+    s.setValue(SettingsKeys::SPECTRUM_TEXT,   lastSpectrum.join(QLatin1Char('\n')) );
     s.setValue(SettingsKeys::WIDGET_GEOMETRY, this->saveGeometry()           );
     QVariantList values;
-    for (double v : std::as_const(yCache))
+    for (double v : spectrumPlot->values())
         values << v;
     s.setValue(SettingsKeys::SPECTRUM_VALUES, values);
     s.sync();
@@ -981,178 +909,19 @@ void MainWindow::loadSettings()
     QSettings s;
 
     this->restoreGeometry(                    s.value(SettingsKeys::WIDGET_GEOMETRY                ).toByteArray()       );
-    if( splitter ) splitter->restoreState(    s.value(SettingsKeys::SPLITTER_STATE                 ).toByteArray()       );
-    ui->spectrumPTE->setPlainText(            s.value(SettingsKeys::SPECTRUM_TEXT                  ).toString()          );
+    // Номер раскладки: при изменении набора панелей restoreState вернёт false
+    // и останется та, что собрана по умолчанию, а не каша от прошлой версии.
+    restoreState(s.value(SettingsKeys::WINDOW_STATE).toByteArray(), Constants::LAYOUT_VERSION);
+    setSpectrumRows( s.value(SettingsKeys::SPECTRUM_TEXT).toString()
+                          .split(QLatin1Char('\n'), Qt::SkipEmptyParts) );
     ui->matrixPTE->setPlainText(              s.value(SettingsKeys::CODE_MATRIX                    ).toString()          );
+    matrix2PTE->setPlainText(                 s.value(SettingsKeys::CODE_MATRIX2                   ).toString()          );
     if (s.contains(SettingsKeys::SPECTRUM_VALUES)) {
         QVariantList values = s.value(SettingsKeys::SPECTRUM_VALUES).toList();
         SpectrumFloat spectrum;
         spectrum.reserve(values.size());
         for (const QVariant &v : values)
             spectrum.append(v.toFloat());
-        updatePlot(spectrum);
+        spectrumPlot->setSpectrum(spectrum);
     }
-}
-
-QString MainWindow::formatRemainingTime(int minutesTotal)
-{
-    if (minutesTotal <= 0) {
-        return QObject::tr("Меньше минуты");
-    }
-    
-    int days    = minutesTotal / (60 * 24);
-    int hours   = (minutesTotal % (60 * 24)) / 60;
-    int minutes = minutesTotal % 60;
-
-    QStringList parts;
-    if (days > 0)
-        parts << QObject::tr("%1 дн").arg(days);
-    if (hours > 0)
-        parts << QObject::tr("%1 ч").arg(hours);
-    if (minutes > 0 && days == 0) // минуты показываем только если меньше суток
-        parts << QObject::tr("%1 мин").arg(minutes);
-
-    return parts.join(" ");
-}
-
-QString MainWindow::formatSpeed(double speed)
-{
-    QString suffix = "кс/с";
-    double value = speed;
-
-    if (speed >= 1e12) {
-        value = speed / 1e12;
-        suffix = "трлн кс/с";
-    }
-    else if (speed >= 1e9) {
-        value = speed / 1e9;
-        suffix = "млрд кс/с";
-    }
-    else if (speed >= 1e6) {
-        value = speed / 1e6;
-        suffix = "млн кс/с";
-    }
-    else if (speed >= 1e3) {
-        value = speed / 1e3;
-        suffix = "тыс кс/с";
-    }
-
-    int precision;
-    if (std::abs(value) >= 100) precision = 0;
-    else if (std::abs(value) >= 10) precision = 1;
-    else precision = 2;
-
-    QString str = QString::number(value, 'f', precision);
-    str.replace('.', ',');
-
-    return str + " " + suffix;
-}
-
-void MainWindow::loadMatricesArray()
-{
-    matrices = QJsonArray();
-
-    QSettings s;
-    const QByteArray data = s.value(SettingsKeys::MATRICES_JSON).toByteArray();
-    if (data.isEmpty())
-        return;
-
-    const QJsonDocument doc = QJsonDocument::fromJson(data);
-    if (!doc.isArray())
-        return;
-
-    matrices = doc.array();
-}
-
-void MainWindow::saveMatricesArray()
-{
-    QSettings s;
-    QJsonDocument doc(matrices);
-    s.setValue(SettingsKeys::MATRICES_JSON, doc.toJson(QJsonDocument::Compact));
-    s.sync();
-}
-
-void MainWindow::saveMatrixByName(const QString& name)
-{
-    if (name.isEmpty())
-        return;
-
-    // Текст матрицы из интерфейса
-    const QString matrixText = ui->matrixPTE->toPlainText();
-
-    // Новый объект JSON для этой матрицы
-    QJsonObject matrixObj;
-    matrixObj["matrixName"] = name;
-    matrixObj["matrix"] = matrixText;
-
-    // Проверяем, есть ли уже матрица с таким именем
-    bool updated = false;
-    for (int i = 0; i < matrices.size(); ++i) {
-        const QJsonObject obj = matrices.at(i).toObject();
-        if (obj["matrixName"].toString() == name) {
-            matrices[i] = matrixObj;  // заменяем существующий
-            updated = true;
-            break;
-        }
-    }
-
-    // Если не нашли — добавляем новую
-    if (!updated)
-        matrices.append(matrixObj);
-
-    // Сохраняем массив обратно в настройки
-    saveMatricesArray();
-}
-
-bool MainWindow::removeMatrixByName(const QString& name)
-{
-    int idx = findMatrixIndexByName(name);
-    if (idx < 0) return false;
-    matrices.removeAt(idx);
-    saveMatricesArray();
-    return true;
-}
-
-int MainWindow::findMatrixIndexByName(const QString& name)
-{
-    for (int i = 0; i < matrices.size(); ++i) {
-        if (!matrices.at(i).isObject()) continue;
-        QJsonObject obj = matrices.at(i).toObject();
-        if (obj.value("matrixName").toString() == name) return i;
-    }
-    return -1;
-}
-
-QString MainWindow::getMatrixByName(const QString& name)
-{
-    int idx = findMatrixIndexByName(name);
-    if (idx < 0) return QString();
-    return matrices.at(idx).toObject().value("matrix").toString();
-}
-
-QStringList MainWindow::listMatrixNames()
-{
-    QStringList out;
-    for (const QJsonValue& v : matrices) {
-        if (!v.isObject()) continue;
-        out << v.toObject().value("matrixName").toString();
-    }
-    return out;
-}
-
-QString MainWindow::defaultMatrixName()
-{
-    Matrix rows = ui->matrixPTE->toStringList();
-    int maxLen = 0;
-    for (const QString& row : rows)
-        maxLen = qMax(maxLen, row.length());
-    if (rows.isEmpty()) return "(0,0)";
-
-    int cols = 0;
-    for (const QString& line : rows) {
-        // элементы через пробел, таб или что у тебя в формате матрицы
-        int cnt = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts).size();
-        if (cnt > cols) cols = cnt;
-    }
-    return QString("Матрица (%1,%2)").arg(maxLen).arg(rows.size());
 }

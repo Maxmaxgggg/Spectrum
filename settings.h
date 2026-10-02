@@ -13,88 +13,161 @@ enum TimeInterval {
     TenMinutes = 600
 };
 
+// Интервал обновления спектра на экране — в миллисекундах, отдельной шкалой.
+// Секунда здесь слишком грубый шаг: ход расчёта виден рывками. Сохранение на
+// диск, наоборот, чаще десяти секунд не нужно, поэтому оно осталось в секундах.
+enum UpdateInterval {
+    EveryTenthSecond   = 100,
+    EveryQuarterSecond = 250,
+    EveryHalfSecond    = 500,
+    EverySecond        = 1000,
+    EveryFiveSeconds   = 5000,
+    EveryTenSeconds    = 10000,
+    EveryThirtySeconds = 30000,
+    EveryMinute        = 60000
+};
+
 struct ComputationSettings
 {
-    // ����������� ������� ����
+    // Порождающая матрица кода
     QStringList matrix;
-    // ��� ������������� ��������� (������� XOR, ��� ����, �������� ���)
-    enum Algorithm { SimpleXor = 0, GrayCode = 1, DualCode = 2 };
-    // ��� �������� (������, ���������)
+    // Вторая компонента кода произведения; matrix — первая.
+    QStringList matrix2;
+    // Тип используемого алгоритма (Простой XOR, Код Грея, Дуальный код,
+    // Брауэр–Циммерман, случайный поиск по информационным множествам)
+    enum Algorithm { SimpleXor = 0, GrayCode = 1, DualCode = 2, BrouwerZimmermann = 3,
+                     RandomInfoSets = 4, ProductCode = 5 };
+    // Тип перебора (Полный, Частичный)
     enum EnumerationType { Full = 0, Partial = 1 };
-    // ��� ����������� (��, ��)
+    // Тип вычислителя (ЦП, ГП)
     enum ComputeDevice { CPU = 0, GPU = 1 };
 
     Algorithm       algorithmType = SimpleXor;
     EnumerationType enumType = Full;
     ComputeDevice   compDev = CPU;
-    // ������������ ����� ������������ �����
+    // Максимальное число перебираемых строк
     int             maxRows = 0;
+    // Брауэр–Циммерман: до какого веса спектр нужен точно. Число строк
+    // перебора программа выводит из него сама — по найденным множествам.
+    int             bzWeight = 8;
+    // Случайный поиск: до какого веса собирать слова и с какой вероятностью
+    // пропуска смириться — 10 в минус этой степени. Глубину перебора и число
+    // попыток программа выводит сама.
+    int             leonWeight       = 24;
+    int             leonMissExponent = 9;
+    // Память под таблицу найденных слов, мегабайты; 0 — половина физической.
+    int             leonMemoryMb     = 0;
 
-    // ��������� �����������
+    double leonMissProbability() const
+    {
+        double miss = 1.0;
+        for (int i = 0; i < leonMissExponent; ++i) miss /= 10.0;
+        return miss;
+    }
+    // Код произведения: до какого веса считать (0 — до границы, за которой
+    // начинаются слова следующего ранга) и до какого ранга слов идти.
+    int             productWeight = 0;
+    int             productRank   = 2;
+    // Чем считать большие компоненты произведения: Брауэр–Циммерман (точно,
+    // только ранг 1) или случайный поиск (список слов, ранги выше). Хранится
+    // как значение Algorithm.
+    int             productAlgorithm = RandomInfoSets;
+
+    // Перебор идёт слоями по числу складываемых строк: простой XOR и
+    // Брауэр–Циммерман. Код Грея и дуальный расчёт идут по маскам сплошь.
+    bool layered() const
+    {
+        return algorithmType == SimpleXor || algorithmType == BrouwerZimmermann;
+    }
+
+    // Подбирать число блоков и нитей замером перед расчётом вместо того,
+    // чтобы брать их из настроек. Имеет смысл только для видеокарты.
+    bool            autoTuneGrid = false;
+
+    // Настройки вычислителя
     struct computeDeviceSettings {
-        // ����� ������� ��
+        // Число потоков ЦП
         int threadsCpu = 1;
-        // ����� ������ ��
+        // Число блоков ГП
         int blocksGpu = 1;
-        // ����� ����� ��
+        // Число нитей ГП
         int threadsGpu = 1;
     } compDevSet;
 
+    // Потолок числа столбцов на графике. К расчёту отношения не имеет и в
+    // ключ автосохранения не входит — это только вид.
+    int             maxPlotBars = 160;
+
     struct timeIntervalSettings {
-        // ������� ���������� ������� � ������
+        // Частота сохранения спектра в реестр
         int saveSpectrumInterval = TenSeconds;
-        // ������� ���������� ������� � gui 
-        int updateSpectrumInterval = OneSecond;
+        // Частота обновления спектра на экране, миллисекунды
+        int updateSpectrumInterval = EverySecond;
     } timeIntSet;
 
     ComputationSettings() noexcept = default;
 
-    // ����������� �����������
+    // Конструктор копирования
     ComputationSettings(const ComputationSettings& other) noexcept
         : algorithmType(other.algorithmType)
         , enumType(other.enumType)
         , maxRows(other.maxRows)
+        , bzWeight(other.bzWeight)
+        , leonWeight(other.leonWeight)
+        , leonMissExponent(other.leonMissExponent)
+        , leonMemoryMb(other.leonMemoryMb)
+        , productWeight(other.productWeight)
+        , productRank(other.productRank)
+        , productAlgorithm(other.productAlgorithm)
         , compDev(other.compDev)
+        , autoTuneGrid(other.autoTuneGrid)
+        , maxPlotBars(other.maxPlotBars)
         , compDevSet(other.compDevSet)
         , timeIntSet(other.timeIntSet) { }
 
-    // ������������� ����� ���� ���������� �������� ������������
+    // Рекомендуется также явно определить оператор присваивания
     ComputationSettings& operator=(const ComputationSettings& other) noexcept
     {
         if (this == &other) return *this;
         matrix = other.matrix;
+        matrix2 = other.matrix2;
         algorithmType = other.algorithmType;
         enumType = other.enumType;
         maxRows = other.maxRows;
+        bzWeight = other.bzWeight;
+        leonWeight = other.leonWeight;
+        leonMissExponent = other.leonMissExponent;
+        leonMemoryMb = other.leonMemoryMb;
+        productWeight = other.productWeight;
+        productRank = other.productRank;
+        productAlgorithm = other.productAlgorithm;
         compDev = other.compDev;
+        autoTuneGrid = other.autoTuneGrid;
+        maxPlotBars = other.maxPlotBars;
         compDevSet = other.compDevSet;
         timeIntSet = other.timeIntSet;
         return *this;
     }
     bool operator==(const ComputationSettings& other) const
     {
-        // �� ���������� ����� ����� ��������� �������
+        // Не сравниваем между собой настройки времени
         return matrix == other.matrix &&
+            matrix2 == other.matrix2 &&
             algorithmType == other.algorithmType &&
             enumType == other.enumType &&
             maxRows == other.maxRows &&
+            bzWeight == other.bzWeight &&
+            leonWeight == other.leonWeight &&
+            leonMissExponent == other.leonMissExponent &&
+            productWeight == other.productWeight &&
+            productRank == other.productRank &&
+            productAlgorithm == other.productAlgorithm &&
             compDev == other.compDev &&
+            autoTuneGrid == other.autoTuneGrid &&
             compDevSet.threadsCpu == other.compDevSet.threadsCpu &&
             compDevSet.blocksGpu == other.compDevSet.blocksGpu &&
             compDevSet.threadsGpu == other.compDevSet.threadsGpu;
     }
-    // ��������� ������, ����� ������� XOR, ��� ��������� ���������, �� ����� maxRows ������
-    /*bool operator<=(const ComputationSettings & other) const
-    {
-        return matrix == other.matrix &&
-            (algorithmType == other.algorithmType) && (algorithmType == Algorithm::SimpleXor) &&
-            enumType == other.enumType &&
-            maxRows <= other.maxRows &&
-            compDev == other.compDev &&
-            compDevSet.threadsCpu == other.compDevSet.threadsCpu &&
-            compDevSet.blocksGpu == other.compDevSet.blocksGpu &&
-            compDevSet.threadsGpu == other.compDevSet.threadsGpu;
-    }*/
     QJsonObject toJson() const
     {
         QJsonObject obj;
@@ -105,10 +178,25 @@ struct ComputationSettings
             }
             obj["matrix"] = arr;
         }
+        if (!matrix2.isEmpty()) {
+            QJsonArray arr;
+            for (const QString& str : matrix2)
+                arr.append(str);
+            obj["matrix2"] = arr;
+        }
         obj["algorithmType"] = static_cast<int>(algorithmType);
         obj["enumType"] = static_cast<int>(enumType);
         obj["maxRows"] = maxRows;
+        obj["bzWeight"] = bzWeight;
+        obj["leonWeight"] = leonWeight;
+        obj["leonMissExponent"] = leonMissExponent;
+        obj["leonMemoryMb"] = leonMemoryMb;
+        obj["productWeight"] = productWeight;
+        obj["productRank"] = productRank;
+        obj["productAlgorithm"] = productAlgorithm;
         obj["compDev"] = static_cast<int>(compDev);
+        obj["maxPlotBars"] = maxPlotBars;
+        obj["autoTuneGrid"] = autoTuneGrid;
 
         QJsonObject dev;
         dev["threadsCpu"] = compDevSet.threadsCpu;
@@ -116,6 +204,13 @@ struct ComputationSettings
         dev["threadsGpu"] = compDevSet.threadsGpu;
 
         obj["compDevSet"] = dev;
+
+        // Версия схемы. Нужна ровно для одного: отличить настройки, где
+        // интервал обновления лежал в секундах, от нынешних, где он в
+        // миллисекундах. Без метки различать приходилось по самому значению,
+        // а это угадывание: 30 — это тридцать секунд по-старому и тридцать
+        // миллисекунд по-новому, и по числу они неразличимы.
+        obj["version"] = 2;
 
         QJsonObject timeInt;
         timeInt["saveSpectrumInterval"]   = timeIntSet.saveSpectrumInterval;
@@ -138,10 +233,31 @@ struct ComputationSettings
 
             s.matrix = list;
         }
+        if (obj.contains("matrix2") && obj["matrix2"].isArray()) {
+            for (const QJsonValue& val : obj["matrix2"].toArray())
+                s.matrix2.append(val.toString());
+        }
         s.algorithmType = static_cast<Algorithm>(obj["algorithmType"].toInt());
         s.enumType = static_cast<EnumerationType>(obj["enumType"].toInt());
         s.maxRows = obj["maxRows"].toInt();
+        // Ноль означает «ключа не было» — остаётся значение по умолчанию.
+        if (obj["bzWeight"].toInt() > 0)
+            s.bzWeight = obj["bzWeight"].toInt();
+        if (obj["leonWeight"].toInt() > 0)
+            s.leonWeight = obj["leonWeight"].toInt();
+        if (obj["leonMissExponent"].toInt() > 0)
+            s.leonMissExponent = obj["leonMissExponent"].toInt();
+        s.leonMemoryMb = obj["leonMemoryMb"].toInt();
+        s.productWeight = obj["productWeight"].toInt();
+        if (obj["productRank"].toInt() > 0)
+            s.productRank = obj["productRank"].toInt();
+        if (obj.contains("productAlgorithm"))
+            s.productAlgorithm = obj["productAlgorithm"].toInt();
         s.compDev = static_cast<ComputeDevice>(obj["compDev"].toInt());
+        // Ноль означает «ключа не было» — остаётся значение по умолчанию.
+        if (obj["maxPlotBars"].toInt() > 0)
+            s.maxPlotBars = obj["maxPlotBars"].toInt();
+        s.autoTuneGrid = obj["autoTuneGrid"].toBool();
 
         QJsonObject dev = obj["compDevSet"].toObject();
         s.compDevSet.threadsCpu = dev["threadsCpu"].toInt();
@@ -151,6 +267,16 @@ struct ComputationSettings
         QJsonObject timeInt = obj["timeIntSet"].toObject();
         s.timeIntSet.saveSpectrumInterval   = timeInt["saveSpectrumInterval"].toInt();
         s.timeIntSet.updateSpectrumInterval = timeInt["updateSpectrumInterval"].toInt();
+        // Настройки без метки версии писала программа, хранившая этот
+        // интервал в секундах. Без пересчёта расчёт стал бы обновлять спектр
+        // шестьдесят раз в секунду вместо раза в минуту.
+        if (obj["version"].toInt() < 2)
+            s.timeIntSet.updateSpectrumInterval *= 1000;
+        // Пункт «33 мс» из списка убран. У тех, кто успел его выбрать, значение
+        // осталось в настройках, и без правки они остались бы на интервале,
+        // которого в списке нет.
+        if (s.timeIntSet.updateSpectrumInterval < EveryTenthSecond)
+            s.timeIntSet.updateSpectrumInterval = EveryTenthSecond;
         return s;
     }
     quint64 computeHash(quint64 seed = 0ULL) const
@@ -159,10 +285,19 @@ struct ComputationSettings
         seed = qHash(static_cast<int>(algorithmType), seed);
         seed = qHash(static_cast<int>(enumType), seed);
 
-        // ��������, ��� �����������, ����� ����� ���� ������� ��������� ��� maxRows = n, � ����� ��� n+1
+        // Подумать, как реализовать, чтобы можно было сначала перебрать для maxRows = n, а потом для n+1
         seed = qHash(maxRows, seed);
+        seed = qHash(bzWeight, seed);
+        seed = qHash(leonWeight, seed);
+        seed = qHash(leonMissExponent, seed);
+        seed = qHash(matrix2, seed);
+        seed = qHash(productWeight, seed);
+        seed = qHash(productRank, seed);
+        seed = qHash(productAlgorithm, seed);
         seed = qHash(static_cast<int>(compDev), seed);
 
+        // autoTuneGrid в ключ не входит намеренно: спектр от сетки не зависит,
+        // и переключение галочки не должно осиротить сохранённый чекпоинт.
         seed = qHash(compDevSet.threadsCpu, seed);
         seed = qHash(compDevSet.blocksGpu, seed);
         seed = qHash(compDevSet.threadsGpu, seed);
@@ -172,18 +307,18 @@ struct ComputationSettings
 };
 
 struct RunState {
-    // ������� ������������ ����� �����
+    // Текущее перебираемое число строк
     quint64 rOffset = 0ULL;
-    // ������ �����
+    // Индекс чанка
     quint64 chunkOffset = 0ULL;
-    // ����� ������������� ��������
+    // Число произведенных операций
     quint64 doneOps = 0ULL;
-    // ����� ��������� ������
+    // Число прошедних секунд
     long long elapsedSec = 0;
-    // ������� ������
+    // Текущий спектр
     QVector<quint64> spectrum;
 
-    // ������� ��� ���������� �������� ��������� ����������
+    // Функция для сохранения текущего состояния вычислений
     void saveProgress(
         quint64 rOffset,
         quint64 chunkOffset,
@@ -235,39 +370,5 @@ struct RunState {
         }
 
         return s;
-    }
-};
-struct Checkpoint : public ComputationSettings, public RunState
-{
-    QJsonObject toJson() const
-    {
-        QJsonObject obj;
-
-        // ���������
-        obj["settings"] = ComputationSettings::toJson();
-
-        // ���������
-        obj["runState"] = RunState::toJson();
-
-        return obj;
-    }
-    static Checkpoint fromJson(const QJsonObject& obj)
-    {
-        Checkpoint c;
-
-        // ��������� ���������
-        if (obj.contains("settings") && obj["settings"].isObject()) {
-            ComputationSettings s = ComputationSettings::fromJson(obj["settings"].toObject());
-            static_cast<ComputationSettings&>(c) = s;
-        }
-
-        // ��������� ��������� ����������
-        if (obj.contains("runState") && obj["runState"].isObject()) {
-            RunState rs = RunState::fromJson(obj["runState"].toObject());
-
-            static_cast<RunState&>(c) = rs;
-        }
-
-        return c;
     }
 };

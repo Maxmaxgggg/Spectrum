@@ -1,0 +1,236 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="compute\dualcode.cpp" />
+    <ClCompile Include="compute\gridtuner.cpp" />
+    <ClCompile Include="compute\infosets.cpp" />
+    <ClCompile Include="compute\bchcode.cpp" />
+    <ClCompile Include="compute\hammingcode.cpp" />
+    <ClCompile Include="compute\leonsearch.cpp" />
+    <ClCompile Include="compute\productcode.cpp" />
+    <ClCompile Include="compute\worker.cpp" />
+    <ClCompile Include="helpers\workwithmatrix.cpp" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="qcustomplot.cpp" />
+    <ClCompile Include="ui\filterplaintextedit.cpp" />
+    <ClCompile Include="ui\spectrumtextedit.cpp" />
+    <ClCompile Include="ui\settingsdialog.cpp" />
+    <ClCompile Include="storage\autosavestore.cpp" />
+    <ClCompile Include="ui\autosavedialog.cpp" />
+    <ClCompile Include="ui\docktitlebar.cpp" />
+    <ClCompile Include="ui\tabswapbutton.cpp" />
+    <ClCompile Include="ui\statspanel.cpp" />
+    <ClCompile Include="ui\format.cpp" />
+    <ClCompile Include="ui\cachingstyle.cpp" />
+    <ClCompile Include="ui\fonticons.cpp" />
+    <ClCompile Include="ui\creatematrixdialog.cpp" />
+    <ClCompile Include="ui\matrixlibrary.cpp" />
+    <ClCompile Include="ui\matrixmenu.cpp" />
+    <ClCompile Include="ui\matrixslotsdialog.cpp" />
+    <ClCompile Include="ui\spectrumplot.cpp" />
+    <ClCompile Include="ui\taskbarprogress.cpp" />
+    <ClCompile Include="ui\widget.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="compute\computeSpectrumKernel.cuh" />
+    <ClInclude Include="compute\dualcode.h" />
+    <ClInclude Include="compute\gridtuner.h" />
+    <ClInclude Include="compute\infosets.h" />
+    <ClInclude Include="compute\leonsearch.h" />
+    <ClInclude Include="compute\productcode.h" />
+    <ClInclude Include="compute\leonkernel.cuh" />
+    <ClInclude Include="compute\spectrumring.h" />
+    <ClInclude Include="defines.h" />
+    <ClInclude Include="storage\autosavestore.h" />
+    <ClInclude Include="ui\axisticks.h" />
+    <ClInclude Include="ui\updateintervals.h" />
+    <ClInclude Include="ui\format.h" />
+    <ClInclude Include="ui\fonticons.h" />
+    <ClInclude Include="ui\matrixlibrary.h" />
+    <QtMoc Include="ui\docktitlebar.h" />
+    <QtMoc Include="ui\tabswapbutton.h" />
+    <QtMoc Include="ui\statspanel.h" />
+    <QtMoc Include="ui\cachingstyle.h" />
+    <QtMoc Include="ui\autosavedialog.h" />
+    <QtMoc Include="ui\creatematrixdialog.h" />
+    <QtMoc Include="ui\matrixmenu.h" />
+    <QtMoc Include="ui\matrixslotsdialog.h" />
+    <ClInclude Include="ui\spectrumplot.h" />
+    <ClInclude Include="ui\taskbarprogress.h" />
+    <ClInclude Include="settings.h" />
+    <ClInclude Include="types.h" />
+    <QtMoc Include="compute\worker.h" />
+    <ClInclude Include="helpers\workwithmatrix.h" />
+    <QtMoc Include="ui\filterplaintextedit.h" />
+    <QtMoc Include="ui\spectrumtextedit.h" />
+    <QtMoc Include="ui\settingsdialog.h" />
+    <QtMoc Include="qcustomplot.h" />
+    <QtMoc Include="ui\widget.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtUic Include="ui\settingsdialog.ui" />
+    <QtUic Include="ui\widget.ui" />
+  </ItemGroup>
+  <ItemGroup>
+    <CudaCompile Include="compute\computeSpectrumKernel.cu" />
+    <CudaCompile Include="compute\leonkernel.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtRcc Include="q.qrc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Spectrum.rc" />
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{6B079305-475F-41D6-B18C-EDADDA573A14}</ProjectGuid>
+    <Keyword>QtVS_v304</Keyword>
+    <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">10.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">10.0</WindowsTargetPlatformVersion>
+    <QtMsBuild Condition="'$(QtMsBuild)'=='' OR !Exists('$(QtMsBuild)\qt.targets')">$(MSBuildProjectDirectory)\QtMsBuild</QtMsBuild>
+    <CudaToolkitCustomDir Condition="'$(CudaToolkitCustomDir)'=='' AND '$(CUDA_PATH)'!=''">$(CUDA_PATH)</CudaToolkitCustomDir>
+    <ProjectName>Spectrum</ProjectName>
+    <!-- Корень статического vcpkg-триплета (Qt5, GMP). Переопределяется переменной
+         окружения VcpkgStaticRoot или ключом /p:VcpkgStaticRoot=... у MSBuild. -->
+    <VcpkgStaticRoot Condition="'$(VcpkgStaticRoot)'==''">D:\x64-windows-static\</VcpkgStaticRoot>
+    <VcpkgStaticRoot Condition="!HasTrailingSlash('$(VcpkgStaticRoot)')">$(VcpkgStaticRoot)\</VcpkgStaticRoot>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Condition="Exists('$(QtMsBuild)\qt_defaults.props')">
+    <Import Project="$(QtMsBuild)\qt_defaults.props" />
+  </ImportGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="QtSettings">
+    <QtInstall>debug</QtInstall>
+    <QtModules>core;gui;widgets;printsupport;</QtModules>
+    <QtBuildConfig>debug</QtBuildConfig>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="QtSettings">
+    <QtInstall>release</QtInstall>
+    <QtModules>core;gui;widgets;printsupport;</QtModules>
+    <QtBuildConfig>release</QtBuildConfig>
+  </PropertyGroup>
+  <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') or !Exists('$(QtMsBuild)\qt.props')">
+    <Message Importance="High" Text="QtMsBuild: could not locate qt.targets, qt.props; project may not build correctly." />
+  </Target>
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.9.props" />
+  </ImportGroup>
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="$(QtMsBuild)\Qt.props" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="$(QtMsBuild)\Qt.props" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <OpenMPSupport>true</OpenMPSupport>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(ProjectDir)helpers;$(ProjectDir)ui;$(ProjectDir)ui\icons;$(ProjectDir)compute;$(ProjectDir)storage;$(ProjectDir)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4146</DisableSpecificWarnings>
+      <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>cudart_static.lib;%(AdditionalDependencies);cudart.lib;cudadevrt.lib;gmpxx.lib;gmp.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories);$(CudaToolkitLibDir);$(VcpkgStaticRoot)lib</AdditionalLibraryDirectories>
+    </Link>
+    <CudaCompile>
+      <!-- compute_50 — нижняя граница CUDA 12: Maxwell и новее, Kepler она уже
+           не поддерживает. sm_86 добавлен, чтобы на RTX 30xx ядра не
+           транслировались из PTX при первом запуске. PTX от compute_50
+           остаётся для карт новее перечисленных. -->
+      <CodeGeneration>compute_50,sm_50;compute_86,sm_86;compute_50,compute_50</CodeGeneration>
+      <AdditionalOptions>--extended-lambda %(AdditionalOptions)</AdditionalOptions>
+      <Include>$(ProjectDir)compute;$(ProjectDir)storage;$(ProjectDir);$(VcpkgStaticRoot)include;%(Include)</Include>
+    </CudaCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <OpenMPSupport>true</OpenMPSupport>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(ProjectDir)helpers;$(ProjectDir)ui;$(ProjectDir)ui\icons;$(ProjectDir)compute;$(ProjectDir)storage;$(ProjectDir)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4146</DisableSpecificWarnings>
+      <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING</PreprocessorDefinitions>
+    </ClCompile>
+    <CudaCompile>
+      <CodeGeneration>compute_50,sm_50;compute_86,sm_86;compute_50,compute_50</CodeGeneration>
+      <CudaRuntime>Static</CudaRuntime>
+      <AdditionalOptions>--extended-lambda %(AdditionalOptions)</AdditionalOptions>
+      <Include>$(ProjectDir)compute;$(ProjectDir)storage;$(ProjectDir);$(VcpkgStaticRoot)include;%(Include)</Include>
+    </CudaCompile>
+    <Link>
+      <AdditionalDependencies>cudart_static.lib;%(AdditionalDependencies);cudart.lib;cudadevrt.lib;gmpxx.lib;gmp.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories);$(CudaToolkitLibDir);$(VcpkgStaticRoot)lib</AdditionalLibraryDirectories>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'" Label="Configuration">
+    <ClCompile>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'" Label="Configuration">
+    <ClCompile>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <!-- Символы для Release: на скорость не влияют, зато без них
+           профилировщик и разбор аварийного дампа показывают одни адреса. -->
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">
+    <Import Project="$(QtMsBuild)\qt.targets" />
+  </ImportGroup>
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.9.targets" />
+  </ImportGroup>
+</Project>

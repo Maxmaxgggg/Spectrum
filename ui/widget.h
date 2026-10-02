@@ -7,12 +7,14 @@
 #include "workwithmatrix.h"
 #include "defines.h"
 
+#include "autosavestore.h"
+#include "matrixmenu.h"
+#include "spectrumplot.h"
+#include "taskbarprogress.h"
+
 #include <qmainwindow.h>
 
-#ifdef Q_OS_WIN
-    #include <windows.h>
-    #include <shobjidl.h>
-#endif
+#include <memory>
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -29,17 +31,6 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
     ComputationSettings settings;
-    // Подключаем воркера (после создания worker и workerThread)
-    
-protected:
-    void resizeEvent(QResizeEvent *event) override {
-        QMainWindow::resizeEvent(event);
-        SpectrumFloat vec(yCache.size());
-        for (int i = 0; i < yCache.size(); ++i) {
-            vec[i] = (float) yCache.at(i);
-        }
-        updatePlot(vec);               // ваша быстрая функция обновления
-    }
 
 public: signals:
     void setInterfaceEnabled(bool enabled);
@@ -51,6 +42,9 @@ public: signals:
     
     void sendSettingsToWorker( const QJsonObject& );
     void requestSettings();
+    // Настройки расчёта из поднятого автосохранения.
+    void applySettingsFromAutosave(int algorithm, int enumType, int rank, int weight,
+                                   int componentAlgorithm);
 
 private slots:
 
@@ -58,87 +52,132 @@ private slots:
     void on_exitPBN_clicked();
     void on_settingsPBN_clicked();
     void on_cancelPBN_clicked();
-    void on_saveSpectrumACN_triggered();
-    void handleStrValChanged();
     void handleUpdateInfoPBR(int percent);
     void sendSettingsToWorker();
     void handleUpdateSpectrumPlot( const SpectrumFloat   spectrum ); // сигнал от воркера
     void handleUpdateSpectrumPTE(  const SpectrumText    spectrum );
     void handleError(const QString& message);
     void handleFinished(int);
-    void handleUpdateRemainingMinutes(int, int, double);
+    void handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed,
+                                      quint64 doneOps, quint64 totalOps);
     void showSaveLBL();
+    void handleGridTuned(int blocks, int threads);
+    // План Брауэра–Циммермана: показать в панели и пометить в спектре веса,
+    // которые перебор не гарантирует.
+    void handlePlanReady(int sets, int rows, int exactUpToWeight);
+    // Ход случайного поиска: панель и пометки «ещё не найдено» в спектре.
+    void handleSearchEstimate(int weight, quint64 trialsDone, quint64 trialsTotal,
+                              double missProbability, SpectrumFloat unseenByWeight);
+    // Код произведения: строка о ходе и точности в панели.
+    void handleProductPlan(const QString& text, int exactUpToWeight);
     void handleMatrixChanged();
 
     bool eventFilter(QObject *watched, QEvent *event) override;
-
-    void onAddMatrixTriggered();
 
     // Проверяет, есть ли для текущих настроек чекпоинт, если есть - предлагает загрузить его
     bool hasCheckpoint() const;
 private:
 
     Ui::MainWindow *ui;
-    QSplitter      *splitter         = nullptr;
+    QDockWidget    *matrixDock       = nullptr;
+    // Обе матрицы — страницами одной панели; вкладки живут в заголовке
+    // панели, в одной строке с её кнопками. У произвольного кода страница
+    // одна и вкладок не видно; у кода произведения — две, «Матрица 1» и
+    // «Матрица 2», и на стыке вкладок кнопка «поменять местами».
+    class QTabBar*             matrixTabBar = nullptr;
+    class QStackedWidget*      matrixPages  = nullptr;
+    class FilterPlainTextEdit* matrix2PTE   = nullptr;
+    // Показать или спрятать вторую вкладку по алгоритму.
+    void updateMatrixTabs();
+    // Заголовок панели и вкладок: имя и размер.
+    void updateMatrixTitles();
+    QDockWidget    *spectrumDock     = nullptr;
+    QDockWidget    *plotDock         = nullptr;
+    QDockWidget    *statsDock        = nullptr;
+    class StatsPanel *statsPanel     = nullptr;
+    // Снимок раскладки сразу после сборки — по нему работает «Раскладка по
+    // умолчанию». Собирать её заново расстановкой доков ненадёжно: Qt не
+    // обещает, что повторное добавление даст те же пропорции.
+    QByteArray      defaultLayout;
+
+    // Перерисовка графика откладывается: при перетаскивании панели события
+    // изменения размера идут десятками в секунду, и рисовать на каждое —
+    // это и есть подлагивание. Ждём, пока размер перестанет меняться.
+    QTimer*         plotRefreshTimer = nullptr;
     Worker         *workerPtr        = nullptr;
     QThread        *workerThreadPtr  = nullptr;
     SettingsDialog *settingsDialog   = nullptr;
-    QMenu* matrixMenu = nullptr;
-    QMenu          *deleteMenu       = nullptr;
-    QTimer         *matrixMenuTimer  = nullptr;
-    // Переписать
-    QPointer<QAction>       pendingHover;
+    MatrixMenu     *matrixMenu       = nullptr;
+
+    // Автосохранения расчёта на диске.
+    AutosaveStore   autosave;
     QGraphicsOpacityEffect* saveLBLOpacityEffect;
     // состояние выполнения: Idle / Running / Paused
-    enum class RunState { Idle, Running, Paused };
+    // Loaded — из диалога поднято автосохранение: спектр и прогресс уже на
+    // экране, кнопка предлагает продолжить, и спрашивать при запуске второй
+    // раз незачем.
+    enum class RunState { Idle, Running, Paused, Loaded };
     RunState runState = RunState::Idle;
 
-    // Сохраняем старые значения при обновлении
-    QCPBars* spectrumBars = nullptr;
-    QCPItemText* msg = nullptr;
-    QVector<double> xCache;
-    QVector<double> yCache;
-    QSharedPointer<QCPAxisTicker> tickerCache;
-    int tickerStepCache = -1;
-    int sizeCache = 0;
+    // Запись, поднятая во время расчёта: применить её можно только после того,
+    // как воркер остановится, иначе он затрёт её своими обновлениями.
+    bool           pendingAutosave = false;
+    Matrix         pendingMatrix;
+    AutosaveRecord pendingRecord;
+
+    // График спектра. Создаётся в конструкторе, когда виджет из .ui готов.
+    std::unique_ptr<SpectrumPlot> spectrumPlot;
 
     int remainingMinutes = -1;
+    // Строка о подобранной сетке. Пустая, если подбор не проводился.
 
 
-    void updatePlot(const SpectrumFloat& spectrum);
-    QVector<QString> buildAxisLabels(int size, int step) const;
+
+    QString matrixError() const;
+    void startComputation();
+    void pauseComputation();
+    void resumeComputation();
+
     void setWorker();
+    // Текст, подсказка и значок кнопки запуска — по текущему состоянию.
+    // Одним местом: раньше эти три вещи выставлялись в шести, и стоило
+    // добавить состояние, как подпись и значок разъезжались.
+    void updateExecuteButton();
+
+    // Спектр показывается списком строк «вес - число слов».
+    void setSpectrumRows(const SpectrumText& lines);
+
+    // Три панели живут в доках: любую можно вытащить в отдельное окно и
+    // закрыть, а вернуть из меню «Вид». Раскладка запоминается целиком.
+    void setupDocks();
+    void resetLayout();
+
+    // Последний показанный спектр — его же и сохраняем между запусками.
+    SpectrumText lastSpectrum;
+    // До какого веса показанный спектр точен. -1 — весь спектр на равных
+    // (обычный перебор); иначе строки тяжелее помечаются как неполные.
+
+    // Случайный поиск: сколько слов каждого веса, по оценке, ещё не найдено.
+    // Пусто — пометок нет.
+    SpectrumFloat unseenByWeight;
+
+    void showAutosaveDialog();
+    void applyAutosave(const Matrix& matrix, const AutosaveRecord& record);
+    // Собственно подстановка записи в окно. Отделена от applyAutosave, потому
+    // что во время расчёта её приходится откладывать до остановки воркера.
+    void applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& record);
+    // Пока матрица подставляется из записи, правкой её считать нельзя.
+    bool applyingAutosave = false;
     void setMatrixMenu();
-    void setMatrixActionsEnabled(bool);
-    bool matrixActionsEnabled = true;
-    void rebuildMatrixMenuActions();
     void setToolTips();
     void connectSettingsDialog();
     void applySettings();
-    void applySpectrumColor(); 
     void saveSettings(); 
     void loadSettings(); 
-    QString formatRemainingTime(int minutesTotal);
-    QString formatSpeed(double speed);
 
-
-    QJsonArray matrices;
-    void loadMatricesArray();
-    void saveMatricesArray();
-    void saveMatrixByName(const QString& name);
-    bool removeMatrixByName(const QString& name);
-    int  findMatrixIndexByName(const QString& name);
-    QString getMatrixByName(const QString& name);
-    QStringList listMatrixNames();
-    QString defaultMatrixName();
-
-
-    // Атрибуты, нужные для отображения прогресс бара под иконкой приложения
-    #ifdef Q_OS_WIN
-        ITaskbarList3* taskbar = nullptr;
-        HWND hwnd = nullptr;
-        bool taskbarAvailable = false;
-    #endif
+    // Прогресс на кнопке приложения в панели задач. Создаётся в конструкторе
+    // после сборки окна: индикатору нужен готовый нативный дескриптор.
+    std::unique_ptr<TaskbarProgress> taskbar;
 };
 
 #endif // WIDGET_H

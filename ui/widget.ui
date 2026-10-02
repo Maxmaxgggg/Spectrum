@@ -20,30 +20,6 @@
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <item>
-     <layout class="QHBoxLayout" name="horizontalLayout_2">
-      <item>
-       <widget class="QLabel" name="matrixLBL">
-        <property name="text">
-         <string>Матрица кодовых слов:</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <spacer name="horizontalSpacer_3">
-        <property name="orientation">
-         <enum>Qt::Horizontal</enum>
-        </property>
-        <property name="sizeHint" stdset="0">
-         <size>
-          <width>40</width>
-          <height>20</height>
-         </size>
-        </property>
-       </spacer>
-      </item>
-     </layout>
-    </item>
-    <item>
      <widget class="FilterPlainTextEdit" name="matrixPTE">
       <property name="lineWrapMode">
        <enum>QPlainTextEdit::NoWrap</enum>
@@ -51,31 +27,7 @@
      </widget>
     </item>
     <item>
-     <layout class="QHBoxLayout" name="horizontalLayout_3">
-      <item>
-       <widget class="QLabel" name="spectrumLBL">
-        <property name="text">
-         <string>Спектр кодовых слов:</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <spacer name="horizontalSpacer_4">
-        <property name="orientation">
-         <enum>Qt::Horizontal</enum>
-        </property>
-        <property name="sizeHint" stdset="0">
-         <size>
-          <width>40</width>
-          <height>20</height>
-         </size>
-        </property>
-       </spacer>
-      </item>
-     </layout>
-    </item>
-    <item>
-     <widget class="QPlainTextEdit" name="spectrumPTE">
+     <widget class="SpectrumTextEdit" name="spectrumPTE">
       <property name="lineWrapMode">
        <enum>QPlainTextEdit::NoWrap</enum>
       </property>
@@ -85,57 +37,16 @@
      </widget>
     </item>
     <item>
-     <widget class="QCustomPlot" name="spectrumCPT" native="true"/>
+     <widget class="QCustomPlot" name="spectrumCPT" native="true" />
     </item>
     <item>
-     <widget class="QProgressBar" name="infoPBR">
-      <property name="value">
-       <number>0</number>
-      </property>
-     </widget>
-    </item>
-    <item>
-     <layout class="QHBoxLayout" name="horizontalLayout">
+     <layout class="QHBoxLayout" name="actionsLayout">
       <item>
-       <spacer name="horizontalSpacer_2">
-        <property name="orientation">
-         <enum>Qt::Horizontal</enum>
-        </property>
-        <property name="sizeHint" stdset="0">
-         <size>
-          <width>40</width>
-          <height>20</height>
-         </size>
-        </property>
-       </spacer>
-      </item>
-      <item>
-       <widget class="QLabel" name="infoLBL">
-        <property name="font">
-         <font>
-          <family>Courier New</family>
-         </font>
-        </property>
-        <property name="text">
-         <string/>
-        </property>
-        <property name="alignment">
-         <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignVCenter</set>
+       <widget class="QProgressBar" name="infoPBR">
+        <property name="value">
+         <number>0</number>
         </property>
        </widget>
-      </item>
-      <item>
-       <spacer name="horizontalSpacer">
-        <property name="orientation">
-         <enum>Qt::Horizontal</enum>
-        </property>
-        <property name="sizeHint" stdset="0">
-         <size>
-          <width>40</width>
-          <height>20</height>
-         </size>
-        </property>
-       </spacer>
       </item>
       <item>
        <widget class="QLabel" name="saveLBL">
@@ -158,7 +69,7 @@
          </size>
         </property>
         <property name="text">
-         <string/>
+         <string />
         </property>
         <property name="pixmap">
          <pixmap resource="../q.qrc">:/ui/icons/disk-black.png</pixmap>
@@ -194,6 +105,11 @@
    </layout>
   </widget>
   <widget class="QMenuBar" name="menubar">
+   <widget class="QMenu" name="viewMNU">
+    <property name="title">
+     <string>Вид</string>
+    </property>
+   </widget>
    <property name="geometry">
     <rect>
      <x>0</x>
@@ -206,29 +122,30 @@
     <property name="title">
      <string>Матрицы</string>
     </property>
-    <widget class="QMenu" name="deleteMatrixMNU">
-     <property name="title">
-      <string>Удалить матрицу из реестра</string>
-     </property>
-    </widget>
-    <addaction name="addMatrixACN"/>
-    <addaction name="deleteMatrixMNU"/>
+    <addaction name="loadMatrixACN" />
+    <addaction name="saveMatrixACN" />
+    <addaction name="separator" />
+    <addaction name="createMatrixACN" />
    </widget>
-   <widget class="QMenu" name="spectrumMNU">
-    <property name="title">
-     <string>Спектры</string>
-    </property>
-    <addaction name="saveSpectrumACN"/>
-    <addaction name="loadSpectrumACN"/>
-   </widget>
-   <addaction name="settingsACN"/>
-   <addaction name="matrixMNU"/>
-   <addaction name="spectrumMNU"/>
+   <addaction name="settingsACN" />
+   <addaction name="matrixMNU" />
+   <addaction name="autosaveACN" />
+   <addaction name="viewMNU" />
   </widget>
-  <widget class="QStatusBar" name="statusbar"/>
-  <action name="addMatrixACN">
+  <widget class="QStatusBar" name="statusbar" />
+  <action name="loadMatrixACN">
    <property name="text">
-    <string>Сохранить матрицу в реестр</string>
+    <string>Загрузить матрицу…</string>
+   </property>
+  </action>
+  <action name="saveMatrixACN">
+   <property name="text">
+    <string>Сохранить матрицу…</string>
+   </property>
+  </action>
+  <action name="createMatrixACN">
+   <property name="text">
+    <string>Создать матрицу…</string>
    </property>
   </action>
   <action name="settingsACN">
@@ -236,49 +153,9 @@
     <string>Настройки</string>
    </property>
   </action>
-  <action name="actioneee">
+  <action name="autosaveACN">
    <property name="text">
-    <string>eee</string>
-   </property>
-  </action>
-  <action name="action_2">
-   <property name="text">
-    <string/>
-   </property>
-  </action>
-  <action name="action_4">
-   <property name="text">
-    <string>укп</string>
-   </property>
-  </action>
-  <action name="action_6">
-   <property name="text">
-    <string>ер</string>
-   </property>
-  </action>
-  <action name="action_8">
-   <property name="text">
-    <string>пр</string>
-   </property>
-  </action>
-  <action name="saveMatrixToFileACN">
-   <property name="text">
-    <string>Сохранить матрицу в файл</string>
-   </property>
-  </action>
-  <action name="loadMatrixFromFileACN">
-   <property name="text">
-    <string>Загрузить матрицу из файла</string>
-   </property>
-  </action>
-  <action name="saveSpectrumACN">
-   <property name="text">
-    <string>Сохранить спектр</string>
-   </property>
-  </action>
-  <action name="loadSpectrumACN">
-   <property name="text">
-    <string>Загрузить спектр</string>
+    <string>Сохранения</string>
    </property>
   </action>
  </widget>
@@ -294,9 +171,14 @@
    <extends>QPlainTextEdit</extends>
    <header>filterplaintextedit.h</header>
   </customwidget>
+  <customwidget>
+   <class>SpectrumTextEdit</class>
+   <extends>QPlainTextEdit</extends>
+   <header>spectrumtextedit.h</header>
+  </customwidget>
  </customwidgets>
  <resources>
-  <include location="../q.qrc"/>
+  <include location="../q.qrc" />
  </resources>
- <connections/>
+ <connections />
 </ui>

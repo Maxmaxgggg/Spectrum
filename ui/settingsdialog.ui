@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>361</width>
-    <height>701</height>
+    <width>400</width>
+    <height>400</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -25,317 +25,677 @@
   </property>
   <layout class="QVBoxLayout" name="verticalLayout_4">
    <item>
-    <widget class="QGroupBox" name="algorithmGBX">
-     <property name="title">
-      <string>Алгоритм расчёта:</string>
+    <widget class="QTabWidget" name="settingsTabs">
+     <property name="currentIndex">
+      <number>0</number>
      </property>
-     <layout class="QVBoxLayout" name="verticalLayout">
-      <item>
-       <widget class="QRadioButton" name="simpleXorRB">
-        <property name="text">
-         <string>Простой XOR</string>
-        </property>
-        <property name="checked">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QRadioButton" name="grayCodeRB">
-        <property name="text">
-         <string>Код Грея</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QRadioButton" name="dualCodeRB">
-        <property name="text">
-         <string>Дуальный код</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="enumTypeGBX">
-     <property name="title">
-      <string>Тип перебора:</string>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayout_2">
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_3">
-        <item>
-         <widget class="QRadioButton" name="fullEnumRB">
-          <property name="text">
-           <string>Полный</string>
-          </property>
-          <property name="checked">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QRadioButton" name="partialEnumRB">
-          <property name="text">
-           <string>Частичный</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout">
-        <item>
-         <widget class="QLabel" name="maxRowsLBL">
-          <property name="text">
-           <string>Максимальное количество строк: </string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <spacer name="horizontalSpacer">
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item>
-         <widget class="QSpinBox" name="maxRowsSPB">
-          <property name="minimum">
-           <number>1</number>
-          </property>
-          <property name="maximum">
-           <number>100</number>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="computeDeviceGBX">
-     <property name="title">
-      <string>Вычислитель:</string>
-     </property>
-     <layout class="QHBoxLayout" name="horizontalLayout_2">
-      <item>
-       <widget class="QRadioButton" name="cpuRB">
-        <property name="text">
-         <string>CPU</string>
-        </property>
-        <property name="checked">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QRadioButton" name="gpuRB">
-        <property name="text">
-         <string>GPU</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="computeDeviceSettingsGBX">
-     <property name="title">
-      <string>Настройки вычислителя:</string>
-     </property>
-     <layout class="QGridLayout" name="gridLayout">
-      <item row="0" column="0">
-       <widget class="QLabel" name="threadsCpuLBL">
-        <property name="text">
-         <string>Число потоков:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="0" column="1">
-       <spacer name="horizontalSpacer_2">
-        <property name="orientation">
-         <enum>Qt::Horizontal</enum>
-        </property>
-        <property name="sizeHint" stdset="0">
-         <size>
-          <width>100</width>
-          <height>20</height>
-         </size>
-        </property>
-       </spacer>
-      </item>
-      <item row="0" column="2">
-       <widget class="QSpinBox" name="threadsCpuSPB">
-        <property name="minimum">
-         <number>1</number>
-        </property>
-        <property name="maximum">
-         <number>128</number>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="0">
-       <widget class="QLabel" name="blocksGpuLBL">
-        <property name="text">
-         <string>Число блоков:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="2">
-       <widget class="QSpinBox" name="blocksGpuSPB">
-        <property name="minimum">
-         <number>1</number>
-        </property>
-        <property name="maximum">
-         <number>200</number>
-        </property>
-       </widget>
-      </item>
-      <item row="2" column="0">
-       <widget class="QLabel" name="threadsGpuLBL">
-        <property name="text">
-         <string>Число нитей в блоке:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="2" column="2">
-       <widget class="QSpinBox" name="threadsGpuSPB">
-        <property name="minimum">
-         <number>32</number>
-        </property>
-        <property name="maximum">
-         <number>1024</number>
-        </property>
-        <property name="singleStep">
-         <number>32</number>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="saveAndUpdateSpectrumGBX">
-     <property name="title">
-      <string>Обновление и сохранение:</string>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayout_3">
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_4">
-        <item>
-         <widget class="QLabel" name="saveSpectrumInteravlLBL">
-          <property name="text">
-           <string>Интервал сохранения спектра</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <spacer name="horizontalSpacer_3">
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item>
-         <widget class="QComboBox" name="saveSpectrumIntervalCBX">
+     <widget class="QWidget" name="computationTab">
+      <attribute name="title">
+       <string>Расчёт</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="computationTabLayout">
+       <item>
+        <widget class="QGroupBox" name="codeKindGBX">
+         <property name="title">
+          <string>Тип кода:</string>
+         </property>
+         <layout class="QHBoxLayout" name="codeKindLayout">
           <item>
-           <property name="text">
-            <string>10 с</string>
-           </property>
+           <widget class="QRadioButton" name="singleCodeRB">
+            <property name="toolTip">
+             <string>Код задан одной порождающей матрицей — панель «Матрица 1»</string>
+            </property>
+            <property name="text">
+             <string>Произвольный код</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
           </item>
           <item>
-           <property name="text">
-            <string>30 с</string>
-           </property>
+           <widget class="QRadioButton" name="productCodeRB">
+            <property name="toolTip">
+             <string>Код-произведение C1 ⊗ C2 по двум компонентам: «Матрица 1» и «Матрица 2». Низ спектра до границы Толхёйзена по спектрам компонент, без построения самого произведения</string>
+            </property>
+            <property name="text">
+             <string>Код-произведение</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="enumTypeGBX">
+         <property name="title">
+          <string>Тип перебора:</string>
+         </property>
+         <layout class="QVBoxLayout" name="enumTypeLayout">
+          <item>
+           <layout class="QHBoxLayout" name="enumTypeRowLayout">
+            <item>
+             <widget class="QRadioButton" name="fullEnumRB">
+              <property name="toolTip">
+               <string>Все 2^k слов — весь спектр целиком. Только для кодов до 63 строк</string>
+              </property>
+              <property name="text">
+               <string>Полный</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QRadioButton" name="partialEnumRB">
+              <property name="toolTip">
+               <string>Только слова до заданного веса — низ спектра</string>
+              </property>
+              <property name="text">
+               <string>Частичный</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
           </item>
           <item>
-           <property name="text">
-            <string>1 мин</string>
-           </property>
+           <layout class="QHBoxLayout" name="weightLayout">
+            <item>
+             <widget class="QLabel" name="weightLBL">
+              <property name="text">
+               <string>До веса: </string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="weightSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="weightSPB">
+              <property name="minimum">
+               <number>1</number>
+              </property>
+              <property name="maximum">
+               <number>2048</number>
+              </property>
+              <property name="value">
+               <number>24</number>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="weightMemoryLBL">
+              <property name="text">
+               <string/>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="algorithmGBX">
+         <property name="title">
+          <string>Алгоритм:</string>
+         </property>
+         <layout class="QVBoxLayout" name="algorithmLayout">
+          <item>
+           <layout class="QHBoxLayout" name="fullAlgorithmLayout">
+            <item>
+             <widget class="QRadioButton" name="grayCodeRB">
+              <property name="toolTip">
+               <string>Соседние слова отличаются одной строкой — один XOR на слово. До 63 строк</string>
+              </property>
+              <property name="text">
+               <string>Код Грея</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QRadioButton" name="dualCodeRB">
+              <property name="toolTip">
+               <string>Перебирается проверочная матрица (n − k строк), спектр получается преобразованием Мак-Вильямс. Для кодов высокой скорости</string>
+              </property>
+              <property name="text">
+               <string>Дуальный код</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
           </item>
           <item>
-           <property name="text">
-            <string>5 мин</string>
-           </property>
+           <layout class="QHBoxLayout" name="partialAlgorithmLayout">
+            <item>
+             <widget class="QRadioButton" name="brouwerZimmermannRB">
+              <property name="toolTip">
+               <string>Низ спектра с гарантией: все слова до заданного веса — точно. Время растёт экспоненциально с весом</string>
+              </property>
+              <property name="text">
+               <string>Брауэр–Циммерман</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QRadioButton" name="randomInfoSetsRB">
+              <property name="toolTip">
+               <string>Без гарантии, но на порядки глубже и быстрее: тысячи случайных информационных множеств с мелким перебором в каждом. Пропуск слова — событие заданной малой вероятности</string>
+              </property>
+              <property name="text">
+               <string>Стохастический</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
           </item>
           <item>
-           <property name="text">
-            <string>10 мин</string>
-           </property>
-          </item>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_5">
-        <item>
-         <widget class="QLabel" name="updateSpectrumIntervalLBL">
-          <property name="text">
-           <string>Интервал обновления спектра</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <spacer name="horizontalSpacer_4">
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item>
-         <widget class="QComboBox" name="updateSpectrumIntervalCBX">
-          <item>
-           <property name="text">
-            <string>1 с</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>5 с</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>10 с</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>30 с</string>
-           </property>
+           <layout class="QHBoxLayout" name="leonMissLayout">
+            <item>
+             <widget class="QLabel" name="leonMissLBL">
+              <property name="text">
+               <string>Вероятность пропуска: </string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="leonMissSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QComboBox" name="leonMissCBX">
+              <item>
+               <property name="text">
+                <string>10⁻³</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>10⁻⁶</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>10⁻⁹</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>10⁻¹²</string>
+               </property>
+              </item>
+             </widget>
+            </item>
+           </layout>
           </item>
           <item>
-           <property name="text">
-            <string>1 мин</string>
-           </property>
+           <layout class="QHBoxLayout" name="leonMemoryLayout">
+            <item>
+             <widget class="QLabel" name="leonMemoryLBL">
+              <property name="text">
+               <string>Память под найденные слова (0 — половина ОЗУ): </string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="leonMemorySpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="leonMemorySPB">
+              <property name="suffix">
+               <string> МБ</string>
+              </property>
+              <property name="minimum">
+               <number>0</number>
+              </property>
+              <property name="maximum">
+               <number>1048576</number>
+              </property>
+              <property name="singleStep">
+               <number>1024</number>
+              </property>
+              <property name="value">
+               <number>0</number>
+              </property>
+             </widget>
+            </item>
+           </layout>
           </item>
-         </widget>
-        </item>
-       </layout>
-      </item>
-     </layout>
+          <item>
+           <layout class="QHBoxLayout" name="productRankLayout">
+            <item>
+             <widget class="QLabel" name="productRankLBL">
+              <property name="text">
+               <string>Ранги слов до: </string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="productRankSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="productRankSPB">
+              <property name="minimum">
+               <number>1</number>
+              </property>
+              <property name="maximum">
+               <number>4</number>
+              </property>
+              <property name="value">
+               <number>2</number>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <spacer name="computationTabSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>0</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="deviceTab">
+      <attribute name="title">
+       <string>Вычислитель</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="deviceTabLayout">
+       <item>
+        <widget class="QGroupBox" name="computeDeviceGBX">
+         <property name="title">
+          <string>Устройство:</string>
+         </property>
+         <layout class="QHBoxLayout" name="horizontalLayout_2">
+          <item>
+           <widget class="QRadioButton" name="cpuRB">
+            <property name="text">
+             <string>CPU</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QRadioButton" name="gpuRB">
+            <property name="text">
+             <string>GPU</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="computeDeviceSettingsGBX">
+         <property name="title">
+          <string>Параметры запуска:</string>
+         </property>
+         <layout class="QGridLayout" name="gridLayout">
+          <item row="0" column="0">
+           <widget class="QLabel" name="threadsCpuLBL">
+            <property name="text">
+             <string>Число потоков:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <spacer name="horizontalSpacer_2">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>100</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item row="0" column="2">
+           <widget class="QSpinBox" name="threadsCpuSPB">
+            <property name="minimum">
+             <number>1</number>
+            </property>
+            <property name="maximum">
+             <number>128</number>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="blocksGpuLBL">
+            <property name="text">
+             <string>Число блоков:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="2">
+           <widget class="QSpinBox" name="blocksGpuSPB">
+            <property name="minimum">
+             <number>1</number>
+            </property>
+            <property name="maximum">
+             <number>200</number>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="threadsGpuLBL">
+            <property name="text">
+             <string>Число нитей в блоке:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="2">
+           <widget class="QSpinBox" name="threadsGpuSPB">
+            <property name="minimum">
+             <number>32</number>
+            </property>
+            <property name="maximum">
+             <number>1024</number>
+            </property>
+            <property name="singleStep">
+             <number>32</number>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0" colspan="3">
+           <widget class="QCheckBox" name="autoTuneGridCHB">
+            <property name="text">
+             <string>Подбирать блоки и нити автоматически</string>
+            </property>
+            <property name="toolTip">
+             <string>Перед расчётом программа замерит несколько вариантов сетки на самой матрице и возьмёт лучший. Замер занимает доли секунды; на коротких задачах он не проводится.</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <spacer name="deviceTabSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>0</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="savingTab">
+      <attribute name="title">
+       <string>Спектр</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="savingTabLayout">
+       <item>
+        <widget class="QGroupBox" name="saveAndUpdateSpectrumGBX">
+         <property name="title">
+          <string>Обновление и сохранение:</string>
+         </property>
+         <layout class="QVBoxLayout" name="verticalLayout_3">
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayout_4">
+            <item>
+             <widget class="QLabel" name="saveSpectrumInteravlLBL">
+              <property name="text">
+               <string>Интервал сохранения спектра</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="horizontalSpacer_3">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QComboBox" name="saveSpectrumIntervalCBX">
+              <item>
+               <property name="text">
+                <string>10 с</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>30 с</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>1 мин</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>5 мин</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>10 мин</string>
+               </property>
+              </item>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayout_5">
+            <item>
+             <widget class="QLabel" name="updateSpectrumIntervalLBL">
+              <property name="text">
+               <string>Интервал обновления спектра</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="horizontalSpacer_4">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QComboBox" name="updateSpectrumIntervalCBX">
+              <item>
+               <property name="text">
+                <string>0,1 с</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>0,25 с</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>0,5 с</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>1 с</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>5 с</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>10 с</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>30 с</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>1 мин</string>
+               </property>
+              </item>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="measureRatePBN">
+              <property name="text">
+               <string>Замерить</string>
+              </property>
+              <property name="toolTip">
+               <string>Короткий пробный расчёт: покажет, как часто спектр успевает обновляться на этих настройках, и откроет подходящие варианты</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="QLabel" name="updateRateHintLBL">
+            <property name="text">
+             <string>Список откроется после замера</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="plotGBX">
+         <property name="title">
+          <string>График:</string>
+         </property>
+         <layout class="QHBoxLayout" name="plotLayout">
+          <item>
+           <widget class="QLabel" name="maxPlotBarsLBL">
+            <property name="text">
+             <string>Максимум столбцов</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="plotSpacer">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QSpinBox" name="maxPlotBarsSPB">
+            <property name="minimum">
+             <number>8</number>
+            </property>
+            <property name="maximum">
+             <number>2049</number>
+            </property>
+            <property name="singleStep">
+             <number>8</number>
+            </property>
+            <property name="value">
+             <number>160</number>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <spacer name="savingTabSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>0</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
     </widget>
    </item>
    <item>
@@ -351,7 +711,7 @@
   </layout>
  </widget>
  <resources>
-  <include location="../q.qrc"/>
+  <include location="../q.qrc" />
  </resources>
  <connections>
   <connection>

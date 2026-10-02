@@ -1,4 +1,21 @@
 #include "worker.h"
+#include "gridtuner.h"
+
+#ifdef Q_OS_WIN
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <windows.h>
+#else
+    #include <unistd.h>
+#endif
+#include "leonkernel.cuh"
+
+#include <algorithm>
+#include <chrono>
+#include <functional>
+#include <cmath>
+#include <limits>
 
 Worker::Worker(QObject *parent)
     : QObject(parent)
@@ -14,12 +31,12 @@ void generateStartPositions(
     int numOfRows,
     int numOfOnes,
     int16_t* slot,
-    uint64_t** C   // binomTable
+    const BinomTable& C
 ) {
     int x = 0;
     for (int i = 0; i < numOfOnes; ++i) {
         for (int v = x; v <= numOfRows - numOfOnes + i; ++v) {
-            uint64_t cnt = C[numOfRows - v - 1][numOfOnes - i - 1];
+            uint64_t cnt = C(numOfRows - v - 1, numOfOnes - i - 1);
             if (rank < cnt) {
                 slot[i] = (int16_t)v;
                 x = v + 1;
@@ -32,48 +49,8 @@ void generateStartPositions(
     for (int i = numOfOnes; i < Constants::MAX_POSITIONS; ++i)
         slot[i] = 0;
 }
-// Функция строит треугольную таблицу биноминальных коэффициентов
-quint64** Worker::buildBinomTable(unsigned maxN, unsigned maxComb) {
-    // Выделяем память под столбцы длины maxN+1
-    quint64** C = new quint64 * [maxN + 1];
-    constexpr quint64 U = std::numeric_limits<quint64>::max();
-
-    // Выделяем память под строки длины maxComb+1
-    for (unsigned n = 0; n <= maxN; ++n) {
-        C[n] = new quint64[maxComb + 1];
-        // Заполняем строки
-        for (unsigned r = 0; r <= maxComb; ++r) {
-            if (r == 0) {
-                C[n][r] = 1;
-            }
-            else if (r > n) {
-                C[n][r] = 0; // если r>n — 0 (не существует)
-            }
-            else {
-                // C(n,r) = C(n-1,r-1) + C(n-1,r)
-                quint64 a = (n >= 1) ? C[n - 1][r - 1] : 0;
-                quint64 b = (n >= 1) ? C[n - 1][r] : 0;
-                quint64 sum = a + b;
-                if (sum < a) throw "Error: Combin overflow";
-                C[n][r] = sum;
-            }
-        }
-    }
-    return C;
-}
-// Функция, освобождающая память из под таблицы с комбинами
-void Worker::freeBinomTable(quint64** C, unsigned maxN)
-{
-    if (!C) return;
-
-    for (unsigned n = 0; n <= maxN; ++n) {
-        delete[] C[n];
-    }
-    delete[] C;
-}
-
 // Получение битовой маски длины k с r единицами с индексом rank
-static quint64 unrankCombination( unsigned K, unsigned R, quint64 rank, quint64** binomTable )
+static quint64 unrankCombination( unsigned K, unsigned R, quint64 rank, const BinomTable& binomTable )
 {
     if (R == 0) return 0ULL;
 
@@ -92,7 +69,7 @@ static quint64 unrankCombination( unsigned K, unsigned R, quint64 rank, quint64*
             if (remainingToChoose == 0)
                 count = 1;
             else if (remainingPositions >= remainingToChoose)
-                count = binomTable[remainingPositions][remainingToChoose];
+                count = binomTable(remainingPositions, remainingToChoose);
 
             if (rank >= count)
             {
@@ -109,116 +86,297 @@ static quint64 unrankCombination( unsigned K, unsigned R, quint64 rank, quint64*
 
     return mask;
 }
-// Вычисляет сумму сочетаний C(k,i) где i пробегает от 0 до maxComb
-quint64 Worker::sumCombinations(quint64 k, quint64 maxComb)
+// Следующая маска с тем же числом единиц в возрастающем числовом порядке —
+// приём Госпера. Деление из классической записи заменено сдвигом: младший
+// установленный бит есть степень двойки, его позиция и есть величина сдвига.
+// Вызывать только при v != 0 и когда следующая комбинация существует.
+static inline quint64 gosperNext(quint64 v)
+{
+    unsigned long t;
+    _BitScanForward64(&t, v);
+    const quint64 rr = v + (1ULL << t);
+    return rr | ((v ^ rr) >> (t + 2));
+}
+
+// Разворот всех 64 бит.
+static inline quint64 reverseBits64(quint64 v)
+{
+    v = ((v >> 1)  & 0x5555555555555555ULL) | ((v & 0x5555555555555555ULL) << 1);
+    v = ((v >> 2)  & 0x3333333333333333ULL) | ((v & 0x3333333333333333ULL) << 2);
+    v = ((v >> 4)  & 0x0F0F0F0F0F0F0F0FULL) | ((v & 0x0F0F0F0F0F0F0F0FULL) << 4);
+    v = ((v >> 8)  & 0x00FF00FF00FF00FFULL) | ((v & 0x00FF00FF00FF00FFULL) << 8);
+    v = ((v >> 16) & 0x0000FFFF0000FFFFULL) | ((v & 0x0000FFFF0000FFFFULL) << 16);
+    return (v >> 32) | (v << 32);
+}
+
+// Разворот младших k бит: бит p переходит в позицию k-1-p.
+static inline quint64 reverseLowBits(quint64 v, quint64 k)
+{
+    return reverseBits64(v) >> (64 - k);
+}
+
+// Полное число кодовых слов при переборе до maxComb строк включительно.
+//
+// Раньше считалось инкрементально: comb = comb * (k - r + 1) / r. Формула
+// точная в математике, но промежуточное произведение вылезает за uint64 куда
+// раньше самого результата. Для матрицы в 336 строк это происходит уже при
+// r = 10 — а именно 10 и есть максимум, который для неё разрешает интерфейс.
+// Итог получался неверным, и вместе с ним врали процент и оценка времени.
+//
+// Теперь складываются готовые значения из BinomTable: она строится по
+// треугольнику Паскаля, без промежуточных произведений, и сама проверяет
+// переполнение.
+// Сколько физической памяти у машины; 0 — не узнать.
+static quint64 physicalMemoryBytes()
+{
+    return Leon::physicalMemoryBytes();
+}
+
+// Кусок слоя, уходящий в один запуск ядра или один параллельный проход.
+//
+// Слой r у Брауэра–Циммермана — это C(k, r) комбинаций на каждое множество,
+// подряд: сначала все комбинации первого, потом второго и так далее. Номер
+// в слое (chunkOffset) сквозной, поэтому чекпоинты устроены так же, как в
+// обычном расчёте. Кусок никогда не пересекает границу множества: ядру
+// нужна одна матрица и один номер множества на запуск.
+struct LayerSlice
+{
+    MatrixSlot slot;
+    quint64    offset = 0;   // номер первой комбинации внутри своего множества
+    quint64    size   = 0;
+};
+
+static LayerSlice sliceLayer(const CodeGeometry& g, quint64 perSet,
+                             quint64 layerOffset, quint64 chunkSize)
+{
+    LayerSlice slice;
+    const quint64 set = perSet ? layerOffset / perSet : 0;
+    slice.offset        = layerOffset - set * perSet;
+    slice.size          = std::min(chunkSize, perSet - slice.offset);
+    slice.slot.rowBase  = int(set * g.numOfRows);
+    slice.slot.setIndex = int(set);
+    slice.slot.setCount = g.setCount;
+    return slice;
+}
+
+// Правило единственности Брауэра–Циммермана на хосте — то же, что bzKeep в
+// ядре: слово из r строк множества setIndex засчитывается, если прежние
+// множества видят у него больше r единиц, а последующие — не меньше r.
+static inline bool bzKeepHost(const quint64* codeword, const CodeGeometry& g,
+                              int r, int setIndex)
+{
+    for (int i = 0; i < g.setCount; ++i) {
+        if (i == setIndex)
+            continue;
+        const quint64* mask = g.setMasks.data() + size_t(i) * g.wordsPerRow;
+        int ones = 0;
+        for (quint64 w = 0; w < g.wordsPerRow; ++w)
+            ones += int(__popcnt64(codeword[w] & mask[w]));
+        if (i < setIndex ? ones <= r : ones < r)
+            return false;
+    }
+    return true;
+}
+
+quint64 Worker::totalLayerOps(const CodeGeometry& g) const
+{
+    const quint64 perSet = totalCombinations(g.numOfRows, g.maxRows);
+    if (g.setCount <= 1)
+        return perSet;
+    if (perSet > std::numeric_limits<quint64>::max() / quint64(g.setCount))
+        return std::numeric_limits<quint64>::max();
+    return perSet * quint64(g.setCount);
+}
+
+quint64 Worker::totalCombinations(quint64 k, quint64 maxComb) const
 {
     if (maxComb > k) maxComb = k;
-    if (maxComb == k) return ( ( 1ull << k ) - 1 );
+
     quint64 sum = 0;
-    quint64 comb = 1; // C(k,0) = 1
-    for (quint64 r = 1; r <= maxComb; ++r) {
-        comb = comb * (k - r + 1) / r;
-        sum += comb;
+    for (quint64 r = 0; r <= maxComb; ++r) {
+        const quint64 term = binomTable(k, r);
+        // Сама сумма тоже может не поместиться: при k = 66 и maxComb = 33
+        // это уже больше 2^65. Такой расчёт всё равно занял бы столетия,
+        // поэтому просто упираемся в потолок, а не выдаём мусор.
+        if (sum > std::numeric_limits<quint64>::max() - term)
+            return std::numeric_limits<quint64>::max();
+        sum += term;
     }
     return sum;
 }
-void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols, quint64 wordsPerRow, quint64 chunkSize, int blockCount, int threadsPerBlock, quint64 maxComb)
-{
-    bool    copyPending = false;
-    quint64 totalOps = sumCombinations(numOfRows, maxComb);
 
-    for (int r = runState.rOffset; r <= maxComb; r++)
+// Отчёт об оценке оставшегося времени и средней скорости.
+void Worker::reportEstimate()
+{
+    if (probeMode)
+        return;
+    progress.markEstimate();
+    runState.elapsedSec = progress.elapsedSec();
+    emit updateRemainingMinutes(int(progress.elapsedSec()),
+                                progress.minutesLeft(),
+                                progress.speed(),
+                                progress.doneOps(),
+                                progress.totalOps());
+}
+
+// Ход одного шага расчёта произведения: общий счётчик подменяется на шаг,
+// оценка времени и полоса считаются от его начала.
+void Worker::reportStageProgress(quint64 done, quint64 total)
+{
+    progress.setTotalOps(std::max<quint64>(1, total));
+    progress.setDoneOps(done);
+    const ProgressTracker::Due due = progress.due();
+    if (due.estimate)
+        reportEstimate();
+    if (due.bar)
+        reportProgressBar();
+}
+
+void Worker::reportProgressBar()
+{
+    if (probeMode)
+        return;
+    progress.markBar();
+    emit updateInfoPBR(progress.percent());
+}
+
+// Сохраняет чекпоинт для GPU-путей.
+//
+// Спектр забирается синхронно, а не через уже начатое асинхронное копирование:
+// нужно, чтобы сохранённые данные точно соответствовали посчитанным чанкам.
+//
+// false означает ошибку CUDA. Раньше в этом случае расчёт просто обрывался и
+// рапортовал об успехе — пользователь получал неполный спектр как готовый.
+bool Worker::saveGpuCheckpoint(cudaStream_t s, int numOfCols,
+                               quint64 rOffset, quint64 chunkOffset)
+{
+    progress.markCheckpoint();
+
+    cudaError_t err = cudaStreamSynchronize(s);
+    if (err == cudaSuccess)
+        err = cudaMemcpy(h_spectrum.get(), d_spectrum.get(), (numOfCols + 1) * sizeof(quint64),
+                         cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) {
+        emit errorOccurred(QStringLiteral("Ошибка CUDA при сохранении состояния: %1")
+                               .arg(QString::fromLatin1(cudaGetErrorString(err))));
+        return false;
+    }
+
+    runState.rOffset     = rOffset;
+    runState.chunkOffset = chunkOffset;
+    makeCheckpoint(numOfCols);
+    stopIfOpsLimitReached();
+    return true;
+}
+
+// Чекпоинт для CPU-путей: спектр уже в h_spectrum, забирать его неоткуда.
+// Копированием в runState.spectrum занимается makeCheckpoint().
+void Worker::saveCpuCheckpoint(int numOfCols, quint64 rOffset, quint64 chunkOffset)
+{
+    progress.markCheckpoint();
+    runState.rOffset     = rOffset;
+    runState.chunkOffset = chunkOffset;
+    makeCheckpoint(numOfCols);
+    stopIfOpsLimitReached();
+}
+
+// Прерывание сразу после сохранения: состояние на диске согласовано, и
+// возобновление начнётся ровно с той точки, которую записал чекпоинт.
+void Worker::setLiveIntervals(int spectrumMs, int checkpointSeconds)
+{
+    if (spectrumMs <= 0 || checkpointSeconds <= 0)
+        return;
+    progress.setIntervals(std::chrono::milliseconds{ spectrumMs },
+                          std::chrono::seconds{ checkpointSeconds });
+}
+
+void Worker::stopIfOpsLimitReached()
+{
+    if (stopAfterOps > 0 && progress.doneOps() >= stopAfterOps)
+        cancelled.store(1);
+}
+
+// Возвращает false, если во время паузы расчёт отменили.
+bool Worker::waitWhilePaused()
+{
+    while (paused.load() != 0) {
+        if (cancelled.load()) return false;
+        QThread::msleep(50);
+    }
+    return !cancelled.load();
+}
+
+void Worker::computeSpectrumGpuNoGrayShort(const CodeGeometry& g)
+{
+    const quint64 numOfRows       = g.numOfRows;
+    const quint64 numOfCols       = g.numOfCols;
+    const quint64 wordsPerRow     = g.wordsPerRow;
+    const quint64 chunkSize       = g.chunkSize;
+    const int     blockCount      = g.blocksGpu;
+    const int     threadsPerBlock = g.threadsGpu;
+    const quint64 maxComb         = g.maxRows;
+
+    progress.begin(totalLayerOps(g), runState.doneOps, runState.elapsedSec);
+
+    // rOffset — число единиц в маске; счётчик обязан быть беззнаковым, иначе
+    // при сравнении с maxComb получается знаковое/беззнаковое сравнение.
+    for (quint64 r = runState.rOffset; r <= maxComb; r++)
     {
         quint64 startOffset = 0;
 
-        
-        quint64 curOps = h_binomTable[numOfRows][r];
+        // Слой — C(k, r) комбинаций на каждое из множеств, подряд.
+        const quint64 perSet = binomTable(numOfRows, r);
+        const quint64 curOps = perSet * g.setCount;
 
         if (r == runState.rOffset)
             startOffset = runState.chunkOffset;
-        // Разбиваем на чанки
-        for ( quint64 offset = startOffset; offset < curOps; offset += chunkSize )
+        // Разбиваем на чанки. Чанк не пересекает границу множества, поэтому
+        // бывает короче обычного, и шаг цикла — его фактический размер.
+        for ( quint64 offset = startOffset, next = 0; offset < curOps; offset = next )
         {
-            quint64 thisChunkSize = qMin(chunkSize, curOps - offset); // последний чанк может быть меньше
-            while (paused.load() != 0) {
-                QThread::msleep(50);
-                if (cancelled.load()) break;
-            }
-            if (cancelled.load()) {
+            const LayerSlice slice = sliceLayer(g, perSet, offset, chunkSize);
+            const quint64 thisChunkSize = slice.size;
+            next = offset + thisChunkSize;
+            if (!waitWhilePaused())
                 break;
-            }
 
             // Запуск ядра
             launchSpectrumKernelShort(
-                d_spectrum,
-                d_binomTable,
+                d_spectrum.get(),
+                d_binomTable.get(),
                 blockCount,             // Число блоков
                 threadsPerBlock,       // Число нитей на блок
-                stream,
+                stream.get(),
                 numOfCols,                     // Длина строки матрицы в битах
                 numOfRows,                     // Число строк матрицы
                 wordsPerRow,            // Число слов на одну строку матрицы
-                offset,                // Смещение в комбинациях на каждом шаге
+                slice.offset,          // Смещение в комбинациях внутри множества
                 thisChunkSize,         // Размер чанка
-                r                      // Число единиц в битовой маске (число складываемых строк)
+                r,                     // Число единиц в битовой маске (число складываемых строк)
+                slice.slot
             );
-            runState.doneOps += thisChunkSize;
+            progress.addOps(thisChunkSize);
+            runState.doneOps = progress.doneOps();
 
-            auto now = steady_clock::now();
-            if (now - lastEstimateTime >= std::chrono::seconds(1)) {
-                lastEstimateTime = now;
-                runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
-                double speed = 1.0;
+            const ProgressTracker::Due due = progress.due();
 
-                if (runState.doneOps != 0)
-                    speed = double(runState.doneOps) / runState.elapsedSec;
+            if (due.estimate)
+                reportEstimate();
 
-                quint64 remainingOps = totalOps > runState.doneOps ? totalOps - runState.doneOps : 0;
-                double estSec = speed > 0 ? remainingOps / speed : 0.0;
+            // Метка двигается только когда копия реально встала в очередь:
+            // иначе при занятом кольце следующая попытка откладывалась бы на
+            // целый интервал.
+            if (due.spectrum && spectrumRing.enqueue(d_spectrum.get(), stream.get()))
+                progress.markSpectrum();
+            if (const quint64* snapshot = spectrumRing.takeReady())
+                updateSpectrumFrom(snapshot, int(numOfCols));
+            if (due.bar)
+                reportProgressBar();
 
-                int minutesLeft = int(std::ceil(estSec / 60.0));
-                emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
-
-            }
-            if (!copyPending && (now - lastTimeSpectrum > updateSpectrumSec)) {
-                lastTimeSpectrum = now;
-                cudaMemcpyAsync(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream);
-                cudaEventRecord(ev, stream);
-                copyPending = true;
-            }
-            if (copyPending) {
-                cudaError_t q = cudaEventQuery(ev);
-                if (q == cudaSuccess) {
-                    copyPending = false;
-                    updateSpectrum(numOfCols);
-                }
-            }
-            if (now - lastTimeBar > updateProgressBarSec) {
-                lastTimeBar = now;
-                emit updateInfoPBR(runState.doneOps * 100 / totalOps);
-            }
-            if (now - lastCheckpointTime >= saveSpectrumSec) {
-                lastCheckpointTime = now;
-                // 1. Ждём завершения всех операций в stream
-                cudaError_t err = cudaStreamSynchronize(stream);
-                if (err != cudaSuccess) {
+            if (due.checkpoint) {
+                if (!saveGpuCheckpoint(stream.get(), numOfCols, r, offset + thisChunkSize))
                     return;
-                }
-                // 2. Синхронная копия (данные гарантированно относятся к текущему чанку)
-                err = cudaMemcpy(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost);
-                if (err != cudaSuccess) {
-                    return;
-                }
-                // 3. Обновляем интерфейс
-                //updateSpectrum(numOfCols);
-                // 4. Сохраняем чекпоинт
-                runState.rOffset = r;
-                runState.chunkOffset = offset + thisChunkSize; // ВАЖНО!
-                makeCheckpoint(numOfCols);
-                // 5. Сбрасываем async-копирование
-                copyPending = false;
             }
-
         }
         if (cancelled.load()) {
             break;
@@ -226,126 +384,91 @@ void Worker::computeSpectrumGpuNoGrayShort(quint64 numOfRows, quint64 numOfCols,
     }
     // Финальная копия спектра
     CUDA_CALL(cudaMemcpyAsync(
-        h_spectrum,
-        d_spectrum,
+        h_spectrum.get(),
+        d_spectrum.get(),
         (numOfCols + 1) * sizeof(quint64),
         cudaMemcpyDeviceToHost,
-        stream));
-    CUDA_CALL(cudaEventRecord(ev, stream));
-    CUDA_CALL(cudaStreamSynchronize(stream));
+        stream.get()));
+    CUDA_CALL(cudaStreamSynchronize(stream.get()));
 
     updateSpectrum(numOfCols);
 }
-void Worker::computeSpectrumGpuGrayShort( quint64 numOfRows, quint64 numOfCols, quint64 wordsPerRow, quint64 chunkSize, int blockCount, int threadsPerBlock )
+void Worker::computeSpectrumGpuGrayShort(const CodeGeometry& g)
 {
-    bool    copyPending = false;
-    quint64 totalOps = 1ULL << numOfRows;
+    const quint64 numOfRows       = g.numOfRows;
+    const quint64 numOfCols       = g.numOfCols;
+    const quint64 wordsPerRow     = g.wordsPerRow;
+    const quint64 chunkSize       = g.chunkSize;
+    const int     blockCount      = g.blocksGpu;
+    const int     threadsPerBlock = g.threadsGpu;
+
+    const quint64 totalOps    = 1ULL << numOfRows;
+
+    progress.begin(totalOps, runState.doneOps, runState.elapsedSec);
     // Обновление на случай, когда загружаем чекпоинт
-    emit updateInfoPBR(runState.doneOps * 100 / totalOps);
+    if (!probeMode)
+        emit updateInfoPBR(progress.percent());
+
     for (quint64 chunkOffset = runState.chunkOffset; chunkOffset < totalOps; chunkOffset += chunkSize) {
         quint64 thisChunkSize = qMin(chunkSize, totalOps - chunkOffset);
-        while (paused.load() != 0) {
-            QThread::msleep(50);
-            if (cancelled.load()) {
-                break;
-            } 
-        }
-        if (cancelled.load()) {
+        if (!waitWhilePaused())
             break;
-        }
         launchSpectrumKernelGrayShort(
             blockCount,
             threadsPerBlock,
-            stream,
-            d_spectrum,
+            stream.get(),
+            d_spectrum.get(),
             numOfCols,
             numOfRows,
             (int)wordsPerRow,
             chunkOffset,
             thisChunkSize
         );
-        auto now = steady_clock::now();
-        if (now - lastEstimateTime >= std::chrono::seconds(1)) {
-            lastEstimateTime = now;
-            runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
-            double speed = 1.0;
+        progress.addOps(thisChunkSize);
+        runState.doneOps = progress.doneOps();
 
-            if (runState.doneOps != 0)
-                speed = double(runState.doneOps) / runState.elapsedSec;
+        const ProgressTracker::Due due = progress.due();
 
-            quint64 remainingOps = totalOps > runState.doneOps ? totalOps - runState.doneOps : 0;
-            double estSec = speed > 0 ? remainingOps / speed : 0.0;
+        if (due.estimate)
+            reportEstimate();
 
-            int minutesLeft = int(std::ceil(estSec / 60.0));
-            emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
+        if (due.spectrum && spectrumRing.enqueue(d_spectrum.get(), stream.get()))
+            progress.markSpectrum();
+        if (const quint64* snapshot = spectrumRing.takeReady())
+            updateSpectrumFrom(snapshot, int(numOfCols));
+        if (due.bar)
+            reportProgressBar();
 
-        }
-        if (!copyPending && (now - lastTimeSpectrum > updateSpectrumSec )) {
-            lastTimeSpectrum = now;
-            cudaMemcpyAsync(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost, stream);
-            cudaEventRecord(ev, stream);
-            copyPending = true;
-        }
-        if (copyPending) {
-            cudaError_t q = cudaEventQuery(ev);
-            if (q == cudaSuccess) {
-                copyPending = false;
-                updateSpectrum(numOfCols);
-            }
-        }
-        if (now - lastTimeBar > updateProgressBarSec) {
-            lastTimeBar = now;
-            emit updateInfoPBR(runState.doneOps * 100 / totalOps);
-        }
-        // ПРОТЕСТИРОВАТЬ
-        runState.doneOps += thisChunkSize;
-        runState.chunkOffset = chunkOffset + thisChunkSize;
-        if ( now - lastCheckpointTime >= saveSpectrumSec ) {
-            lastCheckpointTime = now;
-            // 1. Ждём завершения всех операций в stream
-            cudaError_t err = cudaStreamSynchronize(stream);
-            if (err != cudaSuccess) {
+        if (due.checkpoint) {
+            // Код Грея идёт сплошной нумерацией масок, слоёв по числу единиц
+            // нет — rOffset здесь всегда 0.
+            if (!saveGpuCheckpoint(stream.get(), numOfCols, 0, chunkOffset + thisChunkSize))
                 return;
-            }
-            // 2. Синхронная копия (данные гарантированно относятся к текущему чанку)
-            err = cudaMemcpy(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost);
-            if (err != cudaSuccess) {
-                return;
-            }
-            // 3. Обновляем интерфейс
-            //updateSpectrum(numOfCols);
-            // 4. Сохраняем чекпоинт
-            
-            makeCheckpoint(numOfCols);
-            // 5. Сбрасываем async-копирование
-            copyPending = false;
         }
     }
 
     // Финальная копия спектра
     CUDA_CALL(cudaMemcpyAsync(
-        h_spectrum,
-        d_spectrum,
+        h_spectrum.get(),
+        d_spectrum.get(),
         (numOfCols + 1) * sizeof(quint64),
         cudaMemcpyDeviceToHost,
-        stream));
-    CUDA_CALL(cudaEventRecord(ev, stream));
-    CUDA_CALL(cudaStreamSynchronize(stream));
+        stream.get()));
+    CUDA_CALL(cudaStreamSynchronize(stream.get()));
 
     updateSpectrum(numOfCols);
 }
 
-void Worker::computeSpectrumGpuNoGrayLong(
-    quint64 numOfRows,
-    quint64 numOfCols,
-    quint64 wordsPerRow,
-    int     blockCount,
-    int     threadsPerBlock,
-    quint64 maxComb,
-    quint64* d_matrix
-)
+void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
 {
-    quint64 totalOps = sumCombinations(numOfRows, maxComb);
+    const quint64 numOfRows       = g.numOfRows;
+    const quint64 numOfCols       = g.numOfCols;
+    const quint64 wordsPerRow     = g.wordsPerRow;
+    const int     blockCount      = g.blocksGpu;
+    const int     threadsPerBlock = g.threadsGpu;
+    const quint64 maxComb         = g.maxRows;
+
+    quint64 totalOps = totalLayerOps(g);
 
     // Общее число нитей, запущенных на видеокарте
     uint64_t maxThreads = static_cast<uint64_t>(blockCount) * static_cast<uint64_t>(threadsPerBlock);
@@ -361,68 +484,103 @@ void Worker::computeSpectrumGpuNoGrayLong(
     // Максимальное число масок, обрабатываемых одним потоком
     const uint64_t masksPerThread = 1ULL << 12; 
 
-    // Стартовые массивы масок на процессоре и на видеокарте
-    int16_t* h_slots = nullptr;
-    int16_t* d_slots = nullptr;
-    CUDA_CALL(cudaMallocHost((void**)&h_slots, bytesPerChunk));
-    CUDA_CALL(cudaMalloc((void**)&d_slots, bytesPerChunk));
+    // Стартовые массивы масок.
+    //
+    // На хосте их два: пока с одного идёт копирование на устройство, хост
+    // заполняет второй. Иначе он затирал бы данные под работающим DMA, и
+    // приходилось бы после каждой итерации дожидаться устройства целиком.
+    //
+    // На устройстве достаточно одного: копия следующей итерации ставится в
+    // очередь того же потока после ядра текущей и раньше не начнётся.
+    const size_t slotsPerBuffer = maxThreads * slotElems;
+
+    HostBuffer<int16_t>   h_slots;
+    DeviceBuffer<int16_t> d_slots;
+    h_slots.allocate(2 * slotsPerBuffer, HostBuffer<int16_t>::Kind::Pinned);
+    d_slots.allocate(slotsPerBuffer);
+
+    // Событие на каждый буфер: отмечает конец копирования именно из него.
+    CudaEvent slotsCopied[2];
+    slotsCopied[0].create();
+    slotsCopied[1].create();
+    bool slotsBusy[2] = { false, false };
+    int  slotsBuf     = 0;
 
     #ifdef _DEBUG
-    uint64_t* h_maskCounter = nullptr;
-    uint64_t* d_maskCounter = nullptr;
-    CUDA_CALL(cudaMallocHost( (void**)&h_maskCounter, sizeof(uint64_t) ) );
-    CUDA_CALL(cudaMalloc(     (void**)&d_maskCounter, sizeof(uint64_t) ) );
+    // Счётчик обработанных масок для сверки. Раньше он не освобождался вовсе.
+    HostBuffer<uint64_t>   h_maskCounter;
+    DeviceBuffer<uint64_t> d_maskCounter;
+    h_maskCounter.allocate(1, HostBuffer<uint64_t>::Kind::Pinned);
+    d_maskCounter.allocate(1);
     #endif
-    cudaStream_t stream = 0;
-    cudaEvent_t evCopy = nullptr;
-    CUDA_CALL(cudaStreamCreate(&stream));
-    CUDA_CALL(cudaEventCreate(&evCopy));
-
-    bool copyPending = false;
+    // Собственный поток, а не поле класса: имя намеренно отличается, чтобы
+    // не перекрывать Worker::stream и не синхронизировать по ошибке чужой.
+    CudaStream localStream;
+    localStream.create();
 
     // Размер чанка в масках
     const quint64 chunkSizeTarget = maxThreads * masksPerThread;
 
+    progress.begin(totalOps, runState.doneOps, runState.elapsedSec);
+
     // Внешний цикл по числу единиц в маске
-    for (unsigned r = runState.rOffset; r <= maxComb; ++r) {
+    for (quint64 r = runState.rOffset; r <= maxComb; ++r) {
 
         quint64 startOffset = 0;
 
-        // Количество масок с r единицами
-        quint64 curOps = h_binomTable[numOfRows][r];
+        // Количество масок с r единицами — на каждое из множеств, подряд
+        const quint64 perSet = binomTable(numOfRows, r);
+        const quint64 curOps = perSet * g.setCount;
         if (curOps == 0) continue;
 
         if (r == runState.rOffset)
             startOffset = runState.chunkOffset;
 
-        // Внутренний цикл по чанку
-        for (quint64 chunkOffset = startOffset; chunkOffset < curOps; chunkOffset += chunkSizeTarget) {
+        // Внутренний цикл по чанку. Чанк не пересекает границу множества,
+        // поэтому шаг цикла — его фактический размер.
+        for (quint64 chunkOffset = startOffset, next = 0; chunkOffset < curOps; chunkOffset = next) {
             while (paused.load() != 0) {
                 QThread::msleep(50);
                 if (cancelled.load()) break;
             }
-            // Получаем фактический размер чанка в масках
-            quint64 chunkSize = std::min(chunkSizeTarget, curOps - chunkOffset);
+            const LayerSlice slice = sliceLayer(g, perSet, chunkOffset, chunkSizeTarget);
+            const quint64 chunkSize = slice.size;
+            next = chunkOffset + chunkSize;
 
             // Фактическое число нитей, участвующих в вычислениях
             quint64 numStartMasks = (chunkSize + masksPerThread - 1ULL) / masksPerThread;
             if (numStartMasks == 0) continue;
 
-            // Генерируем стартовые позиции на CPU
+            // Ждём, пока освободится тот буфер, который сейчас будем
+            // переписывать. На второй итерации после его использования
+            // копирование давно закончилось, так что ожидание холостое.
+            if (slotsBusy[slotsBuf])
+                CUDA_CALL(cudaEventSynchronize(slotsCopied[slotsBuf].get()));
+
+            // Имя не slots: так называется макрос Qt из qobjectdefs.h (тот
+            // самый из "public slots:"), он раскрывается в пустоту и ломает
+            // объявление переменной.
+            int16_t* const hostSlots = h_slots.get() + slotsBuf * slotsPerBuffer;
+
+            // Генерируем стартовые позиции на CPU. Это и есть та работа, ради
+            // совмещения которой с расчётом заведён второй буфер.
             for (quint64 tid = 0; tid < numStartMasks; ++tid) {
-                quint64 globalRank = chunkOffset + tid * masksPerThread;
-                assert(globalRank < curOps);
+                quint64 globalRank = slice.offset + tid * masksPerThread;
+                assert(globalRank < perSet);
                 // Генерируем стартовую комбинацию для ранга globalRank
-                generateStartPositions(globalRank, numOfRows, r, h_slots + tid * Constants::MAX_POSITIONS, h_binomTable);
+                generateStartPositions(globalRank, numOfRows, r, hostSlots + tid * Constants::MAX_POSITIONS, binomTable);
             }
 
             // Копируем только те стартовые маски, которые нужны в этом чанке
             CUDA_CALL(cudaMemcpyAsync(
-                d_slots,
-                h_slots,
+                d_slots.get(),
+                hostSlots,
                 numStartMasks * slotBytes,
                 cudaMemcpyHostToDevice,
-                stream));
+                localStream.get()));
+            CUDA_CALL(cudaEventRecord(slotsCopied[slotsBuf].get(), localStream.get()));
+            slotsBusy[slotsBuf] = true;
+            slotsBuf ^= 1;
 
             // Запускаем ядро: numStartMasks потоков (упаковано в grid)
             int grid = (numStartMasks + threadsPerBlock - 1) / threadsPerBlock;
@@ -431,117 +589,79 @@ void Worker::computeSpectrumGpuNoGrayLong(
             // Параметры: chunkSize (сколько масок в этом чанке всего),
             // masksPerThread (сколько масок на поток), numStartMasks (количество активных потоков)
             #ifdef _DEBUG
-            cudaMemset(d_maskCounter, 0, sizeof(uint64_t));
+            d_maskCounter.fillZero();
             
             launchSpectrumKernelLong(
                 grid,
                 threadsPerBlock,
-                stream,
-                d_spectrum,
-                d_matrix,
+                localStream.get(),
+                d_spectrum.get(),
+                d_matrix.get(),
                 static_cast<int>(numOfCols),
                 static_cast<int>(numOfRows),
                 static_cast<int>(wordsPerRow),
                 chunkSize,
-                d_slots,
+                d_slots.get(),
                 masksPerThread,
                 numStartMasks,
                 r,
-                d_maskCounter);
+                d_maskCounter.get(),
+                slice.slot);
             #else
             launchSpectrumKernelLong(
                 grid,
                 threadsPerBlock,
-                stream,
-                d_spectrum,
-                d_matrix,
+                localStream.get(),
+                d_spectrum.get(),
+                d_matrix.get(),
                 static_cast<int>(numOfCols),
                 static_cast<int>(numOfRows),
                 static_cast<int>(wordsPerRow),
                 chunkSize,
-                d_slots,
+                d_slots.get(),
                 masksPerThread,
                 numStartMasks,
                 r,
-                nullptr);
+                nullptr,
+                slice.slot);
             #endif
-            // Пиздец важная хуйня, без неё спектр считается не корректно
-            cudaDeviceSynchronize();
+            // Здесь стоял cudaDeviceSynchronize(), без которого спектр считался
+            // неверно. Защищал он ровно одну гонку: хост переписывал h_slots,
+            // пока с него ещё шло асинхронное копирование, и часть стартовых
+            // масок терялась. Теперь буферов два, и синхронизация не нужна.
+            //
+            // Остальное упорядочено самим потоком: копия d_slots следующей
+            // итерации встаёт в очередь после ядра текущей, а спектр
+            // накапливается атомарно в d_spectrum, куда пишут только ядра
+            // этого же потока.
 
             #ifdef _DEBUG
-            cudaMemcpy(h_maskCounter, d_maskCounter, sizeof(uint64_t), cudaMemcpyDeviceToHost);
-            uint64_t m = *h_maskCounter;
+            CUDA_CALL(cudaMemcpy(h_maskCounter.get(), d_maskCounter.get(), sizeof(uint64_t), cudaMemcpyDeviceToHost));
+            const uint64_t m = h_maskCounter[0];
             if (m != chunkSize) {
-                throw "Error, masks mismath!";
+                throw std::runtime_error("расхождение числа обработанных масок");
             }
             #endif
             // Учёт прогресса
-            runState.doneOps += chunkSize;
+            progress.addOps(chunkSize);
+            runState.doneOps = progress.doneOps();
 
-            auto now = steady_clock::now();
+            const ProgressTracker::Due due = progress.due();
 
-            // Асинхронное копирование спектра для апдейта UI (по refreshSpectrumMs)
-            if (!copyPending && (now - lastTimeSpectrum > updateSpectrumSec )) {
-                lastTimeSpectrum = now;
-                CUDA_CALL(cudaMemcpyAsync(
-                    h_spectrum,
-                    d_spectrum,
-                    (numOfCols + 1) * sizeof(quint64),
-                    cudaMemcpyDeviceToHost,
-                    stream));
-                CUDA_CALL(cudaEventRecord(evCopy, stream));
-                copyPending = true;
-            }
-            
-            // Проверяем завершение копии
-            if (copyPending) {
-                cudaError_t evq = cudaEventQuery(evCopy);
-                if (evq == cudaSuccess) {
-                    copyPending = false;
-                    updateSpectrum(numOfCols);
-                }
-            }
+            // Снимок спектра для интерфейса
+            if (due.spectrum && spectrumRing.enqueue(d_spectrum.get(), localStream.get()))
+                progress.markSpectrum();
+            if (const quint64* snapshot = spectrumRing.takeReady())
+                updateSpectrumFrom(snapshot, int(numOfCols));
 
-            // Обновляем progress bar по таймеру
-            if ( now - lastTimeBar > updateProgressBarSec ) {
-                lastTimeBar = now;
-                emit updateInfoPBR(runState.doneOps * 100 / totalOps);
-            }
-            if (now - lastEstimateTime >= std::chrono::seconds(1)) {
-                lastEstimateTime = now;
-                runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
-                double speed = 1.0;
+            if (due.bar)
+                reportProgressBar();
+            if (due.estimate)
+                reportEstimate();
 
-                if (runState.doneOps != 0)
-                    speed = double(runState.doneOps) / runState.elapsedSec;
-
-                quint64 remainingOps = totalOps > runState.doneOps ? totalOps - runState.doneOps : 0;
-                double estSec = speed > 0 ? remainingOps / speed : 0.0;
-
-                int minutesLeft = int(std::ceil(estSec / 60.0));
-                emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
-
-            }
-            if ( now - lastCheckpointTime >= saveSpectrumSec ) {
-                lastCheckpointTime = now;
-                // 1. Ждём завершения всех операций в stream
-                cudaError_t err = cudaStreamSynchronize(stream);
-                if (err != cudaSuccess) {
+            if (due.checkpoint) {
+                if (!saveGpuCheckpoint(localStream.get(), numOfCols, r, chunkOffset + chunkSize))
                     return;
-                }
-                // 2. Синхронная копия (данные гарантированно относятся к текущему чанку)
-                err = cudaMemcpy(h_spectrum, d_spectrum, (numOfCols + 1) * sizeof(quint64), cudaMemcpyDeviceToHost);
-                if (err != cudaSuccess) {
-                    return;
-                }
-                // 3. Обновляем интерфейс
-                //updateSpectrum(numOfCols);
-                // 4. Сохраняем чекпоинт
-                runState.rOffset = r;
-                runState.chunkOffset = chunkOffset + chunkSize;
-                makeCheckpoint(numOfCols);
-                // 5. Сбрасываем async-копирование
-                copyPending = false;
             }
 
             if (cancelled.load()) break;
@@ -551,21 +671,16 @@ void Worker::computeSpectrumGpuNoGrayLong(
 
     // Финальная копия спектра
     CUDA_CALL(cudaMemcpyAsync(
-        h_spectrum,
-        d_spectrum,
+        h_spectrum.get(),
+        d_spectrum.get(),
         (numOfCols + 1) * sizeof(quint64),
         cudaMemcpyDeviceToHost,
-        stream));
-    CUDA_CALL(cudaEventRecord(evCopy, stream));
-    CUDA_CALL(cudaStreamSynchronize(stream));
+        localStream.get()));
+    CUDA_CALL(cudaStreamSynchronize(localStream.get()));
 
     updateSpectrum(numOfCols);
-    // Очистка
-    cudaFree(d_slots);
-    cudaFreeHost(h_slots);
-    //cudaFree(d_maskCounter);
-    cudaStreamDestroy(stream);
-    cudaEventDestroy(evCopy);
+    // Освобождать вручную нечего: h_slots, d_slots, счётчик масок, поток и
+    // событие владеющие — их снимут деструкторы, в том числе при исключении.
 }
 
 
@@ -607,34 +722,43 @@ void diffPositions(const int16_t* old_a, const int16_t* a, int numOnes, int16_t*
     while (j < numOnes) changed[numChanged++] = a[j++];
 }
 
-void Worker::computeSpectrumCpuNoGrayLong(
-    quint64 numOfRows,
-    quint64 numOfCols,
-    quint64 wordsPerRow,
-    quint64 maxComb)
+void Worker::computeSpectrumCpuNoGrayLong(const CodeGeometry& g)
 {
+    const quint64 numOfRows   = g.numOfRows;
+    const quint64 numOfCols   = g.numOfCols;
+    const quint64 wordsPerRow = g.wordsPerRow;
+    const quint64 maxComb     = g.maxRows;
+
     using namespace std::chrono;
     int numThreads = omp_get_max_threads();
-    quint64 totalOps = sumCombinations(numOfRows, maxComb);
+    quint64 totalOps = totalLayerOps(g);
 
     // Число "битовых масок", обрабатываемых одним потоком
     const uint64_t masksPerThread = 1ULL << 20; // можно настроить
     const quint64 chunkSizeTarget = numThreads * masksPerThread;
 
     std::vector<std::vector<quint64>> threadSpectrum( numThreads, std::vector<quint64>(numOfCols + 1, 0ULL) );
+
+    progress.begin(totalOps, runState.doneOps, runState.elapsedSec);
+
     // Основной внешний цикл по числу единиц в маске
     for (quint64 r = runState.rOffset; r <= maxComb; ++r)
     {
-        quint64 curOps = h_binomTable[numOfRows][r];
+        // C(k, r) масок на каждое из множеств, подряд
+        const quint64 perSet = binomTable(numOfRows, r);
+        const quint64 curOps = perSet * g.setCount;
 
         quint64 startOffset = (r == runState.rOffset) ? runState.chunkOffset : 0;
         if (curOps == 0) continue;
 
-        // Внутренний цикл по чанкам
-        for (quint64 chunkOffset = startOffset; chunkOffset < curOps; chunkOffset += chunkSizeTarget) {
+        // Внутренний цикл по чанкам. Чанк не пересекает границу множества,
+        // поэтому шаг цикла — его фактический размер.
+        for (quint64 chunkOffset = startOffset, next = 0; chunkOffset < curOps; chunkOffset = next) {
             if (cancelled.load()) break;
 
-            quint64 chunkSize = std::min(chunkSizeTarget, curOps - chunkOffset);
+            const LayerSlice slice = sliceLayer(g, perSet, chunkOffset, chunkSizeTarget);
+            const quint64 chunkSize = slice.size;
+            next = chunkOffset + chunkSize;
             if (chunkSize == 0) continue;
 
             
@@ -659,8 +783,11 @@ void Worker::computeSpectrumCpuNoGrayLong(
                 // локальное кодовое слово (wordsPerRow слов)
                 std::vector<quint64> codeword((size_t)wordsPerRow, 0ULL);
 
+                // Счётчик знаковый: OpenMP до версии 3.0 не допускает
+                // беззнаковых индексов в parallel for. numStartMasks заведомо
+                // помещается в int64_t, поэтому приводим его, а не счётчик.
                 #pragma omp for schedule(dynamic)
-                for (int64_t gtid = 0; gtid < numStartMasks; ++gtid) {
+                for (int64_t gtid = 0; gtid < int64_t(numStartMasks); ++gtid) {
                     if (cancelled.load()) continue;
 
                     // стартовый ранг и сколько итераций реально нужно
@@ -670,10 +797,10 @@ void Worker::computeSpectrumCpuNoGrayLong(
                     if (startRank + iters > chunkSize) iters = chunkSize - startRank;
                     if (iters == 0) continue;
 
-                    uint64_t globalRank = chunkOffset + startRank; // ранг относительно binom curOps
+                    uint64_t globalRank = slice.offset + startRank; // ранг внутри своего множества
 
                     // 1) Сгенерировать стартовые позиции
-                    generateStartPositions(globalRank, (int)numOfRows, (int)r, a_local, h_binomTable);
+                    generateStartPositions(globalRank, (int)numOfRows, (int)r, a_local, binomTable);
 
                     // 2) Построить начальное codeword XOR-ом строк
                     // обнуляем codeword
@@ -681,7 +808,7 @@ void Worker::computeSpectrumCpuNoGrayLong(
 
                     for (int i = 0; i < (int)r; ++i) {
                         int row = a_local[i];
-                        quint64* rowData = h_matrix + (quint64)row * wordsPerRow;
+                        quint64* rowData = h_matrix.get() + (quint64)(slice.slot.rowBase + row) * wordsPerRow;
                         for (size_t w = 0; w < (size_t)wordsPerRow; ++w)
                             codeword[w] ^= rowData[w];
                     }
@@ -689,7 +816,9 @@ void Worker::computeSpectrumCpuNoGrayLong(
                     // посчитать вес и добавить в локальный спектр
                     quint64 weight = 0;
                     for (size_t w = 0; w < (size_t)wordsPerRow; ++w) weight += __popcnt64(codeword[w]);
-                    if (weight <= numOfCols) localSpectrum[(size_t)weight]++;
+                    if (weight <= numOfCols
+                        && (g.setCount <= 1 || bzKeepHost(codeword.data(), g, int(r), slice.slot.setIndex)))
+                        localSpectrum[(size_t)weight]++;
 
                     // 3) Основной цикл по iters-1 следующим комбинациям
                     for (uint64_t it = 1; it < iters; ++it) {
@@ -720,7 +849,7 @@ void Worker::computeSpectrumCpuNoGrayLong(
                             for (size_t w = 0; w < (size_t)wordsPerRow; ++w) codeword[w] = 0ULL;
                             for (int i = 0; i < (int)r; ++i) {
                                 int row = a_local[i];
-                                quint64* rowData = h_matrix + (quint64)row * wordsPerRow;
+                                quint64* rowData = h_matrix.get() + (quint64)(slice.slot.rowBase + row) * wordsPerRow;
                                 for (size_t w = 0; w < (size_t)wordsPerRow; ++w)
                                     codeword[w] ^= rowData[w];
                             }
@@ -729,7 +858,7 @@ void Worker::computeSpectrumCpuNoGrayLong(
                             // применяем XOR для каждой изменённой строки
                             for (int t = 0; t < numChanged; ++t) {
                                 int row = changed[t];
-                                quint64* rowData = h_matrix + (quint64)row * wordsPerRow;
+                                quint64* rowData = h_matrix.get() + (quint64)(slice.slot.rowBase + row) * wordsPerRow;
                                 for (size_t w = 0; w < (size_t)wordsPerRow; ++w)
                                     codeword[w] ^= rowData[w];
                             }
@@ -738,7 +867,9 @@ void Worker::computeSpectrumCpuNoGrayLong(
                         // считаем вес
                         quint64 weight2 = 0;
                         for (size_t w = 0; w < (size_t)wordsPerRow; ++w) weight2 += __popcnt64(codeword[w]);
-                        if (weight2 <= numOfCols) localSpectrum[(size_t)weight2]++;
+                        if (weight2 <= numOfCols
+                            && (g.setCount <= 1 || bzKeepHost(codeword.data(), g, int(r), slice.slot.setIndex)))
+                            localSpectrum[(size_t)weight2]++;
                     } // for it
                 } // for gtid
 
@@ -756,44 +887,24 @@ void Worker::computeSpectrumCpuNoGrayLong(
                     h_spectrum[w] += threadSpectrum[t][w];
                 }
             }
-            // После расчёта чанка — увеличиваем doneOps, делаем чекпоинт и апдейтим UI
-            runState.doneOps += chunkSize;
-            // Обновление спектра в UI (копия h_spectrum уже актуальна)
-            auto now = steady_clock::now();
+            // После расчёта чанка — учитываем прогресс и обновляем интерфейс.
+            // Спектр в h_spectrum.get() уже актуален, копировать ниоткуда не надо.
+            progress.addOps(chunkSize);
+            runState.doneOps = progress.doneOps();
 
-            if ( now - lastTimeSpectrum >=  updateSpectrumSec ) {
-                lastTimeSpectrum = now;
-                updateSpectrum((int)numOfCols); // предполагаем, что этот метод формирует QStringList и plot
-            }
-            if ( now - lastTimeBar >= updateProgressBarSec ) {
-                lastTimeBar = now;
-                emit updateInfoPBR((int)(runState.doneOps * 100 / totalOps));
-            }
-            if ( now - lastEstimateTime >= seconds(1)) {
-                lastEstimateTime = now;
-                runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
-                double speed = (runState.doneOps != 0) ? double(runState.doneOps) / runState.elapsedSec : 1.0;
-                quint64 remainingOps = (totalOps > runState.doneOps) ? (totalOps - runState.doneOps) : 0;
-                double estSec = (speed > 0.0) ? (remainingOps / speed) : 0.0;
-                int minutesLeft = (int)std::ceil(estSec / 60.0);
-                emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
-            }
-            if ( now - lastCheckpointTime >= saveSpectrumSec ) {
-                lastCheckpointTime = now;
+            const ProgressTracker::Due due = progress.due();
 
-                // 1. Обновляем runState
-                runState.rOffset = r;
-                runState.chunkOffset = chunkOffset + chunkSize; // ВАЖНО!
-
-                // 2. Копируем спектр
-                runState.spectrum.resize(numOfCols + 1);
-                for (quint64 i = 0; i <= numOfCols; ++i) {
-                    runState.spectrum[i] = h_spectrum[i];
-                }
-
-                // 3. Сохраняем
-                makeCheckpoint(numOfCols);
+            if (due.spectrum) {
+                progress.markSpectrum();
+                updateSpectrum((int)numOfCols);
             }
+            if (due.bar)
+                reportProgressBar();
+            if (due.estimate)
+                reportEstimate();
+            if (due.checkpoint)
+                saveCpuCheckpoint((int)numOfCols, r, chunkOffset + chunkSize);
+
             if (cancelled.load()) break;
         } // chunkOffset
         if (cancelled.load()) break;
@@ -802,12 +913,13 @@ void Worker::computeSpectrumCpuNoGrayLong(
     updateSpectrum((int)numOfCols);
 }
 
-void Worker::computeSpectrumCpuGrayShort(
-    quint64 numOfRows,
-    quint64 numOfCols,
-    quint64 wordsPerRow
-)
+void Worker::computeSpectrumCpuGrayShort(const CodeGeometry& g)
 {
+    const quint64 numOfRows   = g.numOfRows;
+    const quint64 numOfCols   = g.numOfCols;
+    const quint64 wordsPerRow = g.wordsPerRow;
+    const quint64 chunkSize   = g.chunkSize;
+
     using namespace std::chrono;
 
     // Число масок для обработки
@@ -817,6 +929,8 @@ void Worker::computeSpectrumCpuGrayShort(
         {
             return (i ^ (i >> 1));
         };
+
+    progress.begin(totalOps, runState.doneOps, runState.elapsedSec);
 
     for (quint64 offset = runState.chunkOffset; offset < totalOps; offset += chunkSize)
     {
@@ -874,7 +988,7 @@ void Worker::computeSpectrumCpuGrayShort(
                     tmp &= (tmp - 1);
                     // Получаем строку матрицы
                     quint64* rowData =
-                        h_matrix + pos * wordsPerRow;
+                        h_matrix.get() + pos * wordsPerRow;
                     // XOR-им с поулченной строкой
                     for (quint64 b = 0; b < wordsPerRow; ++b)
                         localCodeword[b] ^= rowData[b];
@@ -915,7 +1029,7 @@ void Worker::computeSpectrumCpuGrayShort(
 
                     // Получаем строку матрицы 
                     quint64* rowData =
-                        h_matrix + pos * wordsPerRow;
+                        h_matrix.get() + pos * wordsPerRow;
                     // XOR-им
                     for (quint64 b = 0; b < wordsPerRow; ++b)
                         localCodeword[b] ^= rowData[b];
@@ -943,65 +1057,23 @@ void Worker::computeSpectrumCpuGrayShort(
         } // ===== Конец omp parallel =====
         
 
-        // После расчета чанка создаём чекпоинт
+        // chunkEnd — абсолютный индекс маски, поэтому присваивание, а не +=
+        progress.setDoneOps(chunkEnd);
         runState.doneOps = chunkEnd;
 
-        // И обновляем интерфейс
-        auto now = steady_clock::now();
+        const ProgressTracker::Due due = progress.due();
 
-        if (now - lastTimeSpectrum >= updateSpectrumSec ) {
-            lastTimeSpectrum = now;
+        if (due.spectrum) {
+            progress.markSpectrum();
             updateSpectrum(numOfCols);
-
         }
-
-        if ( now - lastTimeBar >= updateProgressBarSec ) {
-            lastTimeBar = now;
-
-            int percent = int(100.0 * double(runState.doneOps) / double(totalOps));
-
-            emit updateInfoPBR(percent);
-        }
-
-        if (now - lastEstimateTime >= seconds(1)) {
-            lastEstimateTime = now;
-
-            runState.elapsedSec =
-                duration_cast<seconds>(
-                    now - startTime).count();
-
-            double speed =
-                runState.doneOps > 0
-                ? double(runState.doneOps) / runState.elapsedSec
-                : 1.0;
-
-            quint64 remaining =
-                totalOps > runState.doneOps
-                ? totalOps - runState.doneOps
-                : 0;
-
-            double estSec =
-                speed > 0
-                ? remaining / speed
-                : 0.0;
-
-            int minutesLeft =
-                int(std::ceil(estSec / 60.0));
-
-            emit updateRemainingMinutes( (int)runState.elapsedSec, minutesLeft, speed );
-        } // if (now - lastEstimateTime >= seconds(1))
-        if ( now - lastCheckpointTime >= saveSpectrumSec )
-        {
-            lastCheckpointTime = now;
-
-            // 1. Обновляем runState
-            runState.chunkOffset = runState.doneOps;
-
-            // 2. Копируем спектр
-            for (quint64 i = 0; i <= numOfCols; i++)
-                runState.spectrum[i] = h_spectrum[i];
-            // 4. Сохраняем
-            makeCheckpoint(numOfCols);
+        if (due.bar)
+            reportProgressBar();
+        if (due.estimate)
+            reportEstimate();
+        if (due.checkpoint) {
+            // Код Грея нумерует маски сплошь, слоёв по числу единиц нет.
+            saveCpuCheckpoint(numOfCols, 0, runState.doneOps);
         }
         if (cancelled.load())
             break;
@@ -1009,34 +1081,45 @@ void Worker::computeSpectrumCpuGrayShort(
     } // for (quint64 offset = startChunkInd; offset < totalOps; offset += chunkSize)
 }
 
-void Worker::computeSpectrumCpuNoGrayShort(
-    quint64 numOfRows,
-    quint64 numOfCols,
-    quint64 wordsPerRow,
-    quint64 maxComb
-)
+void Worker::computeSpectrumCpuNoGrayShort(const CodeGeometry& g)
 {
+    const quint64 numOfRows   = g.numOfRows;
+    const quint64 numOfCols   = g.numOfCols;
+    const quint64 wordsPerRow = g.wordsPerRow;
+    const quint64 chunkSize   = g.chunkSize;
+    const quint64 maxComb     = g.maxRows;
+
     using namespace std::chrono;
 
-    quint64 totalOps = sumCombinations(numOfRows, maxComb);
+    quint64 totalOps = totalLayerOps(g);
 
     // Если продолжаем после чекпоинта
     quint64 startR = runState.rOffset;
     quint64 startOffsetForStartR = runState.chunkOffset;
+
+    progress.begin(totalOps, runState.doneOps, runState.elapsedSec);
 
     for (quint64 r = startR; r <= maxComb; ++r)
     {
         if (cancelled.load())
             break;
 
-        quint64 combCount = h_binomTable[numOfRows][r];
+        // C(k, r) комбинаций на каждое из множеств, подряд
+        const quint64 perSet    = binomTable(numOfRows, r);
+        const quint64 combCount = perSet * g.setCount;
         if (combCount == 0)
             continue;
 
         quint64 startOffset = (r == startR) ? startOffsetForStartR : 0;
 
-        for (quint64 offset = startOffset; offset < combCount; offset += chunkSize)
+        // Чанк не пересекает границу множества, поэтому шаг цикла — его
+        // фактический размер.
+        for (quint64 offset = startOffset, next = 0; offset < combCount; offset = next)
         {
+            const LayerSlice slice = sliceLayer(g, perSet, offset, chunkSize);
+            const quint64 thisChunkSize = slice.size;
+            next = offset + thisChunkSize;
+
             if (cancelled.load())
                 break;
 
@@ -1046,45 +1129,85 @@ void Worker::computeSpectrumCpuNoGrayShort(
                     break;
             }
 
-            quint64 thisChunkSize = qMin(chunkSize, combCount - offset);
-
             // Локальный результат чанка
             QVector<quint64> chunkSpectrum(numOfCols + 1, 0);
 
+            // Каждый поток берёт непрерывный кусок диапазона рангов и идёт по
+            // нему приёмом Госпера — так же, как ядро коротких кодов.
+            //
+            // Раньше на каждую комбинацию звался unrankCombination (разбор
+            // ранга по таблице биномов, O(k)) и кодовое слово собиралось с
+            // нуля перебором всех numOfRows строк. Теперь ранг разбирается
+            // один раз на поток, а дальше маска шагает за несколько операций,
+            // и XOR-ятся только изменившиеся строки.
+            //
+            // Нумерация комбинаций лексикографическая — её задаёт смысл
+            // chunkOffset, и менять её нельзя. Госпер идёт по числовому
+            // порядку, но развёрнутая по битам маска (позиция p -> k-1-p)
+            // превращает одно в другое. Поэтому берётся последний ранг куска,
+            // и обход идёт в обратную сторону: для гистограммы порядок
+            // безразличен.
             #pragma omp parallel
             {
-                QVector<quint64> localSpectrum(numOfCols + 1, 0);
-                QVector<quint64> localCodeword(wordsPerRow, 0);
+                const int tid      = omp_get_thread_num();
+                const int nthreads = omp_get_num_threads();
 
-                #pragma omp for schedule(static)
-                for (qint64 idx = (qint64)offset; idx < (qint64)(offset + thisChunkSize); ++idx)
-                {
-                    if (cancelled.load())
-                        continue;
+                const quint64 perThread = (thisChunkSize + nthreads - 1) / nthreads;
+                const quint64 startIdx  = slice.offset + quint64(tid) * perThread;
+                const quint64 endIdx    = std::min(startIdx + perThread, slice.offset + thisChunkSize);
 
-                    quint64 mask = unrankCombination(numOfRows, r, (quint64)idx, h_binomTable);
-                    std::fill(localCodeword.begin(), localCodeword.end(), 0);
+                // Отмена проверяется только между чанками. Прерывать перебор
+                // внутри нельзя: частичный чанк всё равно прибавится к спектру,
+                // и если на него выпадет чекпоинт, сохранится испорченное
+                // состояние. Чанк короткий, задержка отмены незаметна.
+                if (startIdx < endIdx) {
+                    QVector<quint64> localSpectrum(numOfCols + 1, 0);
+                    QVector<quint64> localCodeword(wordsPerRow, 0);
 
-                    for (quint64 i = 0; i < numOfRows; ++i) {
-                        if (mask & (1ULL << i)) {
-                            quint64* rowData = h_matrix + i * wordsPerRow;
+                    quint64 revMask = reverseLowBits(
+                        unrankCombination(unsigned(numOfRows), unsigned(r),
+                                          endIdx - 1, binomTable), numOfRows);
+
+                    // Бит p развёрнутой маски отвечает строке numOfRows-1-p.
+                    auto xorRows = [&](quint64 bits) {
+                        while (bits) {
+                            unsigned long p;
+                            _BitScanForward64(&p, bits);
+                            bits &= (bits - 1);
+                            const quint64* rowData =
+                                h_matrix.get() + (slice.slot.rowBase + numOfRows - 1 - p) * wordsPerRow;
                             for (quint64 b = 0; b < wordsPerRow; ++b)
                                 localCodeword[b] ^= rowData[b];
                         }
+                    };
+                    auto accumulate = [&]() {
+                        quint64 weight = 0;
+                        for (quint64 b = 0; b < wordsPerRow; ++b)
+                            weight += __popcnt64(localCodeword[b]);
+                        if (weight <= numOfCols
+                            && (g.setCount <= 1
+                                || bzKeepHost(localCodeword.data(), g, int(r), slice.slot.setIndex)))
+                            localSpectrum[weight]++;
+                    };
+
+                    xorRows(revMask);
+                    accumulate();
+
+                    // При r = 0 и r = numOfRows комбинация одна, и цикл не
+                    // выполняется — gosperNext на нулевой маске звать нельзя.
+                    const quint64 count = endIdx - startIdx;
+                    for (quint64 i = 1; i < count; ++i) {
+                        const quint64 nextRev = gosperNext(revMask);
+                        xorRows(revMask ^ nextRev);
+                        accumulate();
+                        revMask = nextRev;
                     }
 
-                    quint64 weight = 0;
-                    for (quint64 b = 0; b < wordsPerRow; ++b)
-                        weight += __popcnt64(localCodeword[b]);
-
-                    if (weight <= numOfCols)
-                        localSpectrum[weight]++;
-                }
-
-                #pragma omp critical
-                {
-                    for (quint64 w = 0; w <= numOfCols; ++w)
-                        chunkSpectrum[w] += localSpectrum[w];
+                    #pragma omp critical
+                    {
+                        for (quint64 w = 0; w <= numOfCols; ++w)
+                            chunkSpectrum[w] += localSpectrum[w];
+                    }
                 }
             }
 
@@ -1092,66 +1215,898 @@ void Worker::computeSpectrumCpuNoGrayShort(
             for (quint64 w = 0; w <= numOfCols; ++w)
                 h_spectrum[w] += chunkSpectrum[w];
 
-            runState.doneOps += thisChunkSize;
+            progress.addOps(thisChunkSize);
+            runState.doneOps = progress.doneOps();
 
-            auto now = steady_clock::now();
+            const ProgressTracker::Due due = progress.due();
 
-            if (now - lastTimeSpectrum >= updateSpectrumSec ) {
-                lastTimeSpectrum = now;
+            if (due.spectrum) {
+                progress.markSpectrum();
                 updateSpectrum(numOfCols);
             }
-
-            if (now - lastTimeBar >= updateProgressBarSec ) {
-                lastTimeBar = now;
-                int percent = int(100.0 * double(runState.doneOps) / double(totalOps));
-                emit updateInfoPBR(percent);
-            }
-
-            if (now - lastEstimateTime >= seconds(1)) {
-                lastEstimateTime = now;
-
-                runState.elapsedSec = duration_cast<seconds>(now - startTime).count();
-                double speed = (runState.doneOps != 0 && runState.elapsedSec > 0)
-                    ? double(runState.doneOps) / runState.elapsedSec
-                    : 1.0;
-
-                quint64 remainingOps = totalOps > runState.doneOps ? totalOps - runState.doneOps : 0;
-                double estSec = speed > 0 ? remainingOps / speed : 0.0;
-
-                int minutesLeft = int(std::ceil(estSec / 60.0));
-                emit updateRemainingMinutes((int)runState.elapsedSec, minutesLeft, speed);
-            }
-
-            // Чекпоинт после завершения чанка
-            if ( now - lastCheckpointTime >= saveSpectrumSec ) {
-                lastCheckpointTime = now;
-
-                runState.rOffset = r;
-                runState.chunkOffset = offset + thisChunkSize; // следующий необработанный
-
-                for (quint64 i = 0; i <= numOfCols; ++i)
-                    runState.spectrum[i] = h_spectrum[i];
-
-                makeCheckpoint(numOfCols);
-            }
+            if (due.bar)
+                reportProgressBar();
+            if (due.estimate)
+                reportEstimate();
+            // chunkOffset указывает на первый ещё не обработанный ранг
+            if (due.checkpoint)
+                saveCpuCheckpoint(numOfCols, r, offset + thisChunkSize);
         }
     }
     updateSpectrum(numOfCols);
 }
+// Случайный поиск по информационным множествам — см. leonsearch.h.
+//
+// Попытки независимы и нумерованы; номер задаёт порядок столбцов, поэтому
+// попытка с одним номером даёт одно и то же множество на CPU и на GPU, и оба
+// пути обязаны находить одни и те же слова. Найденное складывается в таблицу
+// на хосте: там считаются поимки, по ним — оценка ненайденного.
+//
+// CPU: пачка попыток раздаётся потокам OpenMP, слова кладутся в таблицу под
+// замком. Замок не мешает: слов нужного веса — доли процента от перебранных.
+//
+// GPU: блок нитей — попытка (leonkernel.cu), слова выкладываются в буфер, а
+// хост забирает их и вставляет в таблицу. Буферов два: пока хост разбирает
+// одну пачку, видеокарта считает следующую.
+//
+// Чекпоинтов по ходу нет: пришлось бы писать на диск всю таблицу, а поиск по
+// самой своей природе короткий — его предел ставит память под слова.
+void Worker::computeSpectrumLeon(const CodeGeometry& g)
+{
+    const int rows  = int(g.numOfRows);
+    const int cols  = int(g.numOfCols);
+    const int words = int(g.wordsPerRow);
+    const int depth = int(g.maxRows);
+    const int maxWeight = settings.leonWeight;
+
+    // Память под слова — из настроек; по умолчанию половина физической: таблица
+    // растёт удвоением, и в момент роста ей нужно место под старую и новую
+    // копии сразу.
+    const quint64 kTableLimitBytes = settings.leonMemoryMb > 0
+        ? quint64(settings.leonMemoryMb) << 20
+        : std::max<quint64>(256ULL << 20, physicalMemoryBytes() / 2);
+
+    // Ранг проверяется один раз здесь: ядро молча даёт пустую попытку, а
+    // CPU-путь узнал бы об этом только внутри параллельной области.
+    {
+        std::vector<int> order;
+        Leon::shuffledColumns(cols, 0, order);
+        InfoSets::InfoSet set;
+        if (!InfoSets::systematize(h_matrix.get(), rows, cols, words, order, nullptr, set))
+            throw std::invalid_argument(
+                "строки матрицы зависимы: стохастическому поиску нужна матрица полного ранга");
+    }
+
+    // Частей — по числу потоков: каждая наполняется своим.
+    Leon::ShardedWordTable table(words, maxWeight, std::max(1, omp_get_max_threads()));
+
+    // Прогресс считается в словах, как везде: скорость тогда сравнима.
+    // Число попыток растёт по ходу: чем больше слов какого-то веса нашлось,
+    // тем больше попыток нужно, чтобы ни одно из них не оказалось пропущено
+    // с заданной вероятностью. План даёт нижнюю границу — на одно слово.
+    quint64 target = g.leonTrials;
+    auto opsFor = [&](quint64 trials) {
+        const double ops = double(trials) * g.leonWordsPerTrial;
+        return ops >= 1.8e19 ? std::numeric_limits<quint64>::max() : quint64(ops);
+    };
+    progress.begin(opsFor(target), 0, 0);
+
+    quint64 launched  = 0;   // попыток начато
+    quint64 collected = 0;   // попыток, чьи слова уже в таблице
+
+    auto retarget = [&]() {
+        const quint64 needed = Leon::trialsForAll(cols, rows, maxWeight, depth, g.leonWindow,
+                                                  settings.leonMissProbability(),
+                                                  table.countByWeight());
+        if (needed > target) {
+            target = needed;
+            progress.setTotalOps(opsFor(target));
+        }
+    };
+
+    // Оценка Чао: поимки слов считаются либо на хосте (CPU-путь и слова, не
+    // попавшие в таблицу видеокарты), либо на видеокарте; f1/f2 складываются.
+    std::function<void(std::vector<quint64>&, std::vector<quint64>&)> deviceHitCounts;
+    auto chaoUnseen = [&]() {
+        std::vector<quint64> f1, f2;
+        table.hitCounts(f1, f2);
+        if (deviceHitCounts) {
+            std::vector<quint64> d1, d2;
+            deviceHitCounts(d1, d2);
+            for (size_t w = 0; w < f1.size() && w < d1.size(); ++w) {
+                f1[w] += d1[w];
+                f2[w] += d2[w];
+            }
+        }
+        return Leon::chaoUnseen(f1, f2);
+    };
+
+    auto publish = [&](bool force) {
+        const std::vector<quint64> found = table.countByWeight();
+        h_spectrum.fillZero();
+        h_spectrum[0] = 1;
+        for (size_t w = 1; w < found.size() && w < g.spectrumSize; ++w)
+            h_spectrum[w] = found[w];
+
+        const ProgressTracker::Due due = progress.due();
+        if (due.estimate)
+            reportEstimate();
+        if (due.bar)
+            reportProgressBar();
+        if (due.spectrum || force) {
+            progress.markSpectrum();
+            updateSpectrum(cols);
+
+            // Вероятность пропустить хотя бы одно слово: по модели, для
+            // каждого веса — найденные слова умножить на шанс пропуска
+            // одного слова, поделённый на шанс поимки. Сумма по весам.
+            double missTotal = 0.0;
+            SpectrumFloat unseen(cols + 1, 0.0f);
+            const std::vector<double> chao = chaoUnseen();
+            for (int w = 1; w <= maxWeight && w <= cols; ++w) {
+                const double p = Leon::catchProbabilityFor(cols, rows, w, depth, g.leonWindow);
+                const double q = std::exp(double(collected) * std::log1p(-p));   // (1-p)^collected
+                if (found[size_t(w)] > 0)
+                    missTotal += double(found[size_t(w)]) * q / std::max(1.0 - q, 1e-300);
+                unseen[w] = float(chao[size_t(w)]);
+            }
+            emit searchEstimate(maxWeight, collected, target,
+                                std::min(1.0, missTotal), unseen);
+        }
+    };
+
+    auto checkMemory = [&]() {
+        if (table.bytes() > kTableLimitBytes) {
+            publish(true);
+            throw std::runtime_error(QStringLiteral(
+                "слишком много слов до заданного веса: таблица (%1 слов) не помещается в "
+                "отведённые %2 МБ — уменьшите вес или поднимите память в настройках поиска")
+                .arg(table.size()).arg(kTableLimitBytes >> 20).toStdString());
+        }
+    };
+
+    // ------------------------------------------------------------- CPU
+    if (!g.useGpu) {
+        // Пачка попыток на один проход: достаточно мелкая, чтобы отмена и
+        // пауза отзывались быстро, и достаточно крупная, чтобы потоки не
+        // простаивали.
+        const quint64 batch = quint64(std::max(1, omp_get_max_threads())) * 16;
+
+        while (launched < target) {
+            if (!waitWhilePaused())
+                break;
+            const quint64 count = std::min(batch, target - launched);
+
+            #pragma omp parallel for schedule(dynamic)
+            for (long long t = 0; t < (long long)count; ++t) {
+                auto visit = [&](const quint64* word, int weight) { table.add(word, weight); };
+                if (g.leonWindow > 0)
+                    Leon::trialStern(h_matrix.get(), rows, cols, words, depth, g.leonWindow, maxWeight,
+                                     launched + quint64(t), visit);
+                else
+                    Leon::trial(h_matrix.get(), rows, cols, words, depth, maxWeight,
+                                launched + quint64(t), visit);
+            }
+
+            launched  += count;
+            collected  = launched;
+            activeTrials = collected;
+            progress.addOps(quint64(double(count) * g.leonWordsPerTrial));
+            runState.doneOps = progress.doneOps();
+
+            retarget();
+            checkMemory();
+            publish(false);
+            if (cancelled.load())
+                break;
+        }
+        publish(true);
+        m_foundWords.clear();
+        m_foundWeights.clear();
+        if (keepFoundWords && !cancelled.load())
+            table.exportWords(m_foundWords, m_foundWeights);
+        return;
+    }
+
+    // ------------------------------------------------------------- GPU
+    // Блок на попытку (LEON_THREADS нитей); сетка из настроек тут ни при чём.
+    constexpr int     kThreads     = LEON_THREADS;
+    constexpr quint64 kBatchMax    = 8192;         // попыток на запуск, потолок
+    constexpr quint64 kCapacityMax = 8ULL << 20;   // слов в буфере, потолок
+    quint64           capacity     = 1ULL << 20;
+
+    // Матрица, не влезшая в разделяемую память, и хеш-таблица окна у каждого
+    // блока свои — в рабочем буфере. Буфер на слот не больше 128 МБ (с окном
+    // — четверти свободной памяти, до гигабайта: таблица блока — мегабайты),
+    // им и ограничена пачка.
+    // Список пар окна — с запасом вчетверо против профиля: пар в попытке
+    // столько же по порядку, что и в попытке 0, но не поровну.
+    const unsigned pairCapacity = g.leonWindow > 0
+        ? unsigned(std::min(64.0e6, std::max(4096.0, 4.0 * g.leonPairs))) : 0u;
+    const size_t scratchWords = leonScratchWords(rows, cols, words, depth, g.leonWindow, pairCapacity);
+    quint64      blocksMax    = kBatchMax;
+    if (scratchWords > 0) {
+        quint64 budget = 128ULL << 20;
+        if (g.leonWindow > 0) {
+            size_t freeBytes = 0, totalBytes = 0;
+            CUDA_CALL(cudaMemGetInfo(&freeBytes, &totalBytes));
+            budget = std::min<quint64>(1024ULL << 20, quint64(freeBytes) / 4);
+        }
+        blocksMax = std::max<quint64>(1, std::min<quint64>(kBatchMax,
+                        budget / (scratchWords * sizeof(quint64))));
+    }
+
+    DeviceBuffer<quint64> d_mat;
+    d_mat.allocate(size_t(rows) * words);
+    CUDA_CALL(cudaMemcpy(d_mat.get(), h_matrix.get(), size_t(rows) * words * sizeof(quint64),
+                         cudaMemcpyHostToDevice));
+
+    struct Slot
+    {
+        DeviceBuffer<quint64>  d_out;
+        DeviceBuffer<quint64>  d_scratch;
+        DeviceBuffer<unsigned> d_count;
+        HostBuffer<quint64>    h_out;
+        HostBuffer<unsigned>   h_count;
+        CudaStream             stream;
+        quint64                first   = 0;
+        quint64                count   = 0;
+        bool                   pending = false;
+    };
+    Slot slot[2];
+    auto allocateOut = [&](Slot& s) {
+        s.d_out.allocate(size_t(capacity) * words);
+        s.h_out.allocate(size_t(capacity) * words, HostBuffer<quint64>::Kind::Pinned);
+    };
+    for (Slot& s : slot) {
+        allocateOut(s);
+        if (scratchWords > 0)
+            s.d_scratch.allocate(size_t(blocksMax) * scratchWords);
+        s.d_count.allocate(1);
+        s.h_count.allocate(1, HostBuffer<unsigned>::Kind::Pinned);
+        s.stream.create();
+    }
+
+    // Таблица виденных слов на видеокарте. Ячейка — отпечаток (8 байт),
+    // поимки (4) и вес (2). Начинается с миллиона ячеек, при заполнении 0,6
+    // удваивается; не хватило памяти — остаётся как есть, а слова без ячейки
+    // выкладываются при каждой поимке (см. leonkernel.cuh).
+    struct Seen
+    {
+        DeviceBuffer<uint64_t> fp;
+        DeviceBuffer<unsigned> hits;
+        DeviceBuffer<uint16_t> weight;
+        DeviceBuffer<unsigned> count;
+        HostBuffer<unsigned>   h_count;
+        quint64                capacity = 0;
+        bool                   canGrow  = true;
+        quint64                inserted = 0;
+
+        bool allocate(quint64 cells)
+        {
+            try {
+                DeviceBuffer<uint64_t> f; f.allocate(size_t(cells));
+                DeviceBuffer<unsigned> h; h.allocate(size_t(cells));
+                DeviceBuffer<uint16_t> w; w.allocate(size_t(cells));
+                f.fillZero(); h.fillZero(); w.fillZero();
+                fp = std::move(f); hits = std::move(h); weight = std::move(w);
+            } catch (const std::exception&) {
+                cudaGetLastError();   // снять cudaErrorMemoryAllocation
+                return false;
+            }
+            capacity = cells;
+            return true;
+        }
+    } seen;
+    if (seen.allocate(1ULL << 20)) {
+        seen.count.allocate(1);
+        seen.count.fillZero();
+        seen.h_count.allocate(1, HostBuffer<unsigned>::Kind::Pinned);
+    }
+
+    // Удвоение таблицы, когда занято больше 0,6. Ядра обеих пачек на время
+    // перекладки должны стоять — оба потока дожидаются; удвоений за прогон
+    // не больше десятка, простой не в счёт.
+    auto growSeen = [&]() {
+        if (!seen.canGrow || seen.capacity == 0)
+            return;
+        if (seen.inserted * 10 <= seen.capacity * 6)
+            return;
+        for (Slot& s : slot)
+            CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
+        // Одна плотная пачка может забить таблицу с запасом — удваивать до
+        // тех пор, пока занято не меньше 0,6, а не по разу.
+        while (seen.inserted * 10 > seen.capacity * 6) {
+            Seen bigger;
+            if (!bigger.allocate(seen.capacity * 2)) {
+                seen.canGrow = false;
+                return;
+            }
+            launchSeenRehash(seen.fp.get(), seen.hits.get(), seen.weight.get(), seen.capacity,
+                             bigger.fp.get(), bigger.hits.get(), bigger.weight.get(), bigger.capacity - 1,
+                             slot[0].stream.get());
+            CUDA_CALL(cudaStreamSynchronize(slot[0].stream.get()));
+            seen.fp = std::move(bigger.fp);
+            seen.hits = std::move(bigger.hits);
+            seen.weight = std::move(bigger.weight);
+            seen.capacity = bigger.capacity;
+        }
+    };
+
+    // f1/f2 по весам из таблицы видеокарты: счётчики и веса скачиваются
+    // целиком (6 байт на ячейку), поэтому не чаще раза в две секунды —
+    // между скачиваниями отдаётся прошлый ответ.
+    std::vector<quint64> seenF1, seenF2;
+    auto seenStamp = std::chrono::steady_clock::now() - std::chrono::hours(1);
+    if (seen.capacity > 0) {
+        deviceHitCounts = [&](std::vector<quint64>& f1, std::vector<quint64>& f2) {
+            const auto now = std::chrono::steady_clock::now();
+            if (!seenF1.empty() && now - seenStamp < std::chrono::seconds(2)) {
+                f1 = seenF1; f2 = seenF2;
+                return;
+            }
+            f1.assign(size_t(maxWeight) + 1, 0ULL);
+            f2.assign(size_t(maxWeight) + 1, 0ULL);
+            for (Slot& s : slot)
+                CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
+            std::vector<unsigned> hits(size_t(seen.capacity));
+            std::vector<uint16_t> weight(size_t(seen.capacity));
+            CUDA_CALL(cudaMemcpy(hits.data(), seen.hits.get(), hits.size() * sizeof(unsigned), cudaMemcpyDeviceToHost));
+            CUDA_CALL(cudaMemcpy(weight.data(), seen.weight.get(), weight.size() * sizeof(uint16_t), cudaMemcpyDeviceToHost));
+            for (size_t i = 0; i < hits.size(); ++i) {
+                if (hits[i] == 1u && weight[i] <= maxWeight) ++f1[weight[i]];
+                else if (hits[i] == 2u && weight[i] <= maxWeight) ++f2[weight[i]];
+            }
+            seenF1 = f1; seenF2 = f2; seenStamp = now;
+        };
+    }
+
+    // Размер пачки подстраивается под плотность находок: у плотного кода
+    // слов нужного веса тысячи на попытку, у редкого — доли. Первая пачка
+    // маленькая — по ней и меряется.
+    quint64 batchTrials  = std::min<quint64>(256, blocksMax);
+    double  hitsPerTrial = 0.0;
+    auto adaptBatch = [&](quint64 found, quint64 count) {
+        if (count == 0)
+            return;
+        hitsPerTrial = std::max(hitsPerTrial, double(found) / double(count));
+        const double room = double(capacity) / 4.0 / std::max(1.0, hitsPerTrial);
+        batchTrials = quint64(std::min(double(blocksMax), std::max(1.0, room)));
+    };
+
+    // Пачки, которые пришлось отложить: переполнившаяся делится пополам, и
+    // вторая половина ждёт своей очереди здесь.
+    std::vector<std::pair<quint64, quint64>> deferred;
+
+    auto launchBatch = [&](Slot& s, quint64 first, quint64 count) {
+        CUDA_CALL(cudaMemsetAsync(s.d_count.get(), 0, sizeof(unsigned), s.stream.get()));
+        LeonLaunch L;
+        L.matrix       = d_mat.get();
+        L.rows         = rows;
+        L.cols         = cols;
+        L.wordsPerRow  = words;
+        L.rowsPerTrial = depth;
+        L.maxWeight    = maxWeight;
+        L.firstTrial   = first;
+        L.trials       = int(count);
+        L.outWords     = s.d_out.get();
+        L.outCount     = s.d_count.get();
+        L.capacity     = unsigned(capacity);
+        L.scratch      = s.d_scratch.get();
+        L.window       = g.leonWindow;
+        L.pairCapacity = pairCapacity;
+        if (seen.capacity > 0) {
+            L.seenFp     = seen.fp.get();
+            L.seenHits   = seen.hits.get();
+            L.seenWeight = seen.weight.get();
+            L.seenCount  = seen.count.get();
+            L.seenMask   = seen.capacity - 1;
+        }
+        launchLeonTrials(L, kThreads, s.stream.get());
+        // Счётчик здесь не копируется. Копии всех потоков стоят в одной
+        // очереди движка копирования, и четыре байта, поставленные за ядром
+        // этой пачки, задержали бы за собой мегабайты соседней: та ждала бы
+        // конца чужого ядра, а видеокарта — хоста (профиль: занята 37 %).
+        s.first = first; s.count = count; s.pending = true;
+    };
+
+    // Забирает слова пачки в таблицу. false — буфер оказался мал: слова
+    // сверх него потеряны, пачку надо повторить.
+    auto collectBatch = [&](Slot& s) -> bool {
+        // Ядро пачки закончилось — только теперь копии, и они идут сразу.
+        CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
+        CUDA_CALL(cudaMemcpyAsync(s.h_count.get(), s.d_count.get(), sizeof(unsigned),
+                                  cudaMemcpyDeviceToHost, s.stream.get()));
+        if (seen.capacity > 0)
+            CUDA_CALL(cudaMemcpyAsync(seen.h_count.get(), seen.count.get(), sizeof(unsigned),
+                                      cudaMemcpyDeviceToHost, s.stream.get()));
+        CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
+        const unsigned found = s.h_count[0];
+        if (seen.capacity > 0)
+            seen.inserted = seen.h_count[0];
+        // Переполнение. Без таблицы пачка отбрасывается целиком и идёт
+        // заново. С таблицей так нельзя: слова, что поместились, уже
+        // записаны в таблицу и при повторе пачки хосту не выложатся —
+        // поэтому поместившаяся часть (она целая: место занимается до
+        // записи) забирается сейчас, а повтор доложит остальное.
+        const bool     overflow = quint64(found) > capacity;
+        const unsigned usable   = overflow ? (seen.capacity > 0 ? unsigned(capacity) : 0u) : found;
+        if (usable > 0) {
+            // В потоке пачки, не в нулевом: синхронный cudaMemcpy ждал бы
+            // и ядро соседней пачки.
+            CUDA_CALL(cudaMemcpyAsync(s.h_out.get(), s.d_out.get(),
+                                      size_t(usable) * words * sizeof(quint64),
+                                      cudaMemcpyDeviceToHost, s.stream.get()));
+            CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
+            // С таблицей на видеокарте поимки посчитаны там; здесь слово
+            // только хранится.
+            table.addBatch(s.h_out.get(), usable, seen.capacity == 0);
+        }
+        adaptBatch(found, s.count);
+        if (overflow)
+            return false;
+        s.pending  = false;
+        collected += s.count;
+        return true;
+    };
+
+    // Переполнение. Пока буфер можно увеличить — увеличивается (оба сразу,
+    // они одного размера); упёрлись в потолок — пачка делится пополам, и
+    // вторая половина откладывается. Чужую пачку сначала забрать: иначе её
+    // слова пропадут вместе со старым буфером; не влезла и она — повторится
+    // тем же порядком.
+    auto shrinkOrGrow = [&](Slot& s, quint64 need) {
+        // Счётчик ядра считает все находки, и за пределами буфера тоже, —
+        // плотность по нему честная.
+        adaptBatch(need, s.count);
+        if (need <= kCapacityMax && capacity < kCapacityMax) {
+            capacity = std::min(kCapacityMax, std::max(capacity * 2, need + need / 4 + 1024));
+            return;
+        }
+        if (s.count <= 1) {
+            // С таблицей повтор выложит только то, чего в ней ещё нет, —
+            // с каждым разом меньше; без таблицы повтор даст то же самое.
+            if (seen.capacity > 0 && seen.canGrow)
+                return;
+            throw std::runtime_error(
+                "одна попытка даёт больше восьми миллионов слов до заданного веса: уменьшите вес");
+        }
+        const quint64 half = s.count / 2;
+        deferred.push_back({ s.first + half, s.count - half });
+        s.count = half;
+    };
+    auto collectOrRetry = [&](Slot& s) {
+        while (!collectBatch(s)) {
+            const quint64 before = capacity;
+            Slot& other = (&s == &slot[0]) ? slot[1] : slot[0];
+            bool rerunOther = false;
+            if (other.pending && !collectBatch(other)) {
+                rerunOther = true;
+                shrinkOrGrow(other, other.h_count[0]);
+            }
+            shrinkOrGrow(s, s.h_count[0]);
+            if (capacity != before) {
+                allocateOut(slot[0]);
+                allocateOut(slot[1]);
+            }
+            if (rerunOther)
+                launchBatch(other, other.first, other.count);
+            launchBatch(s, s.first, s.count);
+        }
+    };
+
+    // Следующий кусок работы: сначала отложенное, потом новые попытки.
+    auto takeRange = [&](quint64& first, quint64& count) -> bool {
+        if (!deferred.empty()) {
+            const std::pair<quint64, quint64> range = deferred.back();
+            deferred.pop_back();
+            first = range.first;
+            count = std::min(range.second, batchTrials);
+            if (range.second > count)
+                deferred.push_back({ first + count, range.second - count });
+            return true;
+        }
+        if (launched >= target)
+            return false;
+        first = launched;
+        count = std::min(batchTrials, target - launched);
+        launched += count;
+        progress.addOps(quint64(double(count) * g.leonWordsPerTrial));
+        runState.doneOps = progress.doneOps();
+        return true;
+    };
+
+    int cur = 0;
+    for (;;) {
+        quint64 first = 0, count = 0;
+        if (!takeRange(first, count)) {
+            // Всё запущено — дождаться хвоста и решить, не нужно ли ещё.
+            for (Slot& s : slot)
+                if (s.pending)
+                    collectOrRetry(s);
+            activeTrials = collected;
+            retarget();
+            checkMemory();
+            if (deferred.empty() && launched >= target)
+                break;
+            continue;
+        }
+        if (!waitWhilePaused())
+            break;
+
+        Slot& s = slot[cur];
+        if (s.pending)
+            collectOrRetry(s);
+        growSeen();
+        launchBatch(s, first, count);
+        activeTrials = collected;
+
+        retarget();
+        checkMemory();
+        publish(false);
+        cur ^= 1;
+        if (cancelled.load())
+            break;
+    }
+
+    // Буферы освобождаются деструкторами; ядра к этому моменту должны
+    // закончиться — иначе они писали бы в уже отданную память.
+    for (Slot& s : slot)
+        CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
+    activeTrials = collected;
+    publish(true);
+    m_foundWords.clear();
+    m_foundWeights.clear();
+    if (keepFoundWords && !cancelled.load())
+        table.exportWords(m_foundWords, m_foundWeights);
+}
+
+// Компонента произведения: точный спектр до weightUpTo и — если размерность
+// мала — все слова до этого веса. Маленькая компонента перебирается целиком
+// (код Грея), большая — Брауэром–Циммерманом во вложенном Worker: он
+// сертифицирует спектр до нужного веса и отдаёт итог через finalSpectrum().
+Worker::ComponentPlan Worker::planComponent(const QStringList& rows, int weightUpTo, bool wantWords) const
+{
+    const int k     = rows.size();
+    const int n     = rows.first().length();
+    const int words = (n + 63) / 64;
+    const int limit = std::min(std::max(weightUpTo, 1), n);
+    ComponentPlan best{ ComputationSettings::GrayCode, std::numeric_limits<double>::infinity(), QString() };
+    auto consider = [&](ComputationSettings::Algorithm a, double cost, const QString& what) {
+        if (cost < best.words) best = ComponentPlan{ a, cost, what };
+    };
+
+    // Спискам слов (ранги выше первого) полный перебор не помощник: слова
+    // собирает только стохастический поиск; маленькую компоненту перебирает
+    // Product::bruteForce сам, до planComponent дело не доходит.
+    if (wantWords) {
+        const Leon::Plan p = Leon::plan(n, k, limit, settings.leonMissProbability(),
+                                       settings.compDev == ComputationSettings::ComputeDevice::GPU);
+        return ComponentPlan{ ComputationSettings::RandomInfoSets, double(p.trials) * p.costPerTrial,
+                              tr("стохастический поиск до веса %1, в-ть пропуска 10^-%2")
+                                  .arg(limit).arg(settings.leonMissExponent) };
+    }
+
+    // Полный перебор: 2^k слов по k строкам или 2^(n−k) по проверочной
+    // матрице. Даёт весь спектр, поэтому при равной цене он предпочтительнее.
+    if (k <= 63)
+        consider(ComputationSettings::GrayCode, std::ldexp(1.0, k), tr("полный перебор, 2^%1 слов").arg(k));
+    if (n - k <= 63)
+        consider(ComputationSettings::DualCode, std::ldexp(1.0, n - k), tr("дуальный перебор, 2^%1 слов").arg(n - k));
+
+    // Брауэр–Циммерман до предела: множества ищутся здесь же (это дёшево),
+    // цена — множества × комбинации до нужной глубины.
+    if (weightUpTo > 0) {
+        int packedWords = 0;
+        const std::vector<quint64> packed = InfoSets::packRows(rows, packedWords);
+        const int fit     = std::max(1, Constants::MAX_CONST_WORDS / std::max(1, k * packedWords));
+        const int maxSets = std::min(Constants::MAX_INFO_SETS, fit);
+        const std::vector<InfoSets::InfoSet> sets = InfoSets::find(packed.data(), k, n, packedWords, maxSets);
+        if (!sets.empty()) {
+            std::vector<int> overlaps;
+            for (const InfoSets::InfoSet& set : sets) overlaps.push_back(set.overlap);
+            const int m = InfoSets::setsForWeight(overlaps, limit, k, n);
+            const int r = InfoSets::rowsForWeight(overlaps, limit, k, n);
+            if (r < k) {
+                const double cost = double(m) * Leon::wordsPerTrial(k, r);
+                consider(ComputationSettings::BrouwerZimmermann, cost * 1.001,   // при равенстве — полный
+                         tr("Брауэр–Циммерман до веса %1 (%2 множ., до %3 строк)").arg(limit).arg(m).arg(r));
+            }
+        }
+    }
+    Q_UNUSED(words);
+    return best;
+}
+
+Product::Component Worker::analyzeComponent(const QStringList& rows, int weightUpTo,
+                                            const QString& label, bool wantWords)
+{
+    const int k = rows.size();
+    const int n = rows.first().length();
+
+    if (k <= Product::bruteForceMaxK) {
+        emit productPlan(tr("%1: полный перебор (2^%2 слов)…").arg(label).arg(k), -1);
+        progress.begin(1ULL << k, 0, 0);
+        Product::Component c = Product::bruteForce(rows, std::min(weightUpTo, n),
+                                                   [this]() { return cancelled.load() != 0; },
+                                                   [this](quint64 done, quint64 total) {
+                                                       reportStageProgress(done, total);
+                                                   });
+        if (cancelled.load())
+            throw std::runtime_error("расчёт отменён");
+        emit updateInfoPBR(100);
+        return c;
+    }
+
+    // Алгоритм — по размеру: что дешевле по числу слов перебора. Предел
+    // веса 0 (ищем минимальный вес) полный перебор закрывает целиком, а
+    // Брауэру–Циммерману нужен предел — его подставляет вызывающий.
+    const ComponentPlan plan = planComponent(rows, weightUpTo, wantWords);
+    const bool full = plan.algorithm == ComputationSettings::GrayCode
+                   || plan.algorithm == ComputationSettings::DualCode;
+    emit productPlan(tr("%1: %2…").arg(label, plan.what), -1);
+
+    Worker sub;
+    sub.setAutosaveRoot(autosaveRootDir);
+    sub.setGridTuningThreshold(tuneThresholdSec);
+    sub.setKeepFoundWords(wantWords);
+
+    ComputationSettings cs = settings;
+    cs.matrix        = rows;
+    cs.matrix2.clear();
+    cs.algorithmType = plan.algorithm;
+    cs.enumType      = full ? ComputationSettings::EnumerationType::Full
+                            : ComputationSettings::EnumerationType::Partial;
+    cs.bzWeight      = std::min(std::max(weightUpTo, 1), n);
+    cs.leonWeight    = std::min(std::max(weightUpTo, 1), n);
+    sub.setSettings(cs.toJson());
+    sub.initializeRunState(LoadMode::Reset);
+
+    QString error;
+    connect(&sub, &Worker::updateInfoPBR,           this, &Worker::updateInfoPBR);
+    connect(&sub, &Worker::updateRemainingMinutes,  this, &Worker::updateRemainingMinutes);
+    connect(&sub, &Worker::updateSpectrumPTE,       this, &Worker::updateSpectrumPTE);
+    connect(&sub, &Worker::updateSpectrumPlot,      this, &Worker::updateSpectrumPlot);
+    connect(&sub, &Worker::gridTuned,               this, &Worker::gridTuned);
+    connect(&sub, &Worker::errorOccurred, [&error](const QString& m) { error = m; });
+
+    activeSub.store(&sub);
+    if (cancelled.load())
+        sub.cancel();
+    sub.computeSpectrum();
+    activeSub.store(nullptr);
+
+    if (!error.isEmpty())
+        throw std::runtime_error(error.toStdString());
+    if (cancelled.load())
+        throw std::runtime_error("расчёт отменён");
+
+    std::vector<quint64> spectrum(sub.finalSpectrum().begin(), sub.finalSpectrum().end());
+    if (!wantWords)
+        return Product::fromSpectrum(n, k, spectrum, full ? n : sub.finalExactUpTo());
+
+    // Случайный поиск: слова до предела найдены все — с вероятностью пропуска
+    // из настроек поиска. Спектр компоненты в этих пределах — счёт найденного.
+    Product::Component c = Product::fromSpectrum(n, k, spectrum, std::min(weightUpTo, n));
+    c.probabilistic   = true;
+    c.missProbability = settings.leonMissProbability();
+    c.hasWords        = true;
+    c.wordsUpTo       = std::min(weightUpTo, n);
+    c.words           = sub.foundWords();
+    c.weights         = sub.foundWeights();
+    return c;
+}
+
+// Код произведения C1 ⊗ C2 — см. productcode.h. Три шага: минимальные веса
+// компонент, спектры и списки лёгких слов до нужного предела, свёртка по
+// рангам. Отмена по ходу — исключение, как и ошибка компоненты.
+void Worker::computeSpectrumProduct(const CodeGeometry& g)
+{
+    const QStringList& g1 = settings.matrix;
+    const QStringList& g2 = settings.matrix2;
+    const int n1 = g1.first().length(), k1 = g1.size();
+    const int n2 = g2.first().length(), k2 = g2.size();
+    const int maxRank = std::max(1, std::min({ settings.productRank, 4, k1, k2 }));
+    const quint64 productLength = quint64(n1) * quint64(n2);
+
+    progress.begin(1, 0, 0);
+    productExactUpTo    = -1;
+    productMissExponent = 0;
+    // Ранги выше первого строятся из списков слов; маленькая компонента
+    // отдаёт их с перебором, большой — только случайный поиск, и лишь если
+    // наборы посильны (шаг 2).
+    const bool wantWords = maxRank >= 2;
+
+    // Шаг 1. Минимальные веса. У маленькой компоненты — из полного перебора,
+    // у большой — Брауэром–Циммерманом с удвоением предела, пока слово не
+    // найдётся: сертификат «нет слов легче t» с каждым шагом дорожает, но
+    // суммарно это не больше двух последних шагов.
+    auto minWeight = [&](const QStringList& rows, const QString& label, Product::Component& out) {
+        const int n = rows.first().length();
+        if (rows.size() <= Product::bruteForceMaxK) {
+            out = analyzeComponent(rows, 0, label, wantWords);
+            return;
+        }
+        // Списки слов здесь не собираются: сперва спектр, по нему решится,
+        // посильны ли ранги выше первого (шаг 2).
+        for (int t = 8; ; t = std::min(n, t * 2)) {
+            out = analyzeComponent(rows, t, label, false);
+            if (out.d > 0 || t >= n || out.exactUpTo >= n)
+                return;
+        }
+    };
+    Product::Component c1, c2;
+    minWeight(g1, tr("компонента 1"), c1);
+    minWeight(g2, tr("компонента 2"), c2);
+    if (c1.d == 0 || c2.d == 0)
+        throw std::invalid_argument("у компоненты нет ненулевых слов: матрица нулевая");
+
+    const int d = c1.d * c2.d;
+
+    // Шаг 2. До какого веса считать. Без явного — до границы, за которой
+    // начинаются слова ранга maxRank + 1.
+    quint64 target = settings.productWeight > 0
+                       ? quint64(settings.productWeight)
+                       : Product::rankWeightBound(c1.d, c2.d, maxRank + 1) - 1;
+    target = std::min(target, productLength);
+
+    // Пределы по компонентам: слово произведения веса <= target собрано из
+    // слов веса <= target/d другой компоненты.
+    const int limit1 = int(std::min<quint64>(target / quint64(c2.d), quint64(n1)));
+    const int limit2 = int(std::min<quint64>(target / quint64(c1.d), quint64(n2)));
+    QStringList notes;
+    constexpr quint64 kWorkLimit = 20ULL << 30;
+    // Спектры до предела — без списков слов: их даёт дешёвый путь (полный
+    // перебор, дуальный, БЦ). Списки нужны только рангам выше первого, а
+    // стоят они дорого (миллионы слов в памяти) — сначала по спектру
+    // прикидывается, посильны ли наборы; нет — ранги выше первого
+    // отменяются сразу, и слова не собираются.
+    if (c1.exactUpTo < limit1)
+        c1 = analyzeComponent(g1, limit1, tr("компонента 1"), false);
+    if (c2.exactUpTo < limit2)
+        c2 = analyzeComponent(g2, limit2, tr("компонента 2"), false);
+    bool ranksFeasible = maxRank >= 2;
+    if (ranksFeasible) {
+        const double work1 = Product::estimatedProfileWork(c1, 2, limit1);
+        const double work2 = Product::estimatedProfileWork(c2, 2, limit2);
+        if (work1 > double(kWorkLimit) || work2 > double(kWorkLimit)) {
+            ranksFeasible = false;
+            notes << tr("ранг 2 и выше не считался: наборов слишком много (≈%1 проверок у компоненты %2, предел %3)")
+                         .arg(QString::number(std::max(work1, work2), 'g', 2))
+                         .arg(work1 > work2 ? 1 : 2).arg(QString::number(double(kWorkLimit), 'g', 2));
+        }
+    }
+    if (ranksFeasible) {
+        if (!c1.hasWords || c1.wordsUpTo < limit1)
+            c1 = analyzeComponent(g1, limit1, tr("компонента 1"), true);
+        if (!c2.hasWords || c2.wordsUpTo < limit2)
+            c2 = analyzeComponent(g2, limit2, tr("компонента 2"), true);
+    }
+    if (c1.probabilistic || c2.probabilistic)
+        productMissExponent = settings.leonMissExponent;
+
+    // Точность спектра произведения: по рангам — до границы следующего, по
+    // компонентам — пока хватает их точности.
+    int ranksDone = 1;
+    auto exactFor = [&](int ranks) {
+        quint64 bound = Product::rankWeightBound(c1.d, c2.d, ranks + 1) - 1;
+        bound = std::min(bound, target);
+        bound = std::min(bound, quint64(c1.exactUpTo + 1) * quint64(c2.d) - 1);
+        bound = std::min(bound, quint64(c2.exactUpTo + 1) * quint64(c1.d) - 1);
+        return int(bound);
+    };
+
+    // Шаг 3. Ранги. Каждый шаг — со своим ходом и оценкой времени: у
+    // перебора наборов единица работы — первое слово набора, у свёртки —
+    // профиль первой компоненты.
+    std::vector<quint64> total = Product::rankOne(c1, c2, target);
+    auto cancelledPoll = [this]() { return cancelled.load() != 0; };
+    auto onProgress    = [this](quint64 done, quint64 all) { reportStageProgress(done, all); };
+    auto lightWords    = [](const Product::Component& c, int limit) {
+        quint64 count = 0;
+        for (int w : c.weights) if (w <= limit) ++count;
+        return count;
+    };
+    for (int r = 2; r <= maxRank && ranksFeasible; ++r) {
+        if (!c1.hasWords || !c2.hasWords) {
+            notes << tr("ранг %1 и выше не считался: у большой компоненты нет списка слов").arg(r);
+            break;
+        }
+        Product::ProfileMap p1, p2;
+
+        // Для рангов выше второго та же прикидка (по второму рангу она
+        // оценка снизу).
+        if (r > 2) {
+            const double work1 = Product::estimatedProfileWork(c1, r, limit1);
+            const double work2 = Product::estimatedProfileWork(c2, r, limit2);
+            if (work1 > double(kWorkLimit) || work2 > double(kWorkLimit)) {
+                notes << tr("ранг %1 и выше не считался: наборов слишком много (≈%2 проверок у компоненты %3, предел %4)")
+                             .arg(r).arg(QString::number(std::max(work1, work2), 'g', 2))
+                             .arg(work1 > work2 ? 1 : 2).arg(QString::number(double(kWorkLimit), 'g', 2));
+                break;
+            }
+        }
+
+        const quint64 words1 = lightWords(c1, limit1);
+        emit productPlan(tr("ранг %1: наборы компоненты 1 (%2 слов веса до %3)…")
+                             .arg(r).arg(QString::number(words1)).arg(limit1), -1);
+        progress.begin(std::max<quint64>(1, words1), 0, 0);
+        const bool ok1 = Product::profiles(c1, r, limit1, kWorkLimit, p1, false, cancelledPoll, onProgress);
+
+        const quint64 words2 = lightWords(c2, limit2);
+        emit productPlan(tr("ранг %1: наборы компоненты 2 (%2 слов веса до %3)…")
+                             .arg(r).arg(QString::number(words2)).arg(limit2), -1);
+        progress.begin(std::max<quint64>(1, words2), 0, 0);
+        const bool ok2 = ok1 && Product::profiles(c2, r, limit2, kWorkLimit, p2, true, cancelledPoll, onProgress);
+        if (cancelled.load())
+            throw std::runtime_error("расчёт отменён");
+        if (!ok1 || !ok2) {
+            notes << tr("ранг %1 и выше не считался: слишком много наборов").arg(r);
+            break;
+        }
+
+        emit productPlan(tr("ранг %1: свёртка профилей (%2 x %3)…")
+                             .arg(r).arg(QString::number(p1.size())).arg(QString::number(p2.size())), -1);
+        progress.begin(std::max<quint64>(1, p1.size()), 0, 0);
+        const std::vector<quint64> part = Product::rankR(p1, p2, r, target, onProgress);
+        for (size_t w = 0; w < total.size(); ++w)
+            total[w] += part[w];
+        ranksDone = r;
+        emit updateInfoPBR(100);
+    }
+
+    productExactUpTo = exactFor(ranksDone);
+    h_spectrum.fillZero();
+    h_spectrum[0] = 1;
+    for (size_t w = 1; w < total.size() && int(w) <= productExactUpTo; ++w)
+        h_spectrum[w] = total[w];
+
+    if (productMissExponent > 0)
+        notes.prepend(tr("компоненты %1 — стохастическим поиском, в-ть пропуска до 10^-%2")
+                          .arg(c1.probabilistic && c2.probabilistic ? QStringLiteral("1 и 2")
+                               : c1.probabilistic ? QStringLiteral("1") : QStringLiteral("2"))
+                          .arg(productMissExponent));
+    const QString summary = tr("[%1,%2,%3] x [%4,%5,%6] = [%7,%8,%9]; ранги до %10; %13 до веса %11%12")
+                                .arg(n1).arg(k1).arg(c1.d).arg(n2).arg(k2).arg(c2.d)
+                                .arg(productLength).arg(quint64(k1) * quint64(k2)).arg(d)
+                                .arg(ranksDone).arg(productExactUpTo)
+                                .arg(notes.isEmpty() ? QString() : QStringLiteral("; ") + notes.join(QStringLiteral("; ")))
+                                .arg(productMissExponent > 0 ? tr("полно") : tr("точно"));
+    emit productPlan(summary, productExactUpTo);
+    progress.setDoneOps(1);
+    emit updateInfoPBR(100);
+    updateSpectrum(int(g.numOfCols));
+}
+
 void Worker::updateSpectrum(int numOfCols)
 {
-    if (!h_spectrum)
+    updateSpectrumFrom(h_spectrum.get(), numOfCols);
+}
+
+void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
+{
+    if (!spectrum)
         return;
+    // Проба меряет, как часто спектр успевает уйти, а не показывает его.
+    // Считать надо здесь: через это место проходят все пути, включая CPU.
+    if (probeMode) {
+        ++probeSends;
+        return;
+    }
     bool spectrumEmpty = true;
     QStringList spectrumCopyPTE;
     SpectrumFloat spectrumCopyPlot;
 
-    quint64 val = 0;
+    // Веса за пределом заказа не показываются вовсе: график остаётся той же
+    // длины, но там нули.
+    const quint64 shownUpTo = displayUpToWeight >= 0
+                                ? std::min<quint64>(quint64(numOfCols), quint64(displayUpToWeight))
+                                : quint64(numOfCols);
     for (quint64 w = 0; w <= numOfCols; ++w) {
-        spectrumCopyPlot.append(float(h_spectrum[w]));
-        if (h_spectrum[w] != 0) {
-            val += h_spectrum[w];
-            spectrumCopyPTE.append(QString::number(w) + " - " + QString::number(h_spectrum[w]));
+        const quint64 value = w <= shownUpTo ? spectrum[w] : 0;
+        spectrumCopyPlot.append(float(value));
+        if (value != 0) {
+            spectrumCopyPTE.append(QString::number(w) + " - " + QString::number(value));
             spectrumEmpty = false;
         }
     }
@@ -1162,12 +2117,16 @@ void Worker::updateSpectrum(int numOfCols)
 }
 void Worker::updateSpectrumDual(int numOfCols, int numOfRows)
 {
-    if (!h_spectrum)
+    if (probeMode) {
+        ++probeSends;
+        return;
+    }
+    if (!h_spectrum.get())
         return;
 
     bool spectrumEmpty = true;
     // Считаем текстовый спектр из дуального
-    QStringList spectrumCopyPTE = computeSpectrumFromDual( h_spectrum, numOfCols, numOfRows );
+    QStringList spectrumCopyPTE = computeSpectrumFromDual( h_spectrum.get(), numOfCols, numOfRows );
     SpectrumFloat spectrumCopyPlot;
     spectrumCopyPlot.reserve(numOfCols+1);
 
@@ -1187,360 +2146,638 @@ void Worker::updateSpectrumDual(int numOfCols, int numOfRows)
         emit updateSpectrumPlot(spectrumCopyPlot);
     }
 }
-void Worker::makeCheckpoint(int numOfCols)
+void Worker::makeCheckpoint(int numOfCols, bool finished)
 {
-    // 1. Обновляем spectrum из GPU буфера
     runState.spectrum.resize(numOfCols + 1);
-    for (int i = 0; i < numOfCols + 1; i++) {
+    for (int i = 0; i < numOfCols + 1; i++)
         runState.spectrum[i] = h_spectrum[i];
+
+    AutosaveRecord record;
+    record.algorithm = settings.algorithmType;
+    record.enumType  = settings.enumType;
+    record.maxRows   = settings.maxRows;
+    record.finished  = finished;
+    // У Брауэра–Циммермана глубина перебора выведена из веса, а продолжать
+    // расчёт можно только по тем же множествам — они уходят в запись.
+    if (settings.algorithmType == ComputationSettings::BrouwerZimmermann) {
+        record.maxRows  = activeMaxRows;
+        record.bzWeight = settings.bzWeight;
+        record.infoSets = activeInfoSets;
     }
-    // 2. Хеш → имя группы
-    quint64 hash = settings.computeHash();
-    QString group = QString("checkpoints/%1").arg(hash);
-    QSettings s;
-    s.beginGroup(group);
-    // 3. Сохраняем settings
-    s.setValue("settings", settings.toJson());
-    // 4. Сохраняем runState
-    s.setValue("runState", runState.toJson());
-    s.endGroup();
+    if (settings.algorithmType == ComputationSettings::RandomInfoSets) {
+        record.maxRows          = activeMaxRows;
+        record.leonWeight       = settings.leonWeight;
+        record.leonMissExponent = settings.leonMissExponent;
+        record.leonTrials       = activeTrials;
+    }
+    if (settings.algorithmType == ComputationSettings::ProductCode) {
+        record.productWeight    = settings.productWeight;
+        record.productRank      = settings.productRank;
+        record.productRows1     = settings.matrix.size();
+        record.productExactUpTo = productExactUpTo;
+        record.productMissExponent = productMissExponent;
+    }
+    record.savedAt   = QDateTime::currentDateTime();
+    record.state     = runState;
+
+    // Ключ — матрица и алгоритм. Сама матрица в запись не попадает: она лежит
+    // одним файлом на папку, иначе на коде (1000,997) каждое сохранение тащило
+    // бы с собой мегабайт нулей и единиц.
+    autosave.save(autosaveKeyMatrix(), record);
     emit showSaveLBL();
 }
-void Worker::loadCheckpoint()
+
+void Worker::setAutosaveRoot(const QString& dir)
 {
+    autosaveRootDir = dir;
+    autosave = AutosaveStore(dir);
 }
+
+QStringList Worker::autosaveKeyMatrix() const
+{
+    if (settings.algorithmType == ComputationSettings::ProductCode)
+        return settings.matrix + settings.matrix2;
+    return settings.matrix;
+}
+// Точка входа расчёта. Ловит всё, что может бросить вычислитель: раньше
+// ошибка CUDA звала abort() и приложение молча исчезало, а переполнение в
+// таблице биномов бросало голый const char*, который никто не ловил, — то
+// есть std::terminate.
 void Worker::computeSpectrum()
 {
-
-    /*  РАБОТА С МАТРИЦЕЙ   */
-    QStringList matrix = settings.matrix;
-    // Если применяется дуальный код - генерируем проверочную матрицу
-    if (settings.algorithmType == ComputationSettings::DualCode) {
-        matrix = generatorToParity(matrix);
+    try {
+        computeSpectrumImpl();
     }
-    // Число строк и столбцов матрицы
-    quint64 numOfRows = matrix.length();
-    quint64 numOfCols = matrix[0].length();
-    quint64 maxRows = settings.maxRows;
-    quint64 spectrumSize = numOfCols + 1;
-    // Если спектр уже есть, то ничего не произойдет
-    if (runState.spectrum.size() != spectrumSize)
-        runState.spectrum.resize(spectrumSize);
-
-    /*  НАСТРОЙКИ ВЫЧИСЛИТЕЛЯ   */
-    // Устанавливаем число потоков CPU
-    int workerThreads = settings.compDevSet.threadsCpu;
-    omp_set_num_threads(workerThreads);
-    // Число блоков для запуска на видеокарте ( минимум - число мультипроцессоров )
-    int blockCount = settings.compDevSet.blocksGpu;
-    // Число нитей, запускаемых на одном блоке
-    int threadsPerBlock = settings.compDevSet.threadsGpu;
-
-
-    // Число 64-битных слов на одну строку матрицы
-    quint64 wordsPerRow = (numOfCols + 63) / 64;
-    // Размер матрицы в 64-битных словах
-    quint64 matrixSizeInWords = numOfRows * wordsPerRow;
-    bool matrixInGlobalMem = false;
-    if ((matrixSizeInWords * Constants::WORD_SIZE > Constants::CONST_MEM_SIZE)
-        && settings.compDev == ComputationSettings::ComputeDevice::GPU) {
-
-        /* ДОПИСАТЬ КОПИРОВАНИЕ МАТРИЦЫ В ПАМЯТЬ ДЛЯ КОРОТКИХ КОДОВ */
-        if (numOfRows < 64) {
-            emit errorOccurred("Ошибка, матрица слишком большая");
-            emit finished(Constants::ERROR_OCCURED);
-            return;
-        }
-        CUDA_CALL(cudaMalloc((void**)&d_matrix, matrixSizeInWords * Constants::WORD_SIZE));
-        matrixInGlobalMem = true;
-    }
-    // Выделяем матрицу на хосте
-    h_matrix = (quint64*)calloc(matrixSizeInWords, Constants::WORD_SIZE);
-    if (!h_matrix) {
-        emit errorOccurred("Ошибка выделения памяти");
+    catch (const CudaError& e) {
+        releaseResources();
+        emit errorOccurred(e.message());
         emit finished(Constants::ERROR_OCCURED);
-        return;
     }
-    // Копируем из QStringList-а
-    for (quint64 i = 0; i < numOfRows; ++i) {
-        quint64* rowData = h_matrix + i * wordsPerRow;
-        const QString& row = matrix[(int)i];
-        for (quint64 j = 0; j < numOfCols; ++j) {
-            if (row.at((int)j) == QLatin1Char('1')) {
-                quint64 blockIdx = j / 64;
-                quint64 bitIdx = j % 64;
-                rowData[blockIdx] |= (1ull << bitIdx);
-            }
-        }
+    catch (const std::exception& e) {
+        releaseResources();
+        emit errorOccurred(QStringLiteral("Ошибка расчёта: %1")
+                               .arg(QString::fromUtf8(e.what())));
+        emit finished(Constants::ERROR_OCCURED);
     }
-    // Если используется простой перебор, то необходима таблица биноминальных коэффициентов
-    if (settings.algorithmType == ComputationSettings::SimpleXor) {
-        // Для коротких - строим всю таблицу. Не оптимально, но работает.
-        if (numOfRows < 64) {
-            h_binomTable = buildBinomTable(Constants::MAX_SHORT_CODE_LENGTH, Constants::MAX_SHORT_CODE_LENGTH);
-        }
-        // Для длинных кодов строим только часть таблицы
-        else {
-            h_binomTable = buildBinomTable(numOfRows, settings.maxRows);
-        }
+}
 
+void Worker::measureUpdateRate()
+{
+    probeMode  = true;
+    probeSends = 0;
+    cancelled.store(0);
 
+    const auto startedAt = steady_clock::now();
+    double seconds = 0.0;
 
+    try {
+        CodeGeometry g = describeTask();
+        initializeRunState(LoadMode::Reset);
+        runState.spectrum.resize(int(g.spectrumSize));
+
+        // Замер идёт на самом глубоком слое. Слои по числу складываемых строк
+        // перебираются по возрастанию, первые из них крошечные, и чанки в них
+        // обрезаны по границе слоя: замер по началу расчёта показал бы частоту,
+        // которой на деле не будет уже через минуту. У кода Грея слоёв нет, там
+        // rOffset ни на что не влияет.
+        if (g.maxRows > 0)
+            runState.rOffset = g.maxRows;
+
+        omp_set_num_threads(settings.compDevSet.threadsCpu);
+        prepareBuffers(g);
+        // Подбор сетки нужен и здесь: он выбирает сетку покрупнее, а от неё
+        // напрямую зависит длина чанка и, значит, потолок. Замер без подбора
+        // показал бы не ту частоту, с которой пользователь потом будет считать.
+        tuneGrid(g);
+
+        // Просить спектр как можно чаще, сохранений не делать: проба не имеет
+        // права трогать состояние расчёта.
+        progress.setIntervals(std::chrono::milliseconds{ 0 },
+                              std::chrono::hours{ 24 });
+        progress.setOpsCheckpoint(0);
+
+        emit updateRateProbeStarted();
+        dispatchComputation(g);
+        seconds = std::chrono::duration<double>(steady_clock::now() - startedAt).count();
+    }
+    catch (const CudaError& e) {
+        emit errorOccurred(e.message());
+    }
+    catch (const std::exception& e) {
+        emit errorOccurred(QStringLiteral("Ошибка замера: %1")
+                               .arg(QString::fromUtf8(e.what())));
     }
 
-    // Если расчет производится на GPU
-    if (settings.compDev == ComputationSettings::GPU) {
-        if (!matrixInGlobalMem) {
-            // Копируем порождающую матрицу в константную память
-            CUDA_CALL(copyMatrixToConstant(h_matrix, matrixSizeInWords));
-        }
-        else {
-            // Если матрица слишком большая - копируем её в глобальную память
-            CUDA_CALL(cudaMemcpy(d_matrix, h_matrix, matrixSizeInWords * Constants::WORD_SIZE, cudaMemcpyHostToDevice));
-        }
+    const quint64 sends = probeSends;
+    probeMode  = false;
+    probeSends = 0;
+    releaseResources();
+    // Состояние расчёта после пробы — чужое: она стартовала с последнего слоя.
+    initializeRunState(LoadMode::Reset);
+    cancelled.store(0);
 
-        // Выделяем оперативную память
-        CUDA_CALL(cudaMallocHost((void**)&h_spectrum, (spectrumSize) * sizeof(quint64)));
-        
-        if (exportSpectrum) {
-            // Если загружаемся с чекпоинта, то копируем спектр
-            for (int i = 0; i < spectrumSize; i++)
-            {
-                h_spectrum[i] = runState.spectrum.at(i);
-            }
-        }
-        else {
-            // Иначе - заполняем нулями
-            memset(h_spectrum, 0, (spectrumSize) * sizeof(quint64));
-        }
-        
-        
-        // Выделяем видеопамять
-        CUDA_CALL(cudaMalloc((void**)&d_spectrum, (spectrumSize) * sizeof(quint64)));
+    emit updateRateMeasured(seconds > 0.0 ? double(sends) / seconds : 0.0);
+}
 
-        if (exportSpectrum) {
-            // Если загружаемся с чекпоинта, то копируем спектр с хоста на устройство
-            CUDA_CALL(cudaMemcpy(d_spectrum, h_spectrum, (spectrumSize) * sizeof(quint64), cudaMemcpyHostToDevice));
-        }
-        else {
-            // Иначе - заполняем нулями
-            CUDA_CALL(cudaMemset(d_spectrum, 0, ((spectrumSize) * sizeof(quint64))));
-        }
-        
-        CUDA_CALL(cudaEventCreate(&ev));
-        CUDA_CALL(cudaStreamCreate(&stream));
+// Выводит из настроек и матрицы всё, что нужно для расчёта.
+CodeGeometry Worker::describeTask() const
+{
+    CodeGeometry g;
 
-        // Если расчитываем спектр короткого кода простым XOR - ом
-        if (settings.algorithmType == ComputationSettings::SimpleXor && (numOfRows < 64)) {
-            // Переводим двумерный массив биноминальных коэффициентов в одномерный
-            int width = Constants::MAX_SHORT_CODE_LENGTH + 1;
-            quint64* flat = (quint64*)malloc(Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES * sizeof(quint64));
+    g.matrix = settings.matrix;
+    // Для дуального кода перебор идёт по проверочной матрице, а не по той,
+    // что ввёл пользователь.
+    if (settings.algorithmType == ComputationSettings::DualCode)
+        g.matrix = generatorToParity(g.matrix);
 
-            for (int n = 0; n <= Constants::MAX_SHORT_CODE_LENGTH; ++n) {
-                for (int r = 0; r <= n; ++r) {
-                    flat[n * width + r] = h_binomTable[n][r];
-                }
-            }
-            CUDA_CALL(cudaMalloc((void**)&d_binomTable, Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES * sizeof(quint64)));
-            CUDA_CALL(cudaMemcpy(d_binomTable, flat, Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES * sizeof(quint64), cudaMemcpyHostToDevice));
-            free(flat);
-        }
+    g.numOfRows    = quint64(g.matrix.length());
+    g.numOfCols    = quint64(g.matrix[0].length());
+    g.wordsPerRow  = (g.numOfCols + 63) / 64;
+    g.matrixWords  = g.numOfRows * g.wordsPerRow;
+    g.spectrumSize = g.numOfCols + 1;
+    g.maxRows      = quint64(settings.maxRows);
+
+    g.blocksGpu  = settings.compDevSet.blocksGpu;
+    g.threadsGpu = settings.compDevSet.threadsGpu;
+    g.useGpu     = settings.compDev == ComputationSettings::ComputeDevice::GPU;
+    g.isLongCode = g.numOfRows > Constants::MAX_SHORT_CODE_LENGTH;
+
+    if (settings.algorithmType == ComputationSettings::BrouwerZimmermann)
+        planInfoSets(g);
+
+    if (settings.algorithmType == ComputationSettings::ProductCode) {
+        // Самого произведения в памяти нет — только его размеры, под спектр.
+        if (settings.matrix2.isEmpty())
+            throw std::invalid_argument("код-произведение: не задана вторая компонента");
+        const quint64 n1 = quint64(settings.matrix.first().length());
+        const quint64 n2 = quint64(settings.matrix2.first().length());
+        g.numOfRows    = quint64(settings.matrix.size()) * quint64(settings.matrix2.size());
+        g.numOfCols    = n1 * n2;
+        g.wordsPerRow  = (g.numOfCols + 63) / 64;
+        g.matrixWords  = 0;
+        g.spectrumSize = g.numOfCols + 1;
+        g.useGpu       = false;
+        g.isLongCode   = true;
+    }
+
+    if (settings.algorithmType == ComputationSettings::RandomInfoSets) {
+        // На видеокарте короткая матрица живёт в разделяемой памяти блока,
+        // длинная — в глобальной; ядро умеет строки до MAX_BLOCKWORDS слов.
+        if (g.useGpu && leonSharedBytes(int(g.numOfRows), int(g.numOfCols), int(g.wordsPerRow)) == 0)
+            throw std::invalid_argument(
+                "стохастический поиск на видеокарте: строка длиннее, чем умеет ядро — выберите CPU");
+        // Профиль ключей окна — по самой матрице.
+        const Leon::SternProfile profile = g.useGpu && !Leon::gpuWindowEnabled
+                                               ? Leon::SternProfile() : Leon::sternProfile(g.matrix);
+        const Leon::Plan plan = Leon::plan(int(g.numOfCols), int(g.numOfRows),
+                                           settings.leonWeight, settings.leonMissProbability(),
+                                           g.useGpu, &profile);
+        g.maxRows           = quint64(plan.rows);
+        g.leonWindow        = plan.window;
+        g.leonPairs         = plan.window > 0 ? profile.pairs[plan.rows][plan.window] : 0.0;
+        g.leonTrials        = plan.trials;
+        g.leonWordsPerTrial = plan.costPerTrial;
+    }
+
+    g.matrixInGlobalMem =
+        g.useGpu && (g.matrixWords > quint64(Constants::MAX_CONST_WORDS));
+
+    return g;
+}
+
+void Worker::planInfoSets(CodeGeometry& g) const
+{
+    int words = 0;
+    const std::vector<quint64> packed = InfoSets::packRows(g.matrix, words);
+    const int rows = int(g.numOfRows);
+    const int cols = int(g.numOfCols);
+
+    // Все матрицы должны поместиться в константную память видеокарты: у
+    // короткого пути другого места для них нет. Предел один для обоих
+    // устройств, чтобы запись, сделанная на одном, продолжалась на другом.
+    const int fit     = std::max(1, Constants::MAX_CONST_WORDS / std::max(1, rows * words));
+    const int maxSets = std::min(Constants::MAX_INFO_SETS, fit);
+
+    std::vector<InfoSets::InfoSet> sets;
+    if (!resumedInfoSets.isEmpty()) {
+        if (!InfoSets::rebuild(packed.data(), rows, cols, words, resumedInfoSets, sets))
+            throw std::invalid_argument(
+                "множества из сохранения не подходят к матрице");
     }
     else {
-        h_spectrum = (quint64*)malloc((spectrumSize) * sizeof(quint64));
-        if (exportSpectrum) {
-            // Если загружаемся с чекпоинта, то копируем спектр
-            for (int i = 0; i < spectrumSize; i++)
-            {
-                h_spectrum[i] = runState.spectrum.at(i);
-            }
-        }
-        else {
-            // Иначе - заполняем нулями
-            memset(h_spectrum, 0, (spectrumSize) * sizeof(quint64));
+        sets = InfoSets::find(packed.data(), rows, cols, words, maxSets);
+        if (sets.empty())
+            throw std::invalid_argument(
+                "строки матрицы зависимы: алгоритму Брауэра–Циммермана нужна матрица полного ранга");
+        std::vector<int> overlaps;
+        for (const InfoSets::InfoSet& set : sets)
+            overlaps.push_back(set.overlap);
+        sets.resize(size_t(InfoSets::setsForWeight(overlaps, settings.bzWeight, rows, cols)));
+    }
+    if (int(sets.size()) > maxSets)
+        throw std::invalid_argument("множеств больше, чем помещается в память видеокарты");
+
+    g.setCount = int(sets.size());
+    g.setOverlaps.clear();
+    g.setMasks.clear();
+    g.setRows.clear();
+    g.setColumns.clear();
+    for (const InfoSets::InfoSet& set : sets) {
+        g.setOverlaps.push_back(set.overlap);
+        g.setMasks.insert(g.setMasks.end(), set.mask.begin(), set.mask.end());
+        g.setRows.insert(g.setRows.end(), set.rows.begin(), set.rows.end());
+        g.setColumns.append(QVector<int>(set.columns.begin(), set.columns.end()));
+    }
+    g.matrixWords     = quint64(g.setRows.size());
+    g.maxRows         = quint64(InfoSets::rowsForWeight(g.setOverlaps, settings.bzWeight, rows, cols));
+    g.guaranteedBelow = InfoSets::guaranteedBelow(g.setOverlaps, int(g.maxRows), rows, cols);
+}
+
+// Упаковывает матрицу в биты и раскладывает буферы по памяти.
+void Worker::prepareBuffers(const CodeGeometry& g)
+{
+    if (g.matrixInGlobalMem) {
+        /* ДОПИСАТЬ КОПИРОВАНИЕ МАТРИЦЫ В ПАМЯТЬ ДЛЯ КОРОТКИХ КОДОВ */
+        if (!g.isLongCode)
+            throw std::invalid_argument("матрица слишком большая для короткого кода");
+        d_matrix.allocate(g.matrixWords);
+    }
+
+    // calloc внутри, поэтому матрица уже обнулена
+    h_matrix.allocate(g.matrixWords, HostBuffer<quint64>::Kind::Paged);
+    if (!g.setRows.empty()) {
+        // Брауэр–Циммерман: матрицы множеств уже упакованы планом.
+        std::copy(g.setRows.begin(), g.setRows.end(), h_matrix.get());
+    }
+    else {
+        for (quint64 i = 0; i < g.numOfRows; ++i) {
+            quint64* rowData = h_matrix.get() + i * g.wordsPerRow;
+            const QString& row = g.matrix[int(i)];
+            for (quint64 j = 0; j < g.numOfCols; ++j)
+                if (row.at(int(j)) == QLatin1Char('1'))
+                    rowData[j / 64] |= (1ull << (j % 64));
         }
     }
 
-    startTime = steady_clock::now() - std::chrono::seconds(runState.elapsedSec);
-    lastTimeSpectrum = startTime;
-    lastTimeBar = startTime;
-    lastEstimateTime = startTime;
-    lastCheckpointTime = startTime;
-
-    // Загружаем частоты обновления из настроек
-    updateSpectrumSec = std::chrono::seconds{ settings.timeIntSet.updateSpectrumInterval };
-    saveSpectrumSec   = std::chrono::seconds{ settings.timeIntSet.saveSpectrumInterval };
-
-    switch (settings.algorithmType) {
-        // В дуальном коде для ускорения используется код Грея
-        case ComputationSettings::Algorithm::DualCode:
-        case ComputationSettings::Algorithm::GrayCode: {
-            if (settings.compDev == ComputationSettings::ComputeDevice::GPU) {
-                computeSpectrumGpuGrayShort(
-                    numOfRows,
-                    numOfCols,
-                    wordsPerRow,
-                    chunkSize,
-                    settings.compDevSet.blocksGpu,
-                    settings.compDevSet.threadsGpu
-                );
-            }
-            else {
-                computeSpectrumCpuGrayShort(
-                    numOfRows,
-                    numOfCols,
-                    wordsPerRow
-                );
-            };
-        } break;
-        case ComputationSettings::Algorithm::SimpleXor: {
-            if ( settings.compDev == ComputationSettings::ComputeDevice::GPU ) {
-                if ( numOfRows <= 63 ) {
-                    computeSpectrumGpuNoGrayShort(
-                        numOfRows,
-                        numOfCols,
-                        wordsPerRow,
-                        chunkSize,
-                        settings.compDevSet.blocksGpu,
-                        settings.compDevSet.threadsGpu,
-                        maxRows
-                    );
-                } else {
-                    computeSpectrumGpuNoGrayLong(
-                        numOfRows,
-                        numOfCols,
-                        wordsPerRow,
-                        settings.compDevSet.blocksGpu,
-                        settings.compDevSet.threadsGpu,
-                        maxRows,
-                        d_matrix
-                    );
-                }
-            } else {
-                if ( numOfRows <= 63 ) {
-                    computeSpectrumCpuNoGrayShort(
-                        numOfRows,
-                        numOfCols,
-                        wordsPerRow,
-                        maxRows
-                    );
-                } else {
-                    computeSpectrumCpuNoGrayLong(
-                        numOfRows,
-                        numOfCols,
-                        wordsPerRow,
-                        maxRows
-                    );
-                }
-            }
-        } break;
+    // Перебору по слоям нужна таблица биноминальных коэффициентов
+    if (settings.layered()) {
+        binomTable = g.isLongCode
+            // Для длинных кодов строим только часть таблицы
+            ? BinomTable(g.numOfRows, g.maxRows)
+            // Для коротких — всю. Не оптимально, но работает.
+            : BinomTable(Constants::MAX_SHORT_CODE_LENGTH, Constants::MAX_SHORT_CODE_LENGTH);
     }
-    // После того, как произвели расчеты - сбрасываем RunState
-    initializeRunState(LoadMode::Reset);
-    if ( cancelled.load() ) {
 
+    // Спектр на хосте. Для GPU нужна pinned-память — иначе не работает
+    // асинхронное копирование; для CPU обычная, cudaMallocHost без видеокарты
+    // недоступен.
+    h_spectrum.allocate(g.spectrumSize, g.useGpu ? HostBuffer<quint64>::Kind::Pinned
+                                                 : HostBuffer<quint64>::Kind::Paged);
+    // Кольцо снимков нужно только видеокарте: на CPU спектр и так лежит в
+    // h_spectrum, копировать его неоткуда.
+    if (g.useGpu)
+        spectrumRing.allocate(g.spectrumSize);
+    else
+        spectrumRing.reset();
+    if (exportSpectrum) {
+        // Продолжаем с чекпоинта — переносим накопленный спектр
+        for (quint64 i = 0; i < g.spectrumSize; ++i)
+            h_spectrum[i] = runState.spectrum.at(int(i));
+    } else {
+        h_spectrum.fillZero();
+    }
+
+    if (!g.useGpu)
+        return;
+
+    if (g.matrixInGlobalMem)
+        CUDA_CALL(cudaMemcpy(d_matrix.get(), h_matrix.get(),
+                             g.matrixWords * Constants::WORD_SIZE, cudaMemcpyHostToDevice));
+    else
+        CUDA_CALL(copyMatrixToConstant(h_matrix.get(), g.matrixWords));
+    if (g.setCount > 1)
+        CUDA_CALL(copyMasksToConstant(g.setMasks.data(), g.setCount, int(g.wordsPerRow)));
+
+    d_spectrum.allocate(g.spectrumSize);
+    if (exportSpectrum)
+        CUDA_CALL(cudaMemcpy(d_spectrum.get(), h_spectrum.get(),
+                             g.spectrumSize * sizeof(quint64), cudaMemcpyHostToDevice));
+    else
+        d_spectrum.fillZero();
+
+    stream.create();
+
+    // Ядро коротких кодов читает таблицу как binomTable[n * 64 + k]. BinomTable
+    // хранит её плоско ровно с таким шагом, поэтому копируем как есть, без
+    // промежуточного «уплощения».
+    if (settings.layered() && !g.isLongCode) {
+        Q_ASSERT(binomTable.stride() == Constants::MAX_SHORT_CODE_LENGTH + 1);
+        d_binomTable.allocate(Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES);
+        CUDA_CALL(cudaMemcpy(d_binomTable.get(), binomTable.data(),
+                             binomTable.bytes(), cudaMemcpyHostToDevice));
+    }
+}
+
+// Выбор вычислительной функции: алгоритм, устройство, длина кода.
+void Worker::tuneGrid(CodeGeometry& g)
+{
+    if (!settings.autoTuneGrid || !g.useGpu)
+        return;
+    // У случайного поиска своё ядро и своя сетка — блок на попытку; подбор
+    // здесь мерил бы чужое ядро, да ещё по пустой таблице биномов.
+    if (settings.algorithmType == ComputationSettings::RandomInfoSets)
+        return;
+
+    GridTuneTask task;
+    task.numOfCols   = int(g.numOfCols);
+    task.numOfRows   = int(g.numOfRows);
+    task.wordsPerRow = int(g.wordsPerRow);
+    task.binomTable  = d_binomTable.get();
+    task.chunkSize   = g.chunkSize;
+    task.minWorthSeconds = tuneThresholdSec;
+    task.userGrid    = { g.blocksGpu, g.threadsGpu };
+    task.verbose     = tuneVerbose;
+    task.slot.setCount = g.setCount;
+
+    const bool gray = !settings.layered();
+    task.kernel = g.isLongCode ? GridTuneTask::Kernel::XorLong
+                : gray         ? GridTuneTask::Kernel::GrayShort
+                               : GridTuneTask::Kernel::XorShort;
+
+    // Отдельный буфер спектра: замер не имеет права попасть в настоящий.
+    DeviceBuffer<quint64> scratch;
+    scratch.allocate(g.spectrumSize);
+    scratch.fillZero();
+    task.scratchSpectrum = scratch.get();
+
+    // Слой, на котором идёт замер, и его размер. У кода Грея слоёв нет —
+    // маски нумеруются сплошь.
+    quint64 layerRank = 0;
+    if (task.kernel == GridTuneTask::Kernel::GrayShort) {
+        task.availableMasks = 1ULL << g.numOfRows;
+        task.totalMasks     = task.availableMasks;
+    }
+    else {
+        // Меряем на самом населённом слое: там расчёт и проведёт почти всё
+        // время, а стоимость маски зависит от числа складываемых строк.
+        quint64 bestCount = 0;
+        for (quint64 r = 0; r <= g.maxRows && r <= g.numOfRows; ++r) {
+            const quint64 count = binomTable(g.numOfRows, r);
+            if (count > bestCount) {
+                bestCount      = count;
+                task.numOfOnes = r;
+            }
+        }
+        task.availableMasks = bestCount;
+        task.totalMasks     = totalLayerOps(g);
+        layerRank           = bestCount / 2;
+    }
+
+    // Длинному пути нужны настоящие стартовые маски: его ядро читает их из
+    // буфера, а не выводит из номера чанка.
+    HostBuffer<int16_t>   h_tuneSlots;
+    DeviceBuffer<int16_t> d_tuneSlots;
+
+    if (task.kernel == GridTuneTask::Kernel::XorLong) {
+        // Столько масок на нить хватает, чтобы стартовая сборка кодового слова
+        // занимала около процента: боевые 4096 растянули бы замер на секунды.
+        task.measureMasksPerThread = 256;
+
+        // Слотов — под самого крупного кандидата; меньшие берут префикс.
+        // Имя не slots: так называется макрос Qt из qobjectdefs.h.
+        quint64 slotCount = quint64(Constants::MAX_TUNE_BLOCKS)
+                      * quint64(Constants::MAX_TUNE_THREADS);
+        if (task.availableMasks < layerRank + slotCount * task.measureMasksPerThread) {
+            const quint64 room = task.availableMasks > layerRank
+                               ? (task.availableMasks - layerRank) / task.measureMasksPerThread
+                               : 0;
+            slotCount = room;
+        }
+        if (slotCount == 0)
+            return;
+
+        h_tuneSlots.allocate(slotCount * Constants::MAX_POSITIONS,
+                             HostBuffer<int16_t>::Kind::Paged);
+        d_tuneSlots.allocate(slotCount * Constants::MAX_POSITIONS);
+
+        int16_t* const host = h_tuneSlots.get();
+        const int rows = int(g.numOfRows);
+        const int ones = int(task.numOfOnes);
+
+        #pragma omp parallel for schedule(static)
+        for (long long i = 0; i < (long long)slotCount; ++i) {
+            generateStartPositions(layerRank + quint64(i) * task.measureMasksPerThread,
+                                   rows, ones,
+                                   host + i * Constants::MAX_POSITIONS, binomTable);
+        }
+
+        CUDA_CALL(cudaMemcpy(d_tuneSlots.get(), host,
+                             slotCount * Constants::MAX_POSITIONS * sizeof(int16_t),
+                             cudaMemcpyHostToDevice));
+
+        task.startPositions   = d_tuneSlots.get();
+        task.filledStartMasks = slotCount;
+        task.matrixGlobal     = g.matrixInGlobalMem ? d_matrix.get() : nullptr;
+    }
+
+    const LaunchGrid grid = tuneLaunchGrid(task, stream.get());
+    if (!grid.isValid())
+        return;   // подбор отказался — остаёмся на настройках
+
+    // Сигнал уходит и тогда, когда победили настройки пользователя: это
+    // не пустой результат, а подтверждение замером, и видеть его полезно.
+    g.blocksGpu  = grid.blocks;
+    g.threadsGpu = grid.threads;
+    emit gridTuned(grid.blocks, grid.threads);
+}
+
+void Worker::dispatchComputation(const CodeGeometry& g)
+{
+    // Дуальный код считается по проверочной матрице тем же кодом Грея
+    const bool gray = !settings.layered()
+                   && settings.algorithmType != ComputationSettings::RandomInfoSets;
+
+    // Код Грея перебирает 2^k масок в одном 64-битном слове, поэтому длиннее
+    // 63 строк не бывает. Раньше это проверял только диалог настроек, а прямой
+    // вызов Worker давал сдвиг на 64 и больше — неопределённое поведение.
+    if (gray && g.isLongCode)
+        throw std::invalid_argument(
+            "код Грея неприменим: больше 63 строк не помещается в маску");
+
+    if (settings.algorithmType == ComputationSettings::RandomInfoSets)
+        computeSpectrumLeon(g);
+    else if (gray)
+        g.useGpu ? computeSpectrumGpuGrayShort(g)
+                 : computeSpectrumCpuGrayShort(g);
+    else if (g.isLongCode)
+        g.useGpu ? computeSpectrumGpuNoGrayLong(g)
+                 : computeSpectrumCpuNoGrayLong(g);
+    else
+        g.useGpu ? computeSpectrumGpuNoGrayShort(g)
+                 : computeSpectrumCpuNoGrayShort(g);
+}
+
+// Забирает итоговый спектр, рассылает сигналы и освобождает ресурсы.
+void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point startedAt)
+{
+    if (cancelled.load()) {
+        initializeRunState(LoadMode::Reset);
         emit finished(Constants::ERROR_OCCURED);
         emit updateInfoPBR(0);
-
-        updateSpectrum( numOfCols );
-        if ( h_spectrum != nullptr ) {
-            if ( settings.compDev == ComputationSettings::ComputeDevice::GPU ) {
-                cudaFreeHost( h_spectrum );
-            } else {
-              free( h_spectrum );
-            }
-            h_spectrum = nullptr;
-        }
-        if ( settings.algorithmType == ComputationSettings::SimpleXor ) {
-            freeBinomTable( h_binomTable, numOfRows );
-        }
-        if ( h_matrix!= nullptr )
-            free( h_matrix );
-        if (d_matrix != nullptr) {
-            cudaFree(d_matrix);
-            d_matrix = nullptr;
-        }
-        if (ev != nullptr) {
-            CUDA_CALL(cudaEventDestroy(ev));
-            ev = nullptr;
-        }
-            
-        if (stream != nullptr) {
-            CUDA_CALL(cudaStreamDestroy(stream));
-            stream = nullptr;
-        }
+        updateSpectrum(int(g.numOfCols));
+        releaseResources();
         return;
     }
-    // Финальное обновление интерфейса
-    if ( settings.compDev == ComputationSettings::ComputeDevice::GPU ) {
-        cudaDeviceSynchronize();
-        cudaMemcpy( h_spectrum, d_spectrum, (spectrumSize) * sizeof(quint64), cudaMemcpyDeviceToHost );
-        if (d_spectrum != nullptr) {
-            cudaFree(d_spectrum);
-            d_spectrum = nullptr;
-        }
-        if (d_binomTable != nullptr) {
-            cudaFree(d_binomTable);
-            d_binomTable = nullptr;
-        }
-            
+
+    // Случайный поиск копит спектр на хосте, d_spectrum у него пустой —
+    // забирать оттуда нечего, это затёрло бы найденное нулями.
+    if (g.useGpu && settings.algorithmType != ComputationSettings::RandomInfoSets) {
+        CUDA_CALL(cudaDeviceSynchronize());
+        CUDA_CALL(cudaMemcpy(h_spectrum.get(), d_spectrum.get(),
+                             g.spectrumSize * sizeof(quint64), cudaMemcpyDeviceToHost));
     }
-    // Если применялся дуальный код - рассчитываем спектр из дуального
-    if ( settings.algorithmType == ComputationSettings::Algorithm::DualCode ) {
-        updateSpectrumDual( numOfCols, numOfRows );
-    } else {
-        updateSpectrum( numOfCols );
+
+    // Автосохранение остаётся и после успеха. Слои по числу складываемых строк
+    // независимы и идут по возрастанию, поэтому досчитанный до maxRows спектр —
+    // это ровно начало расчёта до большего maxRows. Состояние помечается как
+    // «всё до maxRows пройдено», и следующий запуск продолжит со следующего
+    // слоя, а не с нуля.
+    if (settings.layered()) {
+        runState.rOffset     = g.maxRows + 1;
+        runState.chunkOffset = 0;
     }
+    else if (settings.algorithmType == ComputationSettings::RandomInfoSets
+             || settings.algorithmType == ComputationSettings::ProductCode) {
+        // Такая запись не продолжается — хранится только итог.
+        runState.rOffset     = 0;
+        runState.chunkOffset = 0;
+    }
+    else {
+        // У кода Грея слоёв нет: пройденным считается весь диапазон масок.
+        runState.rOffset     = 0;
+        runState.chunkOffset = 1ULL << g.numOfRows;
+    }
+    runState.doneOps    = progress.doneOps();
+    runState.elapsedSec = duration_cast<seconds>(steady_clock::now() - startedAt).count();
+
+    // Пишется до преобразования Мак-Вильямс: в записи должен лежать сырой
+    // спектр перебираемой матрицы, с него и продолжают.
+    makeCheckpoint(int(g.numOfCols), true);
+
+    // Итог — на случай, если этот расчёт вложенный (компонента произведения).
+    // У дуального пути runState хранит спектр проверочной матрицы — итог
+    // сразу переводится в спектр исходного кода.
+    m_finalSpectrum  = settings.algorithmType == ComputationSettings::Algorithm::DualCode
+                         ? spectrumFromDual(runState.spectrum.constData(), int(g.numOfCols), int(g.numOfRows))
+                         : runState.spectrum;
+    m_finalExactUpTo = g.guaranteedBelow > 0 ? g.guaranteedBelow - 1
+                     : settings.algorithmType == ComputationSettings::ProductCode ? productExactUpTo
+                     : int(g.numOfCols);
+
+    initializeRunState(LoadMode::Reset);
+
+    // Дуальный расчёт даёт спектр проверочной матрицы — исходный получается
+    // из него преобразованием Мак-Вильямс.
+    if (settings.algorithmType == ComputationSettings::Algorithm::DualCode)
+        updateSpectrumDual(int(g.numOfCols), int(g.numOfRows));
+    else
+        updateSpectrum(int(g.numOfCols));
+
+    // Последняя оценка — по итогу, а не по последнему промежуточному
+    // замеру: иначе в панели остаётся «перебрано 47,6 из 48,0 млрд,
+    // осталось 1 мин» при состоянии «готово».
+    reportEstimate();
     emit updateInfoPBR(100);
-    emit finished(duration_cast<seconds>(steady_clock::now() - startTime).count());
+    emit finished(int(duration_cast<seconds>(steady_clock::now() - startedAt).count()));
 
-    if ( h_spectrum != nullptr ) {
-        if ( settings.compDev == ComputationSettings::ComputeDevice::GPU ) {
-            CUDA_CALL( cudaFreeHost( h_spectrum ) );
-        } else {
-            free( h_spectrum );
-        }
-        h_spectrum = nullptr;
-    }
-    // При расчете простым XOR-ом строилась таблица биноминальных коэффициентов - очищаем её
-    if ( settings.algorithmType == ComputationSettings::SimpleXor ) {
-        freeBinomTable( h_binomTable, numOfRows );
-    }
-    if (h_matrix != nullptr) {
-        free(h_matrix);
-        h_matrix = nullptr;
-    }
-    
-    if (d_matrix != nullptr) {
-        cudaFree(d_matrix);
-        d_matrix = nullptr;
+    releaseResources();
+}
+
+void Worker::computeSpectrumImpl()
+{
+    CodeGeometry g = describeTask();
+
+    // Что записывать в автосохранение и что показать пользователю: глубину
+    // перебора и множества он не задавал, они выведены из веса и матрицы.
+    activeInfoSets = g.setColumns;
+    activeMaxRows  = int(g.maxRows);
+    activeTrials   = 0;
+    displayUpToWeight = settings.algorithmType == ComputationSettings::BrouwerZimmermann
+                          ? settings.bzWeight : -1;
+    if (g.guaranteedBelow > 0)
+        emit planReady(g.setCount, int(g.maxRows), g.guaranteedBelow - 1);
+
+    // Спектр мог прийти из чекпоинта — тогда размер уже верный
+    if (quint64(runState.spectrum.size()) != g.spectrumSize)
+        runState.spectrum.resize(int(g.spectrumSize));
+
+    omp_set_num_threads(settings.compDevSet.threadsCpu);
+
+    // Частоты обновления из настроек. Сам отсчёт запускает вычислительная
+    // функция: только она знает общее число операций.
+    progress.setIntervals(
+        std::chrono::milliseconds{ settings.timeIntSet.updateSpectrumInterval },
+        std::chrono::seconds{ settings.timeIntSet.saveSpectrumInterval });
+    progress.setOpsCheckpoint(checkpointEveryOps);
+
+    const auto startedAt = steady_clock::now() - std::chrono::seconds(runState.elapsedSec);
+
+    // Код произведения не перебирает собственную матрицу: ни буферов, ни
+    // сетки ему не нужно, только спектр на хосте.
+    if (settings.algorithmType == ComputationSettings::ProductCode) {
+        h_spectrum.allocate(g.spectrumSize, HostBuffer<quint64>::Kind::Paged);
+        h_spectrum.fillZero();
+        computeSpectrumProduct(g);
+        finishComputation(g, startedAt);
+        return;
     }
 
-    if (ev != nullptr) {
-        CUDA_CALL(cudaEventDestroy(ev));
-        ev = nullptr;
-    }
-    if (stream != nullptr) {
-        CUDA_CALL(cudaStreamDestroy(stream));
-        stream = nullptr;
-    }
-        
+    prepareBuffers(g);
+    tuneGrid(g);
+
+    dispatchComputation(g);
+    finishComputation(g, startedAt);
+}
+
+// Освобождает всё, что выделено под расчёт.
+//
+// Раньше это были два почти одинаковых блока — для успешного завершения и для
+// отмены, — и они успели разойтись: на пути отмены оставались d_spectrum и
+// d_binomTable. Теперь порядок один, а сами буферы владеющие, так что даже
+// пропущенный здесь вызов не приводит к утечке: их освободит деструктор.
+void Worker::releaseResources()
+{
+    h_spectrum.reset();
+    h_matrix.reset();
+    binomTable = BinomTable();
+
+    d_spectrum.reset();
+    d_matrix.reset();
+    d_binomTable.reset();
+
+    stream.reset();
 }
 
 
 void Worker::pause()
 {
     paused.store(1);
+    if (Worker* sub = activeSub.load())
+        sub->pause();
 }
 
 void Worker::resume()
 {
     paused.store(0);
+    if (Worker* sub = activeSub.load())
+        sub->resume();
 }
 
 void Worker::cancel()
 {
     cancelled.store(1);
+    if (Worker* sub = activeSub.load())
+        sub->cancel();
 }
 void Worker::uncancel()
 {
@@ -1552,6 +2789,22 @@ bool Worker::isCancelled()
     return (bool)cancelled.load();
 }
 
+
+void Worker::setGridTuningThreshold(double seconds)
+{
+    tuneThresholdSec = seconds;
+}
+
+void Worker::setGridTuningVerbose(bool on)
+{
+    tuneVerbose = on;
+}
+
+void Worker::setCheckpointOpsPolicy(quint64 everyOps, quint64 stopAfter)
+{
+    checkpointEveryOps = everyOps;
+    stopAfterOps       = stopAfter;
+}
 
 void Worker::setSettings(const QJsonObject& jsonSettings) {
     this->settings = ComputationSettings::fromJson(jsonSettings);
@@ -1567,40 +2820,20 @@ void Worker::initializeRunState(LoadMode lm)
         runState.doneOps = 0;
         runState.spectrum.clear();
         exportSpectrum = false;
+        resumedInfoSets.clear();
         return;
     }
     else {
-        // Считаем хеш текущих настроек
-        quint64 hash = settings.computeHash();
-        // Хеш - имя чекпоинта
-        QString group = QString("checkpoints/%1").arg(hash);
-
-        QSettings s;
-        s.beginGroup(group);
-
-        // Проверяем, есть ли чекпоинт вообще
-        if (!s.contains("runState")){
-            s.endGroup();
+        AutosaveRecord record;
+        if (!autosave.load(settings.matrix, settings.algorithmType, record)
+            || !canResume(record, settings)) {
             initializeRunState(LoadMode::Reset);
             return;
         }
 
-        // --- Проверка settings ---
-        QJsonObject savedSettingsObj = s.value("settings").toJsonObject();
-        ComputationSettings saved = ComputationSettings::fromJson(savedSettingsObj);
-
-        // Защита от коллизий. Если случилась - сбрасываем RunState
-        if (!(saved == settings)) {
-            s.endGroup();
-            initializeRunState(LoadMode::Reset);
-            return;
-        }
-
-        // Если всё ок, то загружаем RunState
-        QJsonObject runObj = s.value("runState").toJsonObject();
-        runState = RunState::fromJson(runObj);
-
-        s.endGroup();
+        runState = record.state;
+        // Продолжать Брауэра–Циммермана можно только по множествам записи
+        resumedInfoSets = record.infoSets;
         // Ставим флаг, что надо выгрузить спектр
         exportSpectrum = true;
     }
