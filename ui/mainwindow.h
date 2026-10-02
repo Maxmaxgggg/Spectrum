@@ -4,7 +4,7 @@
 #include "qcustomplot.h"
 #include "settingsdialog.h"
 #include "worker.h"
-#include "defines.h"
+#include "constants.h"
 
 #include "autosavestore.h"
 #include "matrixmenu.h"

@@ -1,10 +1,10 @@
-#include "widget.h"
-#include "ui_widget.h"
+#include "mainwindow.h"
+#include "ui_mainwindow.h"
 
 #include "autosavedialog.h"
 #include "docktitlebar.h"
 #include "filterplaintextedit.h"
-#include "fonticons.h"
+#include "fluenticons.h"
 #include "format.h"
 #include "infosets.h"
 #include "matrixlibrary.h"
@@ -29,7 +29,7 @@ MainWindow::MainWindow(QWidget* parent)
     // Эффект прозрачности в .ui не задаётся — только кодом.
     saveLBLOpacityEffect = new QGraphicsOpacityEffect(ui->saveLBL);
     ui->saveLBL->setGraphicsEffect(saveLBLOpacityEffect);
-    ui->saveLBL->setToolTip(UIStrings::SAVE_LBL_BASE_TOOLTIP);
+    ui->saveLBL->setToolTip(UiStrings::SAVE_LBL_BASE_TOOLTIP);
     saveLBLOpacityEffect->setOpacity(0.0);
     settingsDialog = new SettingsDialog(this);
     spectrumPlot = std::make_unique<SpectrumPlot>(ui->spectrumCPT);
@@ -202,21 +202,21 @@ void MainWindow::updateExecuteButton()
 {
     switch (runState) {
         case RunState::Running:
-            ui->executePBN->setText(UIStrings::PAUSE_TEXT);
-            ui->executePBN->setToolTip(UIStrings::PAUSE_TOOLTIP);
+            ui->executePBN->setText(UiStrings::PAUSE_TEXT);
+            ui->executePBN->setToolTip(UiStrings::PAUSE_TOOLTIP);
             ui->executePBN->setIcon(FluentIcons::icon(this, FluentIcons::PAUSE));
             break;
 
         case RunState::Paused:
         case RunState::Loaded:
-            ui->executePBN->setText(UIStrings::CONTINUE_TEXT);
-            ui->executePBN->setToolTip(UIStrings::CONTINUE_TOOLTIP);
+            ui->executePBN->setText(UiStrings::CONTINUE_TEXT);
+            ui->executePBN->setToolTip(UiStrings::CONTINUE_TOOLTIP);
             ui->executePBN->setIcon(FluentIcons::icon(this, FluentIcons::PLAY));
             break;
 
         case RunState::Idle:
-            ui->executePBN->setText(UIStrings::START_TEXT);
-            ui->executePBN->setToolTip(UIStrings::START_TOOLTIP);
+            ui->executePBN->setText(UiStrings::START_TEXT);
+            ui->executePBN->setToolTip(UiStrings::START_TOOLTIP);
             ui->executePBN->setIcon(FluentIcons::icon(this, FluentIcons::PLAY));
             break;
     }
@@ -287,13 +287,13 @@ void MainWindow::setupDocks()
     matrixPages->addWidget(ui->matrixPTE);
     matrixPages->addWidget(matrix2PTE);
     matrixDock   = makeDock(matrixPages, tr("Матрица"),
-                            UIStrings::MATRIX_TOOLTIP,   "matrixDock");
+                            UiStrings::MATRIX_TOOLTIP,   "matrixDock");
 
     // Вкладки — в заголовке панели, в одной строке с её кнопками.
     matrixTabBar = new QTabBar;
     matrixTabBar->addTab(tr("Матрица 1"));
     matrixTabBar->addTab(tr("Матрица 2"));
-    matrixTabBar->setTabToolTip(1, UIStrings::MATRIX2_TOOLTIP);
+    matrixTabBar->setTabToolTip(1, UiStrings::MATRIX2_TOOLTIP);
     connect(matrixTabBar, &QTabBar::currentChanged, matrixPages, &QStackedWidget::setCurrentIndex);
     static_cast<DockTitleBar*>(matrixDock->titleBarWidget())->setTabBar(matrixTabBar);
 
@@ -307,13 +307,13 @@ void MainWindow::setupDocks()
         matrix2PTE->setPlainText(first);
     });
     spectrumDock = makeDock(ui->spectrumPTE, tr("Спектр кодовых слов"),
-                            UIStrings::SPECTRUM_TOOLTIP, "spectrumDock");
+                            UiStrings::SPECTRUM_TOOLTIP, "spectrumDock");
     plotDock     = makeDock(ui->spectrumCPT, tr("График спектра"),
-                            UIStrings::PLOT_TOOLTIP,     "plotDock");
+                            UiStrings::PLOT_TOOLTIP,     "plotDock");
 
     statsPanel = new StatsPanel(this);
     statsDock  = makeDock(statsPanel, tr("Ход расчёта"),
-                          UIStrings::STATS_TOOLTIP, "statsDock");
+                          UiStrings::STATS_TOOLTIP, "statsDock");
 
     // Швартуется только первый док; остальные добавляет splitDockWidget. Если
     // добавить все три через addDockWidget, они складываются в одну область
@@ -352,7 +352,7 @@ void MainWindow::setupDocks()
     ui->viewMNU->addAction(plotDock->toggleViewAction());
     ui->viewMNU->addAction(statsDock->toggleViewAction());
     ui->viewMNU->addSeparator();
-    ui->viewMNU->addAction(UIStrings::VIEW_RESET_TEXT, this, &MainWindow::resetLayout);
+    ui->viewMNU->addAction(UiStrings::VIEW_RESET_TEXT, this, &MainWindow::resetLayout);
 }
 
 void MainWindow::updateMatrixTabs()
@@ -380,11 +380,11 @@ void MainWindow::resetLayout()
 }
 
 void MainWindow::setToolTips() {
-    ui->cancelPBN->setToolTip(UIStrings::CANCEL_TOOLTIP);
+    ui->cancelPBN->setToolTip(UiStrings::CANCEL_TOOLTIP);
     // Квадрат остановки у отмены не меняется, поэтому ставится один раз.
     ui->cancelPBN->setIcon(FluentIcons::icon(this, FluentIcons::STOP));
     updateExecuteButton();
-    ui->exitPBN->setToolTip(UIStrings::EXIT_TOOLTIP);
+    ui->exitPBN->setToolTip(UiStrings::EXIT_TOOLTIP);
     ui->exitPBN->setIcon(FluentIcons::icon(this, FluentIcons::EXIT));
 }
 
@@ -441,7 +441,7 @@ void MainWindow::connectSettingsDialog()
             // матрице лезет за её первую строку.
             const QString error = matrixError();
             if (!error.isEmpty()) {
-                QMessageBox::warning(this, UIStrings::ERROR_TITLE, error);
+                QMessageBox::warning(this, UiStrings::ERROR_TITLE, error);
                 settingsDialog->applyMeasuredRate(0.0);
                 return;
             }
@@ -533,7 +533,7 @@ void MainWindow::startComputation()
     const bool resuming = runState == RunState::Loaded;
 
     if (!workerPtr) {
-        QMessageBox::warning(this, UIStrings::ERROR_TITLE, tr("Worker не подключён"));
+        QMessageBox::warning(this, UiStrings::ERROR_TITLE, tr("Worker не подключён"));
         return;
     }
 
@@ -542,7 +542,7 @@ void MainWindow::startComputation()
     // «Готово» о расчёте, которого не было.
     const QString error = matrixError();
     if (!error.isEmpty()) {
-        QMessageBox::warning(this, UIStrings::ERROR_TITLE, error);
+        QMessageBox::warning(this, UiStrings::ERROR_TITLE, error);
         return;
     }
 
@@ -596,7 +596,7 @@ void MainWindow::pauseComputation()
         workerPtr->pause();
 
     runState = RunState::Paused;
-    setWindowTitle(UIStrings::PAUSE_TEXT);
+    setWindowTitle(UiStrings::PAUSE_TEXT);
     statsPanel->showState(tr("Пауза"));
     updateExecuteButton();
 }
@@ -613,7 +613,7 @@ void MainWindow::resumeComputation()
     // Оценка времени с прошлого запуска ещё актуальна — возвращаем её
     // в заголовок вместо «Пауза».
     setWindowTitle(remainingMinutes != -1 ? Format::remainingTime(remainingMinutes)
-                                          : UIStrings::MAIN_TITLE);
+                                          : UiStrings::MAIN_TITLE);
 }
 
 void MainWindow::on_exitPBN_clicked()
@@ -702,14 +702,14 @@ void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, d
     // Имя программы в заголовке остаётся: раньше он превращался просто в
     // "2 ч 15 мин", и в панели задач было непонятно, что это за окно.
     this->setWindowTitle(tr("%1 — осталось %2")
-                             .arg(UIStrings::MAIN_TITLE, Format::remainingTime(remainingMinutes)));
+                             .arg(UiStrings::MAIN_TITLE, Format::remainingTime(remainingMinutes)));
 }
 void MainWindow::showSaveLBL()
 {
-    ui->saveLBL->setToolTip(UIStrings::SAVE_LBL_ICON_TOOLTIP);
+    ui->saveLBL->setToolTip(UiStrings::SAVE_LBL_ICON_TOOLTIP);
     QPropertyAnimation* anim = new QPropertyAnimation(saveLBLOpacityEffect, "opacity", this);
     if (ui->saveLBL->underMouse()) {
-        QToolTip::showText(QCursor::pos(), UIStrings::SAVE_LBL_ICON_TOOLTIP, ui->saveLBL);
+        QToolTip::showText(QCursor::pos(), UiStrings::SAVE_LBL_ICON_TOOLTIP, ui->saveLBL);
     }
 
     anim->setDuration(1000); // общая длительность
@@ -718,9 +718,9 @@ void MainWindow::showSaveLBL()
     anim->setEndValue(0.0);
     connect(anim, &QPropertyAnimation::finished, this, [this]() {
         // Возвращаем базовый tooltip
-        ui->saveLBL->setToolTip(UIStrings::SAVE_LBL_BASE_TOOLTIP);
+        ui->saveLBL->setToolTip(UiStrings::SAVE_LBL_BASE_TOOLTIP);
         if (ui->saveLBL->underMouse()) {
-            QToolTip::showText(QCursor::pos(), UIStrings::SAVE_LBL_BASE_TOOLTIP, ui->saveLBL);
+            QToolTip::showText(QCursor::pos(), UiStrings::SAVE_LBL_BASE_TOOLTIP, ui->saveLBL);
         }
         });
 
@@ -765,7 +765,7 @@ void MainWindow::updateMatrixTitles()
 }
 void MainWindow::handleError(const QString& message)
 {
-    QMessageBox::critical(this, UIStrings::ERROR_TITLE, message);
+    QMessageBox::critical(this, UiStrings::ERROR_TITLE, message);
     // reset UI
     runState = RunState::Idle;
     updateExecuteButton();
@@ -787,7 +787,7 @@ void MainWindow::handleFinished(int elapsedSec)
     matrixMenu->setActionsEnabled(true);
 
     updateExecuteButton();
-    this->setWindowTitle( UIStrings::MAIN_TITLE  );
+    this->setWindowTitle( UiStrings::MAIN_TITLE  );
     if ( workerPtr->isCancelled() ) {
         workerPtr->uncancel();
         // Расчёт останавливали ради загрузки сохранения — вот теперь можно.
@@ -796,13 +796,13 @@ void MainWindow::handleFinished(int elapsedSec)
             applyAutosaveNow(pendingMatrix, pendingRecord);
             return;
         }
-        statsPanel->showState( UIStrings::CANCEL_TEXT );
+        statsPanel->showState( UiStrings::CANCEL_TEXT );
         return;
     }
     // Меньше секунды — «0 с» выглядело бы как сбой замера.
     const QString elapsedStr = elapsedSec > 0 ? Format::duration(elapsedSec)
                                               : tr("< 1 с");
-    statsPanel->showState( UIStrings::READY_TEXT + elapsedStr );
+    statsPanel->showState( UiStrings::READY_TEXT + elapsedStr );
 
     // Расчёт успел добежать до конца, пока пользователь выбирал запись.
     if (pendingAutosave) {

@@ -1,4 +1,4 @@
-#include "fonticons.h"
+#include "fluenticons.h"
 
 #include <QFont>
 #include <QPainter>

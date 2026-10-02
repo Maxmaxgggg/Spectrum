@@ -2,7 +2,7 @@
 #include <vector>
 #include <stdexcept>
 
-#include "computeSpectrumKernel.cuh"
+#include "spectrumkernel.cuh"
 #include "bitops.h"
 #include "combinations.h"
 #include "wordvariants.h"
@@ -312,14 +312,14 @@ __global__ void computeSpectrumKernelShortT(
         // числовой индекс) и идём Госпером вперёд. Внутри нити порядок обхода
         // получается обратным, но для гистограммы это безразлично: набор
         // комбинаций тот же самый.
-        quint64 revMask = Bits::reverseLowBits(
-            Comb::unrankMask((unsigned)k, (unsigned)r, chunkOffset + end - 1,
-                             DeviceBinom{ d_binomTable }), k);
+        quint64 revMask = BitOps::reverseLowBits(
+            Combinations::unrankMask((unsigned)k, (unsigned)r, chunkOffset + end - 1,
+                                     DeviceBinom{ d_binomTable }), k);
 
         // Бит p развёрнутой маски соответствует строке k-1-p.
         quint64 temp = revMask;
         while (temp) {
-            const int p = Bits::lowestSetBit(temp);
+            const int p = BitOps::lowestSetBit(temp);
             temp &= (temp - 1);
             xorRowFromShared<WORDS>(codeword, &s_matrix[(k - 1 - p) * words], words);
         }
@@ -346,13 +346,13 @@ __global__ void computeSpectrumKernelShortT(
         // При r = 0 и r = k комбинация всего одна, и цикл не выполняется —
         // gosperNext на нулевой маске звать нельзя.
         for (quint64 i = 1; i < count; ++i) {
-            const quint64 nextRev = Bits::gosperNext(revMask);
+            const quint64 nextRev = BitOps::gosperNext(revMask);
 
             // Вошедшие и вышедшие строки XOR-ятся одинаково: XOR сам себе
             // обратен, разделять их незачем.
             quint64 changed = revMask ^ nextRev;
             while (changed) {
-                const int p = Bits::lowestSetBit(changed);
+                const int p = BitOps::lowestSetBit(changed);
                 changed &= (changed - 1);
                 xorRowFromShared<WORDS>(codeword, &s_matrix[(k - 1 - p) * words], words);
             }
@@ -559,12 +559,12 @@ __global__ void computeSpectrumKernelLongT(
             for (int i = 0; i < numOfOnes; ++i)
                 old_a[i] = a[i];
 
-            if (!Comb::nextPositions(a, int(numOfOnes), numRows))
+            if (!Combinations::nextPositions(a, int(numOfOnes), numRows))
                 break;
 
             int16_t changed[2 * Constants::MAX_POSITIONS];
             int numChanged;
-            Comb::diffPositions(old_a, a, int(numOfOnes), changed, numChanged);
+            Combinations::diffPositions(old_a, a, int(numOfOnes), changed, numChanged);
 
             if (numChanged > numOfOnes) {
                 #pragma unroll
@@ -708,7 +708,7 @@ __global__ void computeSpectrumKernelGrayShortT(
         // 6) полный XOR для начальной маски
         quint64 temp = mask;
         while (temp) {
-            const int pos = Bits::lowestSetBit(temp);
+            const int pos = BitOps::lowestSetBit(temp);
             temp &= (temp - 1ULL);
             xorRowFromShared<WORDS>(codeword, &s_matrix[pos * words], words);
         }
@@ -728,7 +728,7 @@ __global__ void computeSpectrumKernelGrayShortT(
 
             quint64 changed = mask ^ next_mask;
             while (changed) {
-                const int pos = Bits::lowestSetBit(changed);
+                const int pos = BitOps::lowestSetBit(changed);
                 changed &= (changed - 1ULL);
                 xorRowFromShared<WORDS>(codeword, &s_matrix[pos * words], words);
             }

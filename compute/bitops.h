@@ -4,7 +4,7 @@
 //
 // Раньше каждый жил в двух-трёх копиях: gosperNext и разворот битов — в
 // worker.cpp и в ядре коротких кодов, popcount и поиск младшей единицы — в
-// worker.cpp, leonsearch и productcode, причём на хосте через интринсики
+// worker.cpp, leon и product, причём на хосте через интринсики
 // MSVC без запасного пути для других компиляторов. Здесь одна запись на всё:
 // в ядре функция берёт встроенную функцию CUDA, на хосте — интринсик MSVC
 // или встроенную функцию GCC и Clang.
@@ -25,7 +25,7 @@
     #define SPECTRUM_HD inline
 #endif
 
-namespace Bits {
+namespace BitOps {
 
 // Число единиц.
 SPECTRUM_HD int popcount64(unsigned long long v)
@@ -99,4 +99,4 @@ SPECTRUM_HD unsigned long long mulHigh64(unsigned long long a, unsigned long lon
 #endif
 }
 
-} // namespace Bits
+} // namespace BitOps

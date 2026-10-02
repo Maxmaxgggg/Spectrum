@@ -1,4 +1,4 @@
-#include "leonsearch.h"
+#include "leon.h"
 #include "mixing.h"
 
 #ifdef Q_OS_WIN
@@ -330,9 +330,9 @@ WordTable::WordTable(int wordsPerRow, int maxWeight)
 
 quint64 hashWord(const quint64* word, int wordsPerRow)
 {
-    quint64 h = Mix::wordHashSeed();
+    quint64 h = Mixing::wordHashSeed();
     for (int w = 0; w < wordsPerRow; ++w)
-        h = Mix::wordHashStep(h, word[w]);
+        h = Mixing::wordHashStep(h, word[w]);
     return h;
 }
 
@@ -518,7 +518,7 @@ void ShardedWordTable::addBatch(const quint64* words, size_t count, bool countHi
                 const quint64* word = words + i * m_words;
                 int weight = 0;
                 for (int w = 0; w < m_words; ++w)
-                    weight += Bits::popcount64(word[w]);
+                    weight += BitOps::popcount64(word[w]);
                 table.add(word, weight, countHits);
             }
         }
@@ -581,13 +581,13 @@ std::vector<double> ShardedWordTable::unseenByWeight() const
     return chaoUnseen(f1, f2);
 }
 
-// Порядок столбцов — тот же, что у ядра (Mix::shuffleForTrial): попытка с
+// Порядок столбцов — тот же, что у ядра (Mixing::shuffleForTrial): попытка с
 // одним номером даёт одно и то же множество на CPU и на GPU.
 void shuffledColumns(int cols, quint64 trialIndex, std::vector<int>& order)
 {
     order.resize(size_t(cols));
     std::iota(order.begin(), order.end(), 0);
-    Mix::shuffleForTrial(order.data(), cols, trialIndex);
+    Mixing::shuffleForTrial(order.data(), cols, trialIndex);
 }
 
 } // namespace Leon

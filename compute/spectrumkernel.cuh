@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include "defines.h"
+#include "constants.h"
 #include <vector>
 typedef uint64_t quint64;
 

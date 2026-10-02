@@ -275,7 +275,7 @@ bool trial(const quint64* matrix, int rows, int cols, int wordsPerRow,
                 int weight = 0;
                 for (int w = 0; w < words; ++w) {
                     word[size_t(w)] ^= row[w];
-                    weight += Bits::popcount64(word[size_t(w)]);
+                    weight += BitOps::popcount64(word[size_t(w)]);
                 }
                 if (weight > 0 && weight <= maxWeight)
                     visit(word.data(), weight);
@@ -424,7 +424,7 @@ bool trialStern(const quint64* matrix, int rows, int cols, int wordsPerRow,
             for (int w = 0; w < words; ++w) {
                 const quint64 x = r0[w] ^ r1[w] ^ r2[w] ^ r3[w];
                 word[size_t(w)] = x;
-                weight += Bits::popcount64(x);
+                weight += BitOps::popcount64(x);
             }
             if (weight > 0 && weight <= maxWeight)
                 visit(word.data(), weight);

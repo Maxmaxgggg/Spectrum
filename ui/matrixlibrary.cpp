@@ -1,6 +1,6 @@
 #include "matrixlibrary.h"
 
-#include "defines.h"
+#include "constants.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>

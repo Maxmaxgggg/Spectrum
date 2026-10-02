@@ -1,6 +1,6 @@
 #include "tabswapbutton.h"
 
-#include "fonticons.h"
+#include "fluenticons.h"
 
 #include <QEvent>
 #include <QHoverEvent>

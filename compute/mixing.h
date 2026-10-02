@@ -5,12 +5,12 @@
 // Здесь важна побитовая одинаковость, а не только смысл. Попытка случайного
 // поиска с одним номером обязана давать один и тот же порядок столбцов на CPU
 // и на GPU — так ядро и проверяется, сличением с процессором. Раньше это
-// держалось на двух копиях одних и тех же констант, в leonsearch.cpp и в
+// держалось на двух копиях одних и тех же констант, в leon.cpp и в
 // leonkernel.cu, и на комментарии «обязан совпадать бит в бит».
 
 #include "bitops.h"
 
-namespace Mix {
+namespace Mixing {
 
 // Перемешивание номера в затравку (splitmix64): соседние номера дают
 // несвязанные последовательности.
@@ -40,13 +40,13 @@ struct Xorshift64
 
 // Тасование Фишера–Йетса для попытки с этим номером: порядок столбцов
 // случайного поиска. Индекс берётся старшими битами произведения, без
-// деления (см. Bits::mulHigh64).
+// деления (см. BitOps::mulHigh64).
 template <class T>
 SPECTRUM_HD void shuffleForTrial(T* order, int count, unsigned long long trialIndex)
 {
     Xorshift64 rng{ splitmix64(trialIndex) | 1ULL };
     for (int c = count - 1; c > 0; --c) {
-        const int j = int(Bits::mulHigh64(rng.next(), static_cast<unsigned long long>(c + 1)));
+        const int j = int(BitOps::mulHigh64(rng.next(), static_cast<unsigned long long>(c + 1)));
         const T t = order[c];
         order[c] = order[j];
         order[j] = t;
@@ -67,4 +67,4 @@ SPECTRUM_HD unsigned long long wordHashStep(unsigned long long h, unsigned long 
     return h;
 }
 
-} // namespace Mix
+} // namespace Mixing

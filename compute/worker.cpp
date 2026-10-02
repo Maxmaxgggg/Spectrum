@@ -686,9 +686,9 @@ void Worker::tuneGrid(CodeGeometry& g)
 
         #pragma omp parallel for schedule(static)
         for (long long i = 0; i < (long long)slotCount; ++i) {
-            Comb::unrankPositions(layerRank + quint64(i) * task.measureMasksPerThread,
-                                  rows, ones, host + i * Constants::MAX_POSITIONS,
-                                  Constants::MAX_POSITIONS, binomTable);
+            Combinations::unrankPositions(layerRank + quint64(i) * task.measureMasksPerThread,
+                                          rows, ones, host + i * Constants::MAX_POSITIONS,
+                                          Constants::MAX_POSITIONS, binomTable);
         }
 
         CUDA_CALL(cudaMemcpy(d_tuneSlots.get(), host,

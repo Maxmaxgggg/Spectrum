@@ -14,10 +14,10 @@
     <ClCompile Include="compute\dualcode.cpp" />
     <ClCompile Include="compute\gridtuner.cpp" />
     <ClCompile Include="compute\infosets.cpp" />
-    <ClCompile Include="compute\bchcode.cpp" />
-    <ClCompile Include="compute\hammingcode.cpp" />
-    <ClCompile Include="compute\leonsearch.cpp" />
-    <ClCompile Include="compute\productcode.cpp" />
+    <ClCompile Include="compute\bch.cpp" />
+    <ClCompile Include="compute\hamming.cpp" />
+    <ClCompile Include="compute\leon.cpp" />
+    <ClCompile Include="compute\product.cpp" />
     <ClCompile Include="compute\worker.cpp" />
     <ClCompile Include="compute\worker_cpu.cpp" />
     <ClCompile Include="compute\worker_gpu.cpp" />
@@ -36,22 +36,22 @@
     <ClCompile Include="ui\statspanel.cpp" />
     <ClCompile Include="ui\format.cpp" />
     <ClCompile Include="ui\cachingstyle.cpp" />
-    <ClCompile Include="ui\fonticons.cpp" />
+    <ClCompile Include="ui\fluenticons.cpp" />
     <ClCompile Include="ui\creatematrixdialog.cpp" />
     <ClCompile Include="ui\matrixlibrary.cpp" />
     <ClCompile Include="ui\matrixmenu.cpp" />
     <ClCompile Include="ui\matrixslotsdialog.cpp" />
     <ClCompile Include="ui\spectrumplot.cpp" />
     <ClCompile Include="ui\taskbarprogress.cpp" />
-    <ClCompile Include="ui\widget.cpp" />
+    <ClCompile Include="ui\mainwindow.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="compute\computeSpectrumKernel.cuh" />
+    <ClInclude Include="compute\spectrumkernel.cuh" />
     <ClInclude Include="compute\dualcode.h" />
     <ClInclude Include="compute\gridtuner.h" />
     <ClInclude Include="compute\infosets.h" />
-    <ClInclude Include="compute\leonsearch.h" />
-    <ClInclude Include="compute\productcode.h" />
+    <ClInclude Include="compute\leon.h" />
+    <ClInclude Include="compute\product.h" />
     <ClInclude Include="compute\leonkernel.cuh" />
     <ClInclude Include="compute\spectrumring.h" />
     <ClInclude Include="compute\bitops.h" />
@@ -60,12 +60,12 @@
     <ClInclude Include="compute\combinations.h" />
     <ClInclude Include="compute\gpuinfo.h" />
     <ClInclude Include="compute\worker_p.h" />
-    <ClInclude Include="defines.h" />
+    <ClInclude Include="constants.h" />
     <ClInclude Include="storage\autosavestore.h" />
     <ClInclude Include="ui\axisticks.h" />
     <ClInclude Include="ui\updateintervals.h" />
     <ClInclude Include="ui\format.h" />
-    <ClInclude Include="ui\fonticons.h" />
+    <ClInclude Include="ui\fluenticons.h" />
     <ClInclude Include="ui\matrixlibrary.h" />
     <QtMoc Include="ui\docktitlebar.h" />
     <QtMoc Include="ui\tabswapbutton.h" />
@@ -84,18 +84,18 @@
     <QtMoc Include="ui\spectrumtextedit.h" />
     <QtMoc Include="ui\settingsdialog.h" />
     <QtMoc Include="qcustomplot.h" />
-    <QtMoc Include="ui\widget.h" />
+    <QtMoc Include="ui\mainwindow.h" />
   </ItemGroup>
   <ItemGroup>
     <QtUic Include="ui\settingsdialog.ui" />
-    <QtUic Include="ui\widget.ui" />
+    <QtUic Include="ui\mainwindow.ui" />
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="compute\computeSpectrumKernel.cu" />
+    <CudaCompile Include="compute\spectrumkernel.cu" />
     <CudaCompile Include="compute\leonkernel.cu" />
   </ItemGroup>
   <ItemGroup>
-    <QtRcc Include="q.qrc" />
+    <QtRcc Include="Spectrum.qrc" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Spectrum.rc" />

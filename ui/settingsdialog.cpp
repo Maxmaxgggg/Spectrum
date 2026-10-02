@@ -1,7 +1,7 @@
 #include "settingsdialog.h"
 #include "ui_settingsdialog.h"
 #include "updateintervals.h"
-#include "leonsearch.h"
+#include "leon.h"
 #include "gpuinfo.h"
 
 #include <algorithm>

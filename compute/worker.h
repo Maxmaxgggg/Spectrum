@@ -11,14 +11,14 @@
 
 // Заголовок без CUDA, OpenMP и GMP: его видит интерфейс. Память на
 // видеокарте и всё, что касается перебора по чанкам, — в worker_p.h.
-#include "defines.h"
+#include "constants.h"
 #include "settings.h"
 #include "types.h"
 #include "progresstracker.h"
 #include "binomtable.h"
 #include "infosets.h"
-#include "leonsearch.h"
-#include "productcode.h"
+#include "leon.h"
+#include "product.h"
 #include "autosavestore.h"
 
 enum LoadMode {

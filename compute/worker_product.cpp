@@ -144,7 +144,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     return c;
 }
 
-// Код произведения C1 ⊗ C2 — см. productcode.h. Три шага: минимальные веса
+// Код произведения C1 ⊗ C2 — см. product.h. Три шага: минимальные веса
 // компонент, спектры и списки лёгких слов до нужного предела, свёртка по
 // рангам. Отмена по ходу — исключение, как и ошибка компоненты.
 void Worker::computeSpectrumProduct(const CodeGeometry& g)

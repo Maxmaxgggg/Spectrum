@@ -1,8 +1,8 @@
 #pragma once
 
-#include "bchcode.h"
-#include "hammingcode.h"
-#include "paritycode.h"
+#include "bch.h"
+#include "hamming.h"
+#include "parity.h"
 
 #include <QDialog>
 #include <QVector>

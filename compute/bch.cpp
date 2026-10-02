@@ -1,4 +1,4 @@
-#include "bchcode.h"
+#include "bch.h"
 
 #include <algorithm>
 #include <numeric>

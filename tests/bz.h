@@ -34,7 +34,7 @@
 #include <functional>
 #include <vector>
 
-namespace BZ {
+namespace Bz {
 
 struct BitMatrix
 {
@@ -292,4 +292,4 @@ inline QStringList systematicRandom(int rows, int cols, quint64 seed)
     return out;
 }
 
-} // namespace BZ
+} // namespace Bz

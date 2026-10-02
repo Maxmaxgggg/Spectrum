@@ -77,7 +77,7 @@ namespace DefaultValues
 }
 
 
-namespace UIStrings
+namespace UiStrings
 {
     // Вторая компонента кода произведения.
     constexpr const char MATRIX2_TOOLTIP[]          = "Порождающая матрица второй компоненты кода-произведения; первая — в панели «Матрица»";

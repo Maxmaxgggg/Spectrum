@@ -42,7 +42,7 @@ private:
 };
 
 // Проверка вызова CUDA: ошибка — исключение CudaError. Других версий макроса
-// нет: прежняя, звавшая abort(), жила в computeSpectrumKernel.cuh и
+// нет: прежняя, звавшая abort(), жила в spectrumkernel.cuh и
 // перекрывалась этой лишь при нужном порядке #include.
 #define CUDA_CALL(call)                                        \
     do {                                                       \

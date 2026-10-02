@@ -1,6 +1,6 @@
-#include "hammingcode.h"
+#include "hamming.h"
 
-#include "bchcode.h"
+#include "bch.h"
 
 namespace Hamming {
 

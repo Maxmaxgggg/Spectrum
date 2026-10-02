@@ -1,6 +1,6 @@
 #include "leonkernel.cuh"
 
-#include "defines.h"
+#include "constants.h"
 #include "mixing.h"
 #include "wordvariants.h"
 
@@ -39,9 +39,9 @@ __device__ __forceinline__ bool bitAt(const uint64_t* row, int c)
 // Тот же хеш, что Leon::hashWord на хосте — по wordsPerRow словам.
 __device__ __forceinline__ uint64_t fingerprint(const LeonLaunch& P, const uint64_t* a, const uint64_t* b)
 {
-    uint64_t h = Mix::wordHashSeed();
+    uint64_t h = Mixing::wordHashSeed();
     for (int w = 0; w < P.wordsPerRow; ++w)
-        h = Mix::wordHashStep(h, a[w] ^ (b ? b[w] : 0ULL));
+        h = Mixing::wordHashStep(h, a[w] ^ (b ? b[w] : 0ULL));
     return h == 0ULL ? 1ULL : h;   // ноль значит «пусто»
 }
 
@@ -158,7 +158,7 @@ __global__ void __launch_bounds__(LEON_THREADS, WORDS <= 8 ? 4 : 2) leonTrialsKe
     //    результаты двух путей сравнимы напрямую — этим и проверяется ядро.
     if (tid == 0) {
         for (int c = 0; c < n; ++c) order[c] = uint16_t(c);
-        Mix::shuffleForTrial(order, n, P.firstTrial + blockIdx.x);
+        Mixing::shuffleForTrial(order, n, P.firstTrial + blockIdx.x);
     }
     __syncthreads();
 

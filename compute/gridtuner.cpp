@@ -1,6 +1,6 @@
 #include "gridtuner.h"
 
-#include "computeSpectrumKernel.cuh"
+#include "spectrumkernel.cuh"
 
 #include <algorithm>
 #include <chrono>

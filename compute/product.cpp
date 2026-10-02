@@ -1,4 +1,4 @@
-#include "productcode.h"
+#include "product.h"
 
 #include "infosets.h"
 
@@ -29,7 +29,7 @@ void cellsOf(const std::vector<const quint64*>& tuple, int words, std::vector<in
                 const quint64 a = tuple[size_t(i)][w];
                 acc &= (u >> i) & 1 ? a : ~a;
             }
-            total += Bits::popcount64(acc);
+            total += BitOps::popcount64(acc);
         }
         // Дополнение за пределами n даёт единицы в старших битах, но хотя бы
         // один множитель у ненулевого u — само слово, там они нули.
@@ -81,7 +81,7 @@ Component bruteForce(const QStringList& rows, int wordsUpTo,
         for (quint64 idx = start; idx < end; ++idx) {
             int weight = 0;
             for (int w = 0; w < words; ++w)
-                weight += Bits::popcount64(word[size_t(w)]);
+                weight += BitOps::popcount64(word[size_t(w)]);
             ++spectrum[size_t(weight)];
             if (weight > 0 && weight <= wordsUpTo) {
                 mine.insert(mine.end(), word.begin(), word.end());
@@ -101,7 +101,7 @@ Component bruteForce(const QStringList& rows, int wordsUpTo,
             const quint64 next = idx + 1;
             if (next >= total)
                 break;
-            const int flip = Bits::lowestSetBit(next);
+            const int flip = BitOps::lowestSetBit(next);
             for (int w = 0; w < words; ++w)
                 word[size_t(w)] ^= packed[size_t(flip) * words + w];
         }
@@ -278,7 +278,7 @@ struct ProfileWalker
                 quint64* dst = span.data() + size_t(base + 1 + j) * words;
                 for (int w = 0; w < words; ++w) {
                     dst[w] = a[w] ^ p[w];
-                    wt += Bits::popcount64(dst[w]);
+                    wt += BitOps::popcount64(dst[w]);
                 }
                 if (wt == 0) { dependent = true; break; }
                 spanWeights[size_t(base + 1 + j)] = wt;
@@ -468,7 +468,7 @@ std::vector<quint64> rankR(const ProfileMap& p1, const ProfileMap& p2, int r, qu
         for (int u = 1; u <= cellCount; ++u) {
             int sum = 0;
             for (int v = 1; v <= cellCount; ++v)
-                if (Bits::popcount64(quint64(u & v)) & 1)
+                if (BitOps::popcount64(quint64(u & v)) & 1)
                     sum += q[size_t(v - 1)];
             rt.wq[size_t(u - 1)] = sum;
         }

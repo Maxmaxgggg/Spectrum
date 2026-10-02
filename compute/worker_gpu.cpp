@@ -120,9 +120,9 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
         for (quint64 tid = 0; tid < numStartMasks; ++tid) {
             const quint64 rank = slice.offset + tid * masksPerThread;
             assert(rank < binomTable(numOfRows, r));
-            Comb::unrankPositions(rank, int(numOfRows), int(r),
-                                  hostSlots + tid * Constants::MAX_POSITIONS,
-                                  Constants::MAX_POSITIONS, binomTable);
+            Combinations::unrankPositions(rank, int(numOfRows), int(r),
+                                          hostSlots + tid * Constants::MAX_POSITIONS,
+                                          Constants::MAX_POSITIONS, binomTable);
         }
 
         CUDA_CALL(cudaMemcpyAsync(d_slots.get(), hostSlots, numStartMasks * slotBytes,

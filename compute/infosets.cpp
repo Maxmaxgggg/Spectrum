@@ -119,7 +119,7 @@ std::vector<InfoSet> find(const quint64* matrix, int rows, int cols, int wordsPe
     // Свой генератор, а не std::mt19937: поиск обязан давать одни и те же
     // множества на любой сборке, а перемешивание стандартной библиотеки
     // этого не обещает.
-    Mix::Xorshift64 rng{ 0x9E3779B97F4A7C15ULL };
+    Mixing::Xorshift64 rng{ 0x9E3779B97F4A7C15ULL };
     std::vector<int>     order(static_cast<size_t>(cols));
     std::vector<quint64> used(size_t(wordsPerRow), 0ULL);
 

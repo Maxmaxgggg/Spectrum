@@ -40,11 +40,11 @@
 #include "bz.h"
 #include "isd.h"
 #include "leonkernel.cuh"
-#include "leonsearch.h"
-#include "productcode.h"
-#include "bchcode.h"
-#include "hammingcode.h"
-#include "paritycode.h"
+#include "leon.h"
+#include "product.h"
+#include "bch.h"
+#include "hamming.h"
+#include "parity.h"
 
 #ifdef Q_OS_WIN
     #define NOMINMAX
@@ -2321,7 +2321,7 @@ static void testProbeLeavesNoTrace()
 
 // ------------------------------------------------ Брауэр–Циммерман, прототип
 
-struct BZCase
+struct BzCase
 {
     QString     name;
     QStringList rows;
@@ -2329,13 +2329,13 @@ struct BZCase
     int         sets;
 };
 
-static QVector<BZCase> bzCases()
+static QVector<BzCase> bzCases()
 {
     return {
         { QStringLiteral("Голей [24,12], как есть"),       Reference::golay24_12(),                              4, 2 },
-        { QStringLiteral("случайный [40,16], перемешан"),  BZ::scramble(BZ::systematicRandom(16, 40, 7), 11),   4, 3 },
-        { QStringLiteral("случайный [60,20], перемешан"),  BZ::scramble(BZ::systematicRandom(20, 60, 3), 5),    4, 3 },
-        { QStringLiteral("случайный [96,24], перемешан"),  BZ::scramble(BZ::systematicRandom(24, 96, 9), 2),    5, 4 },
+        { QStringLiteral("случайный [40,16], перемешан"),  Bz::scramble(Bz::systematicRandom(16, 40, 7), 11),   4, 3 },
+        { QStringLiteral("случайный [60,20], перемешан"),  Bz::scramble(Bz::systematicRandom(20, 60, 3), 5),    4, 3 },
+        { QStringLiteral("случайный [96,24], перемешан"),  Bz::scramble(Bz::systematicRandom(24, 96, 9), 2),    5, 4 },
     };
 }
 
@@ -2345,13 +2345,13 @@ static QVector<BZCase> bzCases()
 // Запуск: SpectrumTests.exe --bz
 static void bzReport()
 {
-    for (const BZCase& c : bzCases()) {
+    for (const BzCase& c : bzCases()) {
         const int k = c.rows.size();
         const int n = c.rows.first().length();
 
         const Reference::Spectrum exact = Reference::bruteForce(c.rows);
-        const BZ::Result          bz    = BZ::run(c.rows, c.r, c.sets);
-        const Reference::Spectrum naive = BZ::naivePartial(c.rows, c.r);
+        const Bz::Result          bz    = Bz::run(c.rows, c.r, c.sets);
+        const Reference::Spectrum naive = Bz::naivePartial(c.rows, c.r);
 
         QStringList overlaps;
         for (int o : bz.overlaps) overlaps << QString::number(o);
@@ -2401,11 +2401,11 @@ static int bzFile(const QString& path, int r, int maxSets)
     out.flush();
 
     auto t = std::chrono::steady_clock::now();
-    const BZ::Result bz = BZ::run(cfg.matrix, r, maxSets);
+    const Bz::Result bz = Bz::run(cfg.matrix, r, maxSets);
     const double bzSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
 
     t = std::chrono::steady_clock::now();
-    const Reference::Spectrum naive = BZ::naivePartial(cfg.matrix, r);
+    const Reference::Spectrum naive = Bz::naivePartial(cfg.matrix, r);
     const double naiveSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
 
     QStringList overlaps;
@@ -2551,7 +2551,7 @@ static void testBrouwerZimmermannWorker()
     out << Qt::endl << QStringLiteral("Брауэр–Циммерман в расчёте: CPU и GPU, короткий и длинный пути") << Qt::endl;
 
     // Короткие коды с точным спектром: гарантия и полный перебор.
-    for (const BZCase& c : bzCases()) {
+    for (const BzCase& c : bzCases()) {
         const Spectrum exact = Reference::bruteForce(c.rows);
         RunConfig cfg;
         cfg.matrix    = c.rows;
@@ -2573,7 +2573,7 @@ static void testBrouwerZimmermannWorker()
     // Длинный путь: k > 63. Точного спектра нет, поэтому CPU против GPU и
     // против прототипа ниже общей гарантии.
     {
-        const QStringList rows = BZ::scramble(BZ::systematicRandom(66, 140, 21), 4);
+        const QStringList rows = Bz::scramble(Bz::systematicRandom(66, 140, 21), 4);
         RunConfig cfg;
         cfg.matrix    = rows;
         cfg.algorithm = Algorithm::BrouwerZimmermann;
@@ -2604,7 +2604,7 @@ static void testBrouwerZimmermannWorker()
 
         // Прототип ищет множества сам, и выше гарантии его находки другие.
         // Ниже — обязан совпасть.
-        const BZ::Result proto = BZ::run(rows, 2, 3);
+        const Bz::Result proto = Bz::run(rows, 2, 3);
         const int common = std::min(proto.guaranteedBelow, exactCpu + 1);
         bool ok = true;
         for (int w = 0; w < common; ++w)
@@ -2626,7 +2626,7 @@ static void testBrouwerZimmermannWorker()
         // и обрыв приходится ровно на границу множества: 903 операции, стоп
         // после 300 — это середина слоя из двух строк.
         RunConfig cfg;
-        cfg.matrix    = BZ::scramble(BZ::systematicRandom(24, 96, 9), 2);
+        cfg.matrix    = Bz::scramble(Bz::systematicRandom(24, 96, 9), 2);
         cfg.algorithm = Algorithm::BrouwerZimmermann;
         cfg.bzWeight  = 8;
         cfg.device    = ComputeDevice::CPU;
@@ -2640,7 +2640,7 @@ static void testBrouwerZimmermannWorker()
         // Слой из пяти строк на 48 — 1,7 млн комбинаций, больше чанка в
         // миллион: обрыв попадает внутрь множества.
         RunConfig mid;
-        mid.matrix    = BZ::scramble(BZ::systematicRandom(48, 96, 33), 6);
+        mid.matrix    = Bz::scramble(Bz::systematicRandom(48, 96, 33), 6);
         mid.algorithm = Algorithm::BrouwerZimmermann;
         mid.bzWeight  = 11;
         mid.device    = ComputeDevice::CPU;
@@ -2651,7 +2651,7 @@ static void testBrouwerZimmermannWorker()
         // Длинный путь: слой из пяти строк на 66 — 9,7 млн масок на множество,
         // чанк GPU при 8x32 нитях — миллион.
         RunConfig lng;
-        lng.matrix     = BZ::scramble(BZ::systematicRandom(66, 140, 21), 4);
+        lng.matrix     = Bz::scramble(Bz::systematicRandom(66, 140, 21), 4);
         lng.algorithm  = Algorithm::BrouwerZimmermann;
         lng.bzWeight   = 9;
         lng.device     = ComputeDevice::CPU;
@@ -2839,9 +2839,9 @@ static void testLeonWorker()
     struct Case { QString name; QStringList rows; int weight; };
     const QVector<Case> cases = {
         { QStringLiteral("Голей [24,12]"),           Reference::golay24_12(),                             12 },
-        { QStringLiteral("случайный [40,16]"),       BZ::scramble(BZ::systematicRandom(16, 40, 7), 11),  12 },
-        { QStringLiteral("случайный [60,20]"),       BZ::scramble(BZ::systematicRandom(20, 60, 3), 5),   15 },
-        { QStringLiteral("случайный [96,24]"),       BZ::scramble(BZ::systematicRandom(24, 96, 9), 2),   20 },
+        { QStringLiteral("случайный [40,16]"),       Bz::scramble(Bz::systematicRandom(16, 40, 7), 11),  12 },
+        { QStringLiteral("случайный [60,20]"),       Bz::scramble(Bz::systematicRandom(20, 60, 3), 5),   15 },
+        { QStringLiteral("случайный [96,24]"),       Bz::scramble(Bz::systematicRandom(24, 96, 9), 2),   20 },
     };
     auto checkDevice = [&](const Case& c, const Spectrum& exact, ComputeDevice device) {
         const QString who = device == ComputeDevice::CPU ? QStringLiteral("CPU") : QStringLiteral("GPU");
@@ -2891,7 +2891,7 @@ static void testLeonWorker()
     // Длинный код: точного спектра нет, сверяемся с Брауэром–Циммерманом,
     // который до веса 9 точен.
     {
-        const QStringList rows = BZ::scramble(BZ::systematicRandom(66, 140, 21), 4);
+        const QStringList rows = Bz::scramble(Bz::systematicRandom(66, 140, 21), 4);
         RunConfig bz;
         bz.matrix    = rows;
         bz.algorithm = Algorithm::BrouwerZimmermann;
@@ -2936,7 +2936,7 @@ static void testLeonWorker()
     // повторе не выкладывались): Макс получил 6 слов веса 6 вместо 18270,
     // и от запуска к запуску по-разному. Эталон — дуальный перебор.
     if (g_gpuAvailable) {
-        const QStringList rows = BZ::systematicRandom(51, 63, 63);
+        const QStringList rows = Bz::systematicRandom(51, 63, 63);
         RunConfig dual;
         dual.matrix    = rows;
         dual.algorithm = Algorithm::DualCode;
@@ -3019,11 +3019,11 @@ static void testLeonWorker()
                     row[rows + int(next() % quint64(cols - rows))] = QLatin1Char('1');
                 out << row;
             }
-            return BZ::scramble(out, seed + 1);
+            return Bz::scramble(out, seed + 1);
         };
         struct Twin { QString name; QStringList rows; int weight; };
         const QVector<Twin> twins = {
-            { QStringLiteral("[90,30] в разделяемой"),      BZ::scramble(BZ::systematicRandom(30, 90, 17), 3), 30 },
+            { QStringLiteral("[90,30] в разделяемой"),      Bz::scramble(Bz::systematicRandom(30, 90, 17), 3), 30 },
             { QStringLiteral("[700,40] строка в 11 слов"),  sparseCode(40, 700, 5, 23),                         12 },
             { QStringLiteral("[600,300] строка в 10 слов"), sparseCode(300, 600, 5, 29),                         8 },
         };
@@ -3360,7 +3360,7 @@ static void testProductCode()
         { QStringLiteral("eHamming(8,4) x eHamming(8,4) = [64,16]"), Reference::extHamming8_4(), Reference::extHamming8_4() },
         { QStringLiteral("Hamming(7,4) x Hamming(7,4) = [49,16]"),   Reference::hamming7_4(),    Reference::hamming7_4() },
         { QStringLiteral("Hamming(7,4) x eHamming(8,4) = [56,16]"),  Reference::hamming7_4(),    Reference::extHamming8_4() },
-        { QStringLiteral("Hamming(7,4) x rnd[12,5] = [84,20]"),      Reference::hamming7_4(),    BZ::systematicRandom(5, 12, 3) },
+        { QStringLiteral("Hamming(7,4) x rnd[12,5] = [84,20]"),      Reference::hamming7_4(),    Bz::systematicRandom(5, 12, 3) },
     };
     for (const Case& c : cases) {
         const QStringList product = kronecker(c.g1, c.g2);
@@ -3548,9 +3548,9 @@ static void testBrouwerZimmermann()
 {
     out << Qt::endl << QStringLiteral("Брауэр–Циммерман: низ спектра с гарантией") << Qt::endl;
 
-    for (const BZCase& c : bzCases()) {
+    for (const BzCase& c : bzCases()) {
         const Reference::Spectrum exact = Reference::bruteForce(c.rows);
-        const BZ::Result          bz    = BZ::run(c.rows, c.r, c.sets);
+        const Bz::Result          bz    = Bz::run(c.rows, c.r, c.sets);
 
         bool ok = true;
         for (auto it = exact.cbegin(); it != exact.cend(); ++it) {

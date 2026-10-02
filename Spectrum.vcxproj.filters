@@ -38,7 +38,7 @@
     <ClCompile Include="qcustomplot.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="ui\widget.cpp">
+    <ClCompile Include="ui\mainwindow.cpp">
       <Filter>ui</Filter>
     </ClCompile>
     <ClCompile Include="ui\settingsdialog.cpp">
@@ -70,7 +70,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="compute\computeSpectrumKernel.cuh">
+    <ClInclude Include="compute\spectrumkernel.cuh">
       <Filter>compute</Filter>
     </ClInclude>
     <ClInclude Include="compute\dualcode.h">
@@ -97,7 +97,7 @@
     <ClInclude Include="settings.h">
       <Filter>compute</Filter>
     </ClInclude>
-    <ClInclude Include="defines.h">
+    <ClInclude Include="constants.h">
       <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="types.h">
@@ -108,7 +108,7 @@
     <QtMoc Include="qcustomplot.h">
       <Filter>Header Files</Filter>
     </QtMoc>
-    <QtMoc Include="ui\widget.h">
+    <QtMoc Include="ui\mainwindow.h">
       <Filter>ui</Filter>
     </QtMoc>
     <QtMoc Include="ui\settingsdialog.h">
@@ -122,7 +122,7 @@
     </QtMoc>
   </ItemGroup>
   <ItemGroup>
-    <QtUic Include="ui\widget.ui">
+    <QtUic Include="ui\mainwindow.ui">
       <Filter>Form Files</Filter>
     </QtUic>
     <QtUic Include="ui\settingsdialog.ui">
@@ -130,7 +130,7 @@
     </QtUic>
   </ItemGroup>
   <ItemGroup>
-    <QtRcc Include="q.qrc">
+    <QtRcc Include="Spectrum.qrc">
       <Filter>Resource Files</Filter>
     </QtRcc>
   </ItemGroup>
@@ -140,7 +140,7 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="compute\computeSpectrumKernel.cu">
+    <CudaCompile Include="compute\spectrumkernel.cu">
       <Filter>compute</Filter>
     </CudaCompile>
   </ItemGroup>

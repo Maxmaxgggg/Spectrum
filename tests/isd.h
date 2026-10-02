@@ -28,7 +28,7 @@
 // <W> [степень пропуска=9] [прогонов=3] [p Штерна] [l Штерна]
 
 #include "infosets.h"
-#include "leonsearch.h"
+#include "leon.h"
 
 #include <QStringList>
 #include <QTextStream>

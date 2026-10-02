@@ -1,6 +1,6 @@
 #pragma once
 
-#include "defines.h"
+#include "constants.h"
 #include "types.h"
 
 #include <QColor>

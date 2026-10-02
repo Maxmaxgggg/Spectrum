@@ -1,6 +1,6 @@
 #pragma once
 
-#include "computeSpectrumKernel.cuh"
+#include "spectrumkernel.cuh"
 
 #include <cuda_runtime.h>
 

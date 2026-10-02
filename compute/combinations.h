@@ -15,7 +15,7 @@
 
 #include <cstdint>
 
-namespace Comb {
+namespace Combinations {
 
 // Позиция очередной единицы при разборе номера: наименьшая j >= from, такая,
 // что номер попадает в сочетания с единицей в j. left — сколько единиц ещё
@@ -103,4 +103,4 @@ SPECTRUM_HD void diffPositions(const int16_t* prev, const int16_t* curr, int r,
     }
 }
 
-} // namespace Comb
+} // namespace Combinations

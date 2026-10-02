@@ -28,7 +28,7 @@ inline bool bzKeepHost(const quint64* codeword, const CodeGeometry& g, int r, in
         const quint64* mask = g.setMasks.data() + size_t(i) * g.wordsPerRow;
         int ones = 0;
         for (quint64 w = 0; w < g.wordsPerRow; ++w)
-            ones += Bits::popcount64(codeword[w] & mask[w]);
+            ones += BitOps::popcount64(codeword[w] & mask[w]);
         if (i < setIndex ? ones <= r : ones < r)
             return false;
     }
@@ -108,13 +108,13 @@ bool Worker::cpuGrayChunk(const CodeGeometry& g, const LayerSlice& s)
             // Первая маска нити: XOR всех её строк
             quint64 mask = gray(startIdx);
             for (quint64 tmp = mask; tmp; tmp &= tmp - 1) {
-                const quint64* rowData = buffers->h_matrix.get() + Bits::lowestSetBit(tmp) * wordsPerRow;
+                const quint64* rowData = buffers->h_matrix.get() + BitOps::lowestSetBit(tmp) * wordsPerRow;
                 for (quint64 b = 0; b < wordsPerRow; ++b)
                     localCodeword[b] ^= rowData[b];
             }
             quint64 weight = 0;
             for (quint64 b = 0; b < wordsPerRow; ++b)
-                weight += Bits::popcount64(localCodeword[b]);
+                weight += BitOps::popcount64(localCodeword[b]);
             if (weight <= numOfCols)
                 localSpectrum[weight]++;
 
@@ -129,14 +129,14 @@ bool Worker::cpuGrayChunk(const CodeGeometry& g, const LayerSlice& s)
 
                 // Соседние коды Грея отличаются ровно одним битом
                 const quint64 next = gray(i);
-                const quint64* rowData = buffers->h_matrix.get() + Bits::lowestSetBit(mask ^ next) * wordsPerRow;
+                const quint64* rowData = buffers->h_matrix.get() + BitOps::lowestSetBit(mask ^ next) * wordsPerRow;
                 for (quint64 b = 0; b < wordsPerRow; ++b)
                     localCodeword[b] ^= rowData[b];
                 mask = next;
 
                 weight = 0;
                 for (quint64 b = 0; b < wordsPerRow; ++b)
-                    weight += Bits::popcount64(localCodeword[b]);
+                    weight += BitOps::popcount64(localCodeword[b]);
                 if (weight <= numOfCols)
                     localSpectrum[weight]++;
             }
@@ -194,14 +194,14 @@ bool Worker::cpuXorShortChunk(const CodeGeometry& g, quint64 r, const LayerSlice
             QVector<quint64> localSpectrum(numOfCols + 1, 0);
             QVector<quint64> localCodeword(wordsPerRow, 0);
 
-            quint64 revMask = Bits::reverseLowBits(
-                Comb::unrankMask(unsigned(numOfRows), unsigned(r), endIdx - 1, binomTable),
+            quint64 revMask = BitOps::reverseLowBits(
+                Combinations::unrankMask(unsigned(numOfRows), unsigned(r), endIdx - 1, binomTable),
                 int(numOfRows));
 
             // Бит p развёрнутой маски отвечает строке numOfRows-1-p.
             auto xorRows = [&](quint64 bits) {
                 while (bits) {
-                    const int p = Bits::lowestSetBit(bits);
+                    const int p = BitOps::lowestSetBit(bits);
                     bits &= (bits - 1);
                     const quint64* rowData =
                         buffers->h_matrix.get() + (s.slot.rowBase + numOfRows - 1 - p) * wordsPerRow;
@@ -212,7 +212,7 @@ bool Worker::cpuXorShortChunk(const CodeGeometry& g, quint64 r, const LayerSlice
             auto accumulate = [&]() {
                 quint64 weight = 0;
                 for (quint64 b = 0; b < wordsPerRow; ++b)
-                    weight += Bits::popcount64(localCodeword[b]);
+                    weight += BitOps::popcount64(localCodeword[b]);
                 if (weight <= numOfCols
                     && (g.setCount <= 1
                         || bzKeepHost(localCodeword.data(), g, int(r), s.slot.setIndex)))
@@ -226,7 +226,7 @@ bool Worker::cpuXorShortChunk(const CodeGeometry& g, quint64 r, const LayerSlice
             // gosperNext на нулевой маске звать нельзя.
             const quint64 count = endIdx - startIdx;
             for (quint64 i = 1; i < count; ++i) {
-                const quint64 nextRev = Bits::gosperNext(revMask);
+                const quint64 nextRev = BitOps::gosperNext(revMask);
                 xorRows(revMask ^ nextRev);
                 accumulate();
                 revMask = nextRev;
@@ -289,7 +289,7 @@ bool Worker::cpuXorLongChunk(const CodeGeometry& g, quint64 r, const LayerSlice&
         auto accumulate = [&]() {
             quint64 weight = 0;
             for (size_t w = 0; w < size_t(wordsPerRow); ++w)
-                weight += Bits::popcount64(codeword[w]);
+                weight += BitOps::popcount64(codeword[w]);
             if (weight <= numOfCols
                 && (g.setCount <= 1 || bzKeepHost(codeword.data(), g, int(r), s.slot.setIndex)))
                 localSpectrum[size_t(weight)]++;
@@ -310,8 +310,8 @@ bool Worker::cpuXorLongChunk(const CodeGeometry& g, quint64 r, const LayerSlice&
             const quint64 iters = std::min(masksPerThread, chunkSize - startRank);
 
             // Номер внутри своего множества
-            Comb::unrankPositions(s.offset + startRank, int(numOfRows), int(r), a_local,
-                                  Constants::MAX_POSITIONS, binomTable);
+            Combinations::unrankPositions(s.offset + startRank, int(numOfRows), int(r), a_local,
+                                          Constants::MAX_POSITIONS, binomTable);
             rebuild();
             accumulate();
 
@@ -327,11 +327,11 @@ bool Worker::cpuXorLongChunk(const CodeGeometry& g, quint64 r, const LayerSlice&
                     break;
 
                 std::copy(a_local, a_local + r, old_a_local);
-                if (!Comb::nextPositions(a_local, int(r), int(numOfRows)))
+                if (!Combinations::nextPositions(a_local, int(r), int(numOfRows)))
                     break;   // сочетания слоя кончились
 
                 int numChanged = 0;
-                Comb::diffPositions(old_a_local, a_local, int(r), changed, numChanged);
+                Combinations::diffPositions(old_a_local, a_local, int(r), changed, numChanged);
 
                 // Изменилось больше половины — дешевле собрать слово заново
                 if (numChanged > int(r)) {

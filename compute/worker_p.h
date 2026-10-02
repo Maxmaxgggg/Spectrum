@@ -7,7 +7,7 @@
 
 #include "worker.h"
 
-#include "computeSpectrumKernel.cuh"
+#include "spectrumkernel.cuh"
 #include "cudabuffers.h"
 #include "spectrumring.h"
 

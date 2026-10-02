@@ -2,7 +2,7 @@
 #define SETTINGSDIALOG_H
 
 #include <QDialog>
-#include "defines.h"
+#include "constants.h"
 #include "settings.h"
 #include <QJsonObject>
 #include <qjsondocument.h>

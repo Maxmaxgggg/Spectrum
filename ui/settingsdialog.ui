@@ -20,7 +20,7 @@
    <string>Настройки</string>
   </property>
   <property name="windowIcon">
-   <iconset resource="../q.qrc">
+   <iconset resource="../Spectrum.qrc">
     <normaloff>:/ui/icons/gear.png</normaloff>:/ui/icons/gear.png</iconset>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout_4">
@@ -711,7 +711,7 @@
   </layout>
  </widget>
  <resources>
-  <include location="../q.qrc" />
+  <include location="../Spectrum.qrc" />
  </resources>
  <connections>
   <connection>

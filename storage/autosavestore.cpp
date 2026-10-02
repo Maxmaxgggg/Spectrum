@@ -1,6 +1,6 @@
 #include "autosavestore.h"
 
-#include "defines.h"
+#include "constants.h"
 #include "infosets.h"
 
 #include <QCryptographicHash>
