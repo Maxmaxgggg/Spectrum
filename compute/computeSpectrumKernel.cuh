@@ -4,18 +4,6 @@
 #include "defines.h"
 #include <vector>
 typedef uint64_t quint64;
-#pragma once
-
-// Макрос для проверки ошибок
-#ifndef CUDA_CALL
-#define CUDA_CALL(call) do { \
-    cudaError_t err = (call); \
-    if (err != cudaSuccess) { \
-        fprintf(stderr, "CUDA error %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-        std::abort(); \
-    } \
-} while(0)
-#endif
 
 __host__ cudaError_t copyMatrixToConstant(const quint64* h_matrix, size_t wordsNeeded);
 
@@ -35,8 +23,15 @@ struct MatrixSlot
 __host__ cudaError_t copyMasksToConstant(const quint64* h_masks, int setCount, int wordsPerRow);
 
 
-// Ядро коротких кодов шаблонное и объявлено в .cu — снаружи нужна
-// только обёртка запуска, она и выбирает вариант по числу слов.
+// Ядра шаблонные по числу слов в строке и объявлены в .cu — снаружи нужны
+// только обёртки запуска, они и выбирают вариант (wordvariants.h).
+//
+// У коротких кодов (k <= 63) n — длина кода (столбцов матрицы), k — её
+// строк, wordsPerRow — 64-битных слов в строке; матрица в константной
+// памяти (copyMatrixToConstant).
+
+// Простой XOR и Брауэр–Циммерман: сочетания из r строк с номерами
+// [chunkOffset, chunkOffset + chunkSize) внутри множества slot.
 __host__ void launchSpectrumKernelShort(
     quint64 * d_spectrum,
     const quint64 * d_binomTable,
@@ -45,16 +40,16 @@ __host__ void launchSpectrumKernelShort(
     cudaStream_t stream,
     int n,
     int k,
-    int blockCount,
+    int wordsPerRow,
     quint64 chunkOffset,
     quint64 chunkSize,
     quint64 r,
     MatrixSlot slot = MatrixSlot()
 );
 
-// Ядра шаблонные по числу слов в строке и объявлены в .cu — снаружи
-// нужны только обёртки запуска, они и выбирают вариант.
-
+// Длинные коды (k >= 64): нить перебирает masksPerThread сочетаний подряд от
+// своего стартового (d_startPositions, по MAX_POSITIONS позиций на нить).
+// matrixGlobal — матрица в глобальной памяти; nullptr — в константной.
 __host__ void launchSpectrumKernelLong(
     int              numBlocks,
     int              threadsPerBlock,
@@ -72,14 +67,8 @@ __host__ void launchSpectrumKernelLong(
     uint64_t*        d_maskCounter,
     MatrixSlot       slot = MatrixSlot()
 );
-__global__ void computeSpectrumKernelGrayShort(
-    quint64* d_spectrum,
-    int n,
-    int k,
-    int blockCount,
-    quint64 chunkOffset,
-    quint64 chunkSize
-);
+// Код Грея (и дуальный расчёт): маски с номерами [chunkOffset,
+// chunkOffset + chunkSize) в порядке кода Грея.
 __host__ void launchSpectrumKernelGrayShort(
     int numOfBlocks,
     int threadsPerBlock,
@@ -87,7 +76,7 @@ __host__ void launchSpectrumKernelGrayShort(
     quint64* d_spectrum,
     int n,
     int k,
-    int blockCount,
+    int wordsPerRow,
     quint64 chunkOffset,
     quint64 chunkSize
 );

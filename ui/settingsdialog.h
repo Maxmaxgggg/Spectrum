@@ -4,7 +4,6 @@
 #include <QDialog>
 #include "defines.h"
 #include "settings.h"
-#include "workwithmatrix.h"
 #include <QJsonObject>
 #include <qjsondocument.h>
 #include <qbuttongroup.h>
@@ -31,7 +30,7 @@ public:
     explicit SettingsDialog(QWidget *parent = nullptr);
     ~SettingsDialog() override;
 
-public: signals:
+signals:
     // Сигнал для отправки настроек виджету
     void sendSettingsToWidget( const ComputationSettings& settings );
     // Просьба прогнать пробу: короткий расчёт, по которому видно, как часто
@@ -49,8 +48,6 @@ public slots:
                            int componentAlgorithm);
     // Результат пробы, отправок в секунду.
     void applyMeasuredRate(double perSecond);
-private slots:
-
 private:
     void checkGpuAvailable();
     // Открывает список интервалов по замеру и гасит недостижимые пункты.

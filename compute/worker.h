@@ -323,7 +323,9 @@ private:
     // поиском; ноль — всё сертифицировано.
     int                         productMissExponent = 0;
 
-    bool                        exportSpectrum = false;
+    // Продолжение с чекпоинта: накопленный спектр переносится в буферы
+    // расчёта (prepareBuffers), а не обнуляется.
+    bool                        resumeSpectrum = false;
     // 0 — обычный режим; см. setCheckpointOpsPolicy
     quint64                     stopAfterOps   = 0;
     quint64                     checkpointEveryOps = 0;

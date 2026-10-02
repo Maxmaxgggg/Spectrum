@@ -1,43 +1,37 @@
 #include "widget.h"
-#include "infosets.h"
-#include "filterplaintextedit.h"
-#include "spectrumtextedit.h"
-#include "tabswapbutton.h"
-
-#include <QStackedWidget>
-#include <QTabBar>
-#include "docktitlebar.h"
-#include "fonticons.h"
-
-#include <QHeaderView>
-#include <QApplication>
-#include <QDockWidget>
-#include "format.h"
-#include "matrixlibrary.h"
-#include "autosavedialog.h"
-#include "format.h"
-#include "matrixmenu.h"
-#include "spectrumplot.h"
-#include "statspanel.h"
 #include "ui_widget.h"
 
+#include "autosavedialog.h"
+#include "docktitlebar.h"
+#include "filterplaintextedit.h"
+#include "fonticons.h"
+#include "format.h"
+#include "infosets.h"
+#include "matrixlibrary.h"
+#include "matrixmenu.h"
+#include "spectrumplot.h"
+#include "spectrumtextedit.h"
+#include "statspanel.h"
+#include "tabswapbutton.h"
 
-
-
+#include <QApplication>
+#include <QDockWidget>
+#include <QHeaderView>
+#include <QStackedWidget>
+#include <QTabBar>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
     ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
-    /********      УБРАТЬ В UI     ********/
-        saveLBLOpacityEffect = new QGraphicsOpacityEffect(ui->saveLBL);
-        ui->saveLBL->setGraphicsEffect(saveLBLOpacityEffect);
-        ui->saveLBL->setToolTip("В момент сохранения спектра тут появится значок");
-        saveLBLOpacityEffect->setOpacity(0.0);
-    /********                      ********/
-    if( settingsDialog == nullptr )
-        settingsDialog = new SettingsDialog(this);
+    // Значок сохранения: невидим, пока не мигнёт при записи (showSaveLBL).
+    // Эффект прозрачности в .ui не задаётся — только кодом.
+    saveLBLOpacityEffect = new QGraphicsOpacityEffect(ui->saveLBL);
+    ui->saveLBL->setGraphicsEffect(saveLBLOpacityEffect);
+    ui->saveLBL->setToolTip(UIStrings::SAVE_LBL_BASE_TOOLTIP);
+    saveLBLOpacityEffect->setOpacity(0.0);
+    settingsDialog = new SettingsDialog(this);
     spectrumPlot = std::make_unique<SpectrumPlot>(ui->spectrumCPT);
     connect( ui->matrixPTE, &FilterPlainTextEdit::textChanged, this,  &MainWindow::handleMatrixChanged    );
     connect(ui->autosaveACN, &QAction::triggered,
@@ -73,7 +67,7 @@ MainWindow::MainWindow(QWidget* parent)
     // Настройки диалога нужны окну сразу: от алгоритма зависит, показывать ли
     // панель второй матрицы. Пустая матрица сигнала о смене не даёт.
     emit requestSettings();
-    emit handleMatrixChanged();
+    handleMatrixChanged();
     // Старые чекпоинты лежали в реестре, по мегабайту с матрицей на запись.
     // Переносим их в файлы один раз и вычищаем ветку.
     autosave.migrateFromRegistry();
@@ -95,7 +89,6 @@ MainWindow::~MainWindow()
         delete workerPtr;
         workerPtr = nullptr;
     }
-    this->setWindowTitle(UIStrings::MAIN_TITLE);
     delete ui;
 }
 

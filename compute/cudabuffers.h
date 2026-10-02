@@ -41,9 +41,9 @@ private:
     int         m_line;
 };
 
-#ifdef CUDA_CALL
-    #undef CUDA_CALL
-#endif
+// Проверка вызова CUDA: ошибка — исключение CudaError. Других версий макроса
+// нет: прежняя, звавшая abort(), жила в computeSpectrumKernel.cuh и
+// перекрывалась этой лишь при нужном порядке #include.
 #define CUDA_CALL(call)                                        \
     do {                                                       \
         cudaError_t err_ = (call);                             \

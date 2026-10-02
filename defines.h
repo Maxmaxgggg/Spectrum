@@ -36,10 +36,7 @@ namespace Constants
     constexpr  int MAX_SHARED_BYTES = 40 * 1024;
     constexpr  int BINOM_TABLE_SIZE_FOR_SHORT_CODES = ( MAX_SHORT_CODE_LENGTH + 1 ) * ( MAX_SHORT_CODE_LENGTH + 1 );
     constexpr  int ERROR_OCCURED = -1;
-}
 
-namespace Constants
-{
     // Сколько крутится проба потолка обновления. Полутора секунд хватает и
     // самой медленной из замеренных конфигураций: широкий код 2000x50 отдаёт
     // спектр 6,9 раза в секунду, то есть около десяти отправок за пробу.
@@ -59,9 +56,6 @@ namespace SettingsKeys
     constexpr const char SPECTRUM_TEXT[]            = "spectrumText";
     constexpr const char SPECTRUM_VALUES[]          = "spectrumValues";
     constexpr const char MATRICES_JSON[]            = "matricesJson";
-    // Тип перебора, выбранный для простого XOR. Хранится отдельно от
-    // computationSettings: там при коде Грея лежит принудительный «Полный».
-    constexpr const char XOR_ENUM_TYPE[]            = "xorEnumType";   // больше не пишется
     // Выбор в парах алгоритмов и тип перебора произвольного кода: в самих
     // настройках лежит один алгоритм, а помнить надо все три.
     constexpr const char FULL_ALGORITHM[]           = "fullAlgorithm";

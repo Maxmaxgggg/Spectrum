@@ -559,7 +559,7 @@ void Worker::prepareBuffers(const CodeGeometry& g)
         buffers->spectrumRing.allocate(g.spectrumSize);
     else
         buffers->spectrumRing.reset();
-    if (exportSpectrum) {
+    if (resumeSpectrum) {
         // Продолжаем с чекпоинта — переносим накопленный спектр
         for (quint64 i = 0; i < g.spectrumSize; ++i)
             buffers->h_spectrum[i] = runState.spectrum.at(int(i));
@@ -579,7 +579,7 @@ void Worker::prepareBuffers(const CodeGeometry& g)
         CUDA_CALL(copyMasksToConstant(g.setMasks.data(), g.setCount, int(g.wordsPerRow)));
 
     buffers->d_spectrum.allocate(g.spectrumSize);
-    if (exportSpectrum)
+    if (resumeSpectrum)
         CUDA_CALL(cudaMemcpy(buffers->d_spectrum.get(), buffers->h_spectrum.get(),
                              g.spectrumSize * sizeof(quint64), cudaMemcpyHostToDevice));
     else
@@ -941,7 +941,7 @@ void Worker::initializeRunState(LoadMode lm)
         runState.elapsedSec = 0;
         runState.doneOps = 0;
         runState.spectrum.clear();
-        exportSpectrum = false;
+        resumeSpectrum = false;
         resumedInfoSets.clear();
         return;
     }
@@ -956,7 +956,7 @@ void Worker::initializeRunState(LoadMode lm)
         runState = record.state;
         // Продолжать Брауэра–Циммермана можно только по множествам записи
         resumedInfoSets = record.infoSets;
-        // Ставим флаг, что надо выгрузить спектр
-        exportSpectrum = true;
+        // Накопленный спектр перенесётся в буферы расчёта (prepareBuffers)
+        resumeSpectrum = true;
     }
 }

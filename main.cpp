@@ -1,6 +1,5 @@
 #include "cachingstyle.h"
 #include "widget.h"
-#include "workwithmatrix.h"
 
 int main(int argc, char *argv[])
 {

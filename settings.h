@@ -137,26 +137,6 @@ struct ComputationSettings
     // копировании тоже не потеряется.
     ComputationSettings() noexcept = default;
 
-    bool operator==(const ComputationSettings& other) const
-    {
-        // Не сравниваем между собой настройки времени
-        return matrix == other.matrix &&
-            matrix2 == other.matrix2 &&
-            algorithmType == other.algorithmType &&
-            enumType == other.enumType &&
-            maxRows == other.maxRows &&
-            bzWeight == other.bzWeight &&
-            leonWeight == other.leonWeight &&
-            leonMissExponent == other.leonMissExponent &&
-            productWeight == other.productWeight &&
-            productRank == other.productRank &&
-            productAlgorithm == other.productAlgorithm &&
-            compDev == other.compDev &&
-            autoTuneGrid == other.autoTuneGrid &&
-            compDevSet.threadsCpu == other.compDevSet.threadsCpu &&
-            compDevSet.blocksGpu == other.compDevSet.blocksGpu &&
-            compDevSet.threadsGpu == other.compDevSet.threadsGpu;
-    }
     QJsonObject toJson() const
     {
         QJsonObject obj;
@@ -267,31 +247,6 @@ struct ComputationSettings
         if (s.timeIntSet.updateSpectrumInterval < EveryTenthSecond)
             s.timeIntSet.updateSpectrumInterval = EveryTenthSecond;
         return s;
-    }
-    quint64 computeHash(quint64 seed = 0ULL) const
-    {
-        seed = qHash(matrix, seed);
-        seed = qHash(static_cast<int>(algorithmType), seed);
-        seed = qHash(static_cast<int>(enumType), seed);
-
-        // Подумать, как реализовать, чтобы можно было сначала перебрать для maxRows = n, а потом для n+1
-        seed = qHash(maxRows, seed);
-        seed = qHash(bzWeight, seed);
-        seed = qHash(leonWeight, seed);
-        seed = qHash(leonMissExponent, seed);
-        seed = qHash(matrix2, seed);
-        seed = qHash(productWeight, seed);
-        seed = qHash(productRank, seed);
-        seed = qHash(productAlgorithm, seed);
-        seed = qHash(static_cast<int>(compDev), seed);
-
-        // autoTuneGrid в ключ не входит намеренно: спектр от сетки не зависит,
-        // и переключение галочки не должно осиротить сохранённый чекпоинт.
-        seed = qHash(compDevSet.threadsCpu, seed);
-        seed = qHash(compDevSet.blocksGpu, seed);
-        seed = qHash(compDevSet.threadsGpu, seed);
-
-        return seed;
     }
 };
 // Настройки уходят воркеру через очередь событий — как есть, без JSON.

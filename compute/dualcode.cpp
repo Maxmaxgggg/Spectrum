@@ -49,7 +49,6 @@ Matrix generatorToParity(const Matrix& gen)
         }
         ++r;
     }
-    int rank = r;
     QVector<int> free_cols;
     for (int c = 0; c < n; ++c) if (pivot_row[c] == -1) free_cols.append(c);
     Matrix parity;

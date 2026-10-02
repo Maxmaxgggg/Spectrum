@@ -4,7 +4,6 @@
 #include "qcustomplot.h"
 #include "settingsdialog.h"
 #include "worker.h"
-#include "workwithmatrix.h"
 #include "defines.h"
 
 #include "autosavestore.h"
@@ -31,7 +30,7 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 
-public: signals:
+signals:
     void setInterfaceEnabled(bool enabled);
     void matrixChanged(int rows, int cols);
 

@@ -179,12 +179,12 @@ __device__ __forceinline__ void xorRowFromShared(quint64* codeword,
 template <int WORDS>
 __global__ void computeSpectrumKernelShortT(
     quint64* d_spectrum, const quint64* d_binomTable,
-    int n, int k, int blockCount,
+    int n, int k, int wordsPerRow,
     quint64 chunkOffset, quint64 chunkSize, quint64 r, MatrixSlot slot);
 
 template <int WORDS>
 __global__ void computeSpectrumKernelGrayShortT(
-    quint64* d_spectrum, int n, int k, int blockCount,
+    quint64* d_spectrum, int n, int k, int wordsPerRow,
     quint64 chunkOffset, quint64 chunkSize);
 
 __host__ void launchSpectrumKernelShort(
@@ -195,30 +195,30 @@ __host__ void launchSpectrumKernelShort(
     cudaStream_t stream,
     int n,
     int k,
-    int blockCount,
+    int wordsPerRow,
     quint64 chunkOffset,
     quint64 chunkSize,
     quint64 r,
     MatrixSlot slot)
 {
-    validateLaunchParams(blockCount, n);
+    validateLaunchParams(wordsPerRow, n);
 
     // Выбираем вариант ядра, у которого число слов известно на этапе
     // компиляции. Округляем вверх до ближайшего заготовленного: лишние слова
     // заполняются нулями, а XOR и popcount с нулём результата не меняют.
-    const int words = paddedWordCount(blockCount);
+    const int words = paddedWordCount(wordsPerRow);
 
     // Гистограмма плюс копия матрицы: она уезжает в разделяемую память, потому
     // что нити варпа читают разные строки, а константная память такое дробит.
     // Гистограмма дополнена до чётного числа слов: так строка матрицы ложится
     // на адрес, кратный 16, и читается по два слова за раз.
     const size_t sharedBytes =
-        (size_t)(((n + 2) & ~1) + k * (words > 0 ? words : blockCount)) * sizeof(quint64);
+        (size_t)(((n + 2) & ~1) + k * (words > 0 ? words : wordsPerRow)) * sizeof(quint64);
 
     auto launch = [&](auto w) {
         constexpr int W = decltype(w)::value;
         computeSpectrumKernelShortT<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(
-            d_spectrum, d_binomTable, n, k, blockCount, chunkOffset, chunkSize, r, slot);
+            d_spectrum, d_binomTable, n, k, wordsPerRow, chunkOffset, chunkSize, r, slot);
     };
     // Запасной путь: размер берётся из аргумента, кодовое слово живёт в
     // локальной памяти. Сюда попасть не должно.
@@ -246,13 +246,13 @@ __global__ void computeSpectrumKernelShortT(
     const quint64* d_binomTable,
     int n,
     int k,
-    int blockCount,
+    int wordsPerRow,
     quint64 chunkOffset,
     quint64 chunkSize,
     quint64 r,
     MatrixSlot slot)
 {
-    const int words = WORDS > 0 ? WORDS : blockCount;
+    const int words = WORDS > 0 ? WORDS : wordsPerRow;
 
     // Разделяемая память делится на две части: гистограмма и копия матрицы.
     //
@@ -270,13 +270,13 @@ __global__ void computeSpectrumKernelShortT(
     const int tid = threadIdx.x;
 
     for (int i = tid; i <= n; i += blockDim.x) s_spectrum[i] = 0ULL;
-    // Шаг копии — words, а не blockCount: если WORDS округлён вверх, лишние
+    // Шаг копии — words, а не wordsPerRow: если WORDS округлён вверх, лишние
     // слова заполняются нулями. Это безопасно, потому что биты за numOfCols в
     // матрице всегда нули, и XOR с нулём ничего не меняет.
     for (int i = tid; i < k * words; i += blockDim.x) {
         const int row = i / words;
         const int w   = i % words;
-        s_matrix[i] = (w < blockCount) ? readConstMatrixWord(slot.rowBase + row, w, blockCount) : 0ULL;
+        s_matrix[i] = (w < wordsPerRow) ? readConstMatrixWord(slot.rowBase + row, w, wordsPerRow) : 0ULL;
     }
     __syncthreads();
 
@@ -624,22 +624,22 @@ __host__ void launchSpectrumKernelGrayShort(
     quint64* d_spectrum,
     int n,
     int k,
-    int blockCount,
+    int wordsPerRow,
     quint64 chunkOffset,   // индекс Gray-элемента начала чанка
     quint64 chunkSize      // сколько Gray-элементов в чанке
 ) {
-    validateLaunchParams(blockCount, n);
-    const int words = paddedWordCount(blockCount);
+    validateLaunchParams(wordsPerRow, n);
+    const int words = paddedWordCount(wordsPerRow);
     // Гистограмма плюс копия матрицы — см. ядро простого XOR.
     // Гистограмма дополнена до чётного числа слов: так строка матрицы ложится
     // на адрес, кратный 16, и читается по два слова за раз.
     const size_t sharedBytes =
-        (size_t)(((n + 2) & ~1) + k * (words > 0 ? words : blockCount)) * sizeof(quint64);
+        (size_t)(((n + 2) & ~1) + k * (words > 0 ? words : wordsPerRow)) * sizeof(quint64);
 
     auto launch = [&](auto w) {
         constexpr int W = decltype(w)::value;
         computeSpectrumKernelGrayShortT<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(
-            d_spectrum, n, k, blockCount, chunkOffset, chunkSize);
+            d_spectrum, n, k, wordsPerRow, chunkOffset, chunkSize);
     };
     if (!dispatchWords(words, launch))
         launch(std::integral_constant<int, 0>());
@@ -654,11 +654,11 @@ __global__ void computeSpectrumKernelGrayShortT(
     quint64* d_spectrum,
     int n,
     int k,
-    int blockCount,
+    int wordsPerRow,
     quint64 chunkOffset,   // начало (в Gray-порядке)
     quint64 chunkSize
 ) {
-    const int words = WORDS > 0 ? WORDS : blockCount;
+    const int words = WORDS > 0 ? WORDS : wordsPerRow;
     // Разделяемая память: гистограмма и копия матрицы. Нити варпа читают разные
     // строки, а константная память дробит такой запрос на отдельные обращения.
     extern __shared__ quint64 s_mem[];
@@ -674,7 +674,7 @@ __global__ void computeSpectrumKernelGrayShortT(
     for (int i = tid; i < k * words; i += blockDim.x) {
         const int row = i / words;
         const int w   = i % words;
-        s_matrix[i] = (w < blockCount) ? readConstMatrixWord(row, w, blockCount) : 0ULL;
+        s_matrix[i] = (w < wordsPerRow) ? readConstMatrixWord(row, w, wordsPerRow) : 0ULL;
     }
     __syncthreads();
 
@@ -757,10 +757,3 @@ __global__ void computeSpectrumKernelGrayShortT(
         if (v) atomicAdd(&d_spectrum[i], v);
     }
 }
-
-
-
-
-
-
-

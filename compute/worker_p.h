@@ -8,7 +8,6 @@
 #include "worker.h"
 
 #include "computeSpectrumKernel.cuh"
-// Переопределяет CUDA_CALL из .cuh: там макрос звал abort(), здесь бросает.
 #include "cudabuffers.h"
 #include "spectrumring.h"
 

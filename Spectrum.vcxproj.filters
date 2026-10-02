@@ -27,9 +27,6 @@
     <Filter Include="compute">
       <UniqueIdentifier>{76f4944d-8bdf-47e5-b510-dcad4546a4e6}</UniqueIdentifier>
     </Filter>
-    <Filter Include="helpers">
-      <UniqueIdentifier>{7018f3f2-811c-4419-b4f0-199d93f8c6aa}</UniqueIdentifier>
-    </Filter>
     <Filter Include="save">
       <UniqueIdentifier>{5f3c0076-b36f-4ea9-be9a-d532e251fb08}</UniqueIdentifier>
     </Filter>
@@ -71,9 +68,6 @@
     <ClCompile Include="compute\dualcode.cpp">
       <Filter>compute</Filter>
     </ClCompile>
-    <ClCompile Include="helpers\workwithmatrix.cpp">
-      <Filter>helpers</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="compute\computeSpectrumKernel.cuh">
@@ -99,9 +93,6 @@
     </ClInclude>
     <ClInclude Include="compute\worker_p.h">
       <Filter>compute</Filter>
-    </ClInclude>
-    <ClInclude Include="helpers\workwithmatrix.h">
-      <Filter>helpers</Filter>
     </ClInclude>
     <ClInclude Include="settings.h">
       <Filter>compute</Filter>

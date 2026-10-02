@@ -25,7 +25,6 @@
     <ClCompile Include="..\compute\hammingcode.cpp" />
     <ClCompile Include="..\compute\leonsearch.cpp" />
     <ClCompile Include="..\compute\productcode.cpp" />
-    <ClCompile Include="..\helpers\workwithmatrix.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="reference.h" />
@@ -86,7 +85,7 @@
     <ClCompile>
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(SpectrumRoot);$(SpectrumRoot)compute;$(SpectrumRoot)storage;$(SpectrumRoot)helpers;$(SpectrumRoot)tests</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(SpectrumRoot);$(SpectrumRoot)compute;$(SpectrumRoot)storage;$(SpectrumRoot)tests</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4146</DisableSpecificWarnings>
       <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING</PreprocessorDefinitions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>

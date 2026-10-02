@@ -24,7 +24,6 @@
     <ClCompile Include="compute\worker_leon.cpp" />
     <ClCompile Include="compute\worker_product.cpp" />
     <ClCompile Include="compute\gpuinfo.cpp" />
-    <ClCompile Include="helpers\workwithmatrix.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="qcustomplot.cpp" />
     <ClCompile Include="ui\filterplaintextedit.cpp" />
@@ -81,7 +80,6 @@
     <ClInclude Include="settings.h" />
     <ClInclude Include="types.h" />
     <QtMoc Include="compute\worker.h" />
-    <ClInclude Include="helpers\workwithmatrix.h" />
     <QtMoc Include="ui\filterplaintextedit.h" />
     <QtMoc Include="ui\spectrumtextedit.h" />
     <QtMoc Include="ui\settingsdialog.h" />
@@ -168,7 +166,7 @@
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(ProjectDir)helpers;$(ProjectDir)ui;$(ProjectDir)ui\icons;$(ProjectDir)compute;$(ProjectDir)storage;$(ProjectDir)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(ProjectDir)ui;$(ProjectDir)ui\icons;$(ProjectDir)compute;$(ProjectDir)storage;$(ProjectDir)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4146</DisableSpecificWarnings>
       <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING</PreprocessorDefinitions>
     </ClCompile>
@@ -191,7 +189,7 @@
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(ProjectDir)helpers;$(ProjectDir)ui;$(ProjectDir)ui\icons;$(ProjectDir)compute;$(ProjectDir)storage;$(ProjectDir)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(VcpkgStaticRoot)include;$(ProjectDir)ui;$(ProjectDir)ui\icons;$(ProjectDir)compute;$(ProjectDir)storage;$(ProjectDir)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4146</DisableSpecificWarnings>
       <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions);_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING</PreprocessorDefinitions>
     </ClCompile>
