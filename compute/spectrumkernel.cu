@@ -177,17 +177,17 @@ __device__ __forceinline__ void xorRowFromShared(quint64* codeword,
 
 // Определение ниже; здесь оно нужно обёртке запуска.
 template <int WORDS>
-__global__ void computeSpectrumKernelShortT(
+__global__ void xorKernelShort(
     quint64* d_spectrum, const quint64* d_binomTable,
     int n, int k, int wordsPerRow,
     quint64 chunkOffset, quint64 chunkSize, quint64 r, MatrixSlot slot);
 
 template <int WORDS>
-__global__ void computeSpectrumKernelGrayShortT(
+__global__ void grayKernel(
     quint64* d_spectrum, int n, int k, int wordsPerRow,
     quint64 chunkOffset, quint64 chunkSize);
 
-__host__ void launchSpectrumKernelShort(
+__host__ void launchXorShort(
     quint64* d_spectrum,
     const quint64* d_binomTable,
     int numOfBlocks,
@@ -217,7 +217,7 @@ __host__ void launchSpectrumKernelShort(
 
     auto launch = [&](auto w) {
         constexpr int W = decltype(w)::value;
-        computeSpectrumKernelShortT<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(
+        xorKernelShort<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(
             d_spectrum, d_binomTable, n, k, wordsPerRow, chunkOffset, chunkSize, r, slot);
     };
     // Запасной путь: размер берётся из аргумента, кодовое слово живёт в
@@ -241,7 +241,7 @@ __host__ void launchSpectrumKernelShort(
 // При известном WORDS цикл разворачивается, массив живёт в регистрах, и
 // обращений к памяти не остаётся вовсе.
 template <int WORDS>
-__global__ void computeSpectrumKernelShortT(
+__global__ void xorKernelShort(
     quint64* d_spectrum,
     const quint64* d_binomTable,
     int n,
@@ -389,14 +389,14 @@ __global__ void computeSpectrumKernelShortT(
 }
 // Обертка для ядра для расчета частичных спектров длинных кодов
 template <int WORDS>
-__global__ void computeSpectrumKernelLongT(
+__global__ void xorKernelLong(
     uint64_t* d_spectrum, const uint64_t* matrixGlobal,
     int numCols, int numRows, int wordsPerRow, uint64_t chunkSize,
     int16_t* d_startPositions, uint64_t masksPerThread,
     uint64_t numStartMasks, uint64_t numOfOnes,
     uint64_t* d_maskCounter, bool stageMatrix, MatrixSlot slot);
 
-__host__ void launchSpectrumKernelLong(
+__host__ void launchXorLong(
     int numBlocks,
     int threadsPerBlock,
     cudaStream_t stream,
@@ -437,7 +437,7 @@ __host__ void launchSpectrumKernelLong(
 
     auto launch = [&](auto w) {
         constexpr int W = decltype(w)::value;
-        computeSpectrumKernelLongT<W><<<numBlocks, threadsPerBlock, sharedBytes, stream>>>(
+        xorKernelLong<W><<<numBlocks, threadsPerBlock, sharedBytes, stream>>>(
             d_spectrum, matrixGlobal, numCols, numRows, wordsPerRow, chunkSize, d_startPositions,
             masksPerThread, numStartMasks, numOfOnes, d_maskCounter, stageMatrix, slot);
     };
@@ -454,7 +454,7 @@ __host__ void launchSpectrumKernelLong(
 // nextPositions принимает указатель. Но горячие данные здесь именно codeword —
 // его XOR-ят на каждой изменившейся позиции и считают popcount на каждой маске.
 template <int WORDS>
-__global__ void computeSpectrumKernelLongT(
+__global__ void xorKernelLong(
     uint64_t* d_spectrum,
     const uint64_t* matrixGlobal,
     int             numCols,
@@ -617,7 +617,7 @@ __global__ void computeSpectrumKernelLongT(
 
 
 // Обертка для ядра для расчета полного спектра с использованием кода Грея для кодов с k < 64
-__host__ void launchSpectrumKernelGrayShort(
+__host__ void launchGray(
     int numOfBlocks,
     int threadsPerBlock,
     cudaStream_t stream,
@@ -638,7 +638,7 @@ __host__ void launchSpectrumKernelGrayShort(
 
     auto launch = [&](auto w) {
         constexpr int W = decltype(w)::value;
-        computeSpectrumKernelGrayShortT<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(
+        grayKernel<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(
             d_spectrum, n, k, wordsPerRow, chunkOffset, chunkSize);
     };
     if (!dispatchWords(words, launch))
@@ -650,7 +650,7 @@ __host__ void launchSpectrumKernelGrayShort(
 // Шаблон по числу слов — по той же причине, что и в ядре простого XOR:
 // при динамическом размере codeword уезжает в локальную память, то есть в DRAM.
 template <int WORDS>
-__global__ void computeSpectrumKernelGrayShortT(
+__global__ void grayKernel(
     quint64* d_spectrum,
     int n,
     int k,

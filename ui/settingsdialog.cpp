@@ -147,7 +147,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     connect(m_ui->buttonBox, &QDialogButtonBox::accepted,
         this, [this]() {
             saveSettings();
-            emit sendSettingsToWidget(m_settings);
+            emit settingsChanged(m_settings);
             accept();
         });
     // Через QDialog::rejected, а не через кнопку: иначе закрытие крестиком или
@@ -156,7 +156,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     connect(m_ui->buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(this, &QDialog::rejected, this, [this]() {
         loadSettings();
-        emit sendSettingsToWidget(m_settings);
+        emit settingsChanged(m_settings);
     });
     applyUpdateRateLimit();
 
@@ -393,7 +393,7 @@ void SettingsDialog::applyMeasuredRate(double perSecond)
 
 void SettingsDialog::handleSettingsRequested()
 {
-    emit sendSettingsToWidget(m_settings);
+    emit settingsChanged(m_settings);
 }
 
 void SettingsDialog::setInterfaceEnabled( bool enabled )
@@ -457,7 +457,7 @@ void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int rank, in
 
     updateComputationControls();
     collectSettings();
-    emit sendSettingsToWidget(m_settings);
+    emit settingsChanged(m_settings);
 }
 
 void SettingsDialog::handleMatrixChanged(int rows, int cols) {
@@ -480,7 +480,7 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
     applyUpdateRateLimit();
 
     // Отправляем новые настройки в виджет
-    emit sendSettingsToWidget(m_settings);
+    emit settingsChanged(m_settings);
 }
 
 // ------------------------------------------------------------ вычислитель

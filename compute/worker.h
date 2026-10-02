@@ -162,7 +162,7 @@ public slots:
     void initializeRunState(LoadMode lm);
 signals:
     // Сигнал для обновления progressbar-а
-    void updateInfoPBR(       int percent                       );
+    void progressChanged(       int percent                       );
     // Текущий спектр — числами; как его показать, решает интерфейс.
     void spectrumUpdated(     const SpectrumCounts& spectrum    );
     // Сигнал, посылаемый при возникновении ошибки
@@ -171,10 +171,10 @@ signals:
     void finished( int );
     // Сигнал для обновления таймера. doneOps/totalOps идут вместе со временем:
     // на задачах в миллиарды слов один процент мало что говорит о масштабе.
-    void updateRemainingMinutes( int elapsedSec, int minutesLeft, double speed,
+    void estimateUpdated( int elapsedSec, int minutesLeft, double speed,
                                  quint64 doneOps, quint64 totalOps );
     // Сигнал того, что надо показать значок сохранения
-    void showSaveLBL();
+    void spectrumSaved();
     // Подобранная замером сетка запуска. Пользователю её стоит показать:
     // иначе непонятно, на чём считает программа.
     void gridTuned( int blocks, int threads );
@@ -192,11 +192,11 @@ signals:
     // Ход случайного поиска: до какого веса собираются слова, сколько попыток
     // сделано из скольких, вероятность пропустить хотя бы одно слово по
     // модели и по весам — сколько слов, по оценке Чао, ещё не найдено.
-    void searchEstimate( int weight, quint64 trialsDone, quint64 trialsTotal,
+    void searchEstimateUpdated( int weight, quint64 trialsDone, quint64 trialsTotal,
                          double missProbability, SpectrumFloat unseenByWeight );
     // Код произведения: что сейчас происходит и до какого веса спектр точен
     // (-1 — ещё считается).
-    void productPlan( const QString& text, int exactUpToWeight );
+    void productPlanReady( const QString& text, int exactUpToWeight );
 private:
     /* Функции для работы с биноминальными коэффициентами */
     quint64   totalCombinations(quint64 k, quint64 maxComb) const;
@@ -225,22 +225,22 @@ private:
     /* Функции для расчета спектра кода */
     // Общий цикл перебора по слоям и чанкам — см. ChunkPlan.
     void runChunks(const CodeGeometry& g, const ChunkPlan& plan);
-    void computeSpectrumGpuGrayShort  (const CodeGeometry& g);
-    void computeSpectrumGpuNoGrayShort(const CodeGeometry& g);
-    void computeSpectrumGpuNoGrayLong (const CodeGeometry& g);
-    void computeSpectrumCpuGrayShort  (const CodeGeometry& g);
-    void computeSpectrumCpuNoGrayShort(const CodeGeometry& g);
-    void computeSpectrumCpuNoGrayLong (const CodeGeometry& g);
+    void computeGrayGpu  (const CodeGeometry& g);
+    void computeXorGpuShort(const CodeGeometry& g);
+    void computeXorGpuLong (const CodeGeometry& g);
+    void computeGrayCpu  (const CodeGeometry& g);
+    void computeXorCpuShort(const CodeGeometry& g);
+    void computeXorCpuLong (const CodeGeometry& g);
     // Перебор одного чанка на процессоре; false — прерван отменой.
-    bool cpuGrayChunk    (const CodeGeometry& g, const LayerSlice& s);
-    bool cpuXorShortChunk(const CodeGeometry& g, quint64 r, const LayerSlice& s);
-    bool cpuXorLongChunk (const CodeGeometry& g, quint64 r, const LayerSlice& s, quint64 masksPerThread);
+    bool grayChunkCpu    (const CodeGeometry& g, const LayerSlice& s);
+    bool xorChunkCpuShort(const CodeGeometry& g, quint64 r, const LayerSlice& s);
+    bool xorChunkCpuLong (const CodeGeometry& g, quint64 r, const LayerSlice& s, quint64 masksPerThread);
     // Итоговая копия спектра с видеокарты в h_spectrum.
     void copySpectrumFromDevice(int numOfCols);
     // Случайный поиск по информационным множествам, CPU и GPU.
-    void computeSpectrumLeon          (const CodeGeometry& g);
+    void computeLeon          (const CodeGeometry& g);
     // Код произведения: низ спектра по компонентам.
-    void computeSpectrumProduct       (const CodeGeometry& g);
+    void computeProduct       (const CodeGeometry& g);
     // Компонента произведения: спектр до weightUpTo и слова до него же.
     // Маленькую перебирает целиком; большую считает вложенный Worker —
     // Брауэром–Циммерманом, если слова не нужны (сертификат, только счёт),
@@ -278,7 +278,7 @@ private:
 
     /* Отчёт о ходе расчёта */
     void    reportEstimate();
-    void    reportProgressBar();
+    void    reportProgress();
     // Ход шага, у которого своя единица работы (код произведения).
     void    reportStageProgress(quint64 done, quint64 total);
 

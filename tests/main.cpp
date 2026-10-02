@@ -199,12 +199,12 @@ static Spectrum runWorker(const RunConfig& cfg,
                      });
     g_searchDone = g_searchTotal = 0; g_searchMiss = -1.0; g_searchUnseen.clear();
     g_productText.clear(); g_productExactUpTo = -1;
-    QObject::connect(&worker, &Worker::productPlan,
+    QObject::connect(&worker, &Worker::productPlanReady,
                      [](const QString& text, int exactUpTo) {
                          g_productText = text;
                          if (exactUpTo >= 0) g_productExactUpTo = exactUpTo;
                      });
-    QObject::connect(&worker, &Worker::searchEstimate,
+    QObject::connect(&worker, &Worker::searchEstimateUpdated,
                      [](int, quint64 done, quint64 total, double miss, SpectrumFloat unseen) {
                          g_searchDone = done; g_searchTotal = total;
                          g_searchMiss = miss; g_searchUnseen = unseen;

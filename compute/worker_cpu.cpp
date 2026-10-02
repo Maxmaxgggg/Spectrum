@@ -37,30 +37,30 @@ inline bool bzKeepHost(const quint64* codeword, const CodeGeometry& g, int r, in
 
 } // namespace
 
-void Worker::computeSpectrumCpuGrayShort(const CodeGeometry& g)
+void Worker::computeGrayCpu(const CodeGeometry& g)
 {
     ChunkPlan plan;
     plan.layered     = false;
     plan.totalOps    = 1ULL << g.numOfRows;
     plan.layerSize   = [&g](quint64) { return quint64(1) << g.numOfRows; };
     plan.chunkTarget = g.chunkSize;
-    plan.run         = [this, &g](quint64, const LayerSlice& s) { return cpuGrayChunk(g, s); };
+    plan.run         = [this, &g](quint64, const LayerSlice& s) { return grayChunkCpu(g, s); };
     runChunks(g, plan);
 }
 
-void Worker::computeSpectrumCpuNoGrayShort(const CodeGeometry& g)
+void Worker::computeXorCpuShort(const CodeGeometry& g)
 {
     ChunkPlan plan;
     plan.totalOps    = totalLayerOps(g);
     plan.lastLayer   = g.maxRows;
     plan.layerSize   = [this, &g](quint64 r) { return m_binomTable(g.numOfRows, r); };
     plan.chunkTarget = g.chunkSize;
-    plan.run         = [this, &g](quint64 r, const LayerSlice& s) { return cpuXorShortChunk(g, r, s); };
+    plan.run         = [this, &g](quint64 r, const LayerSlice& s) { return xorChunkCpuShort(g, r, s); };
     runChunks(g, plan);
     updateSpectrum(int(g.numOfCols));
 }
 
-void Worker::computeSpectrumCpuNoGrayLong(const CodeGeometry& g)
+void Worker::computeXorCpuLong(const CodeGeometry& g)
 {
     // Масок на нить в чанке
     const quint64 masksPerThread = 1ULL << 20;
@@ -71,7 +71,7 @@ void Worker::computeSpectrumCpuNoGrayLong(const CodeGeometry& g)
     plan.layerSize   = [this, &g](quint64 r) { return m_binomTable(g.numOfRows, r); };
     plan.chunkTarget = quint64(omp_get_max_threads()) * masksPerThread;
     plan.run         = [this, &g, masksPerThread](quint64 r, const LayerSlice& s) {
-        return cpuXorLongChunk(g, r, s, masksPerThread);
+        return xorChunkCpuLong(g, r, s, masksPerThread);
     };
     runChunks(g, plan);
     updateSpectrum(int(g.numOfCols));
@@ -79,7 +79,7 @@ void Worker::computeSpectrumCpuNoGrayLong(const CodeGeometry& g)
 
 // Код Грея: маски чанка [s.offset, s.offset + s.size) делятся между нитями
 // поровну, соседние маски отличаются одним битом — одна строка на шаг.
-bool Worker::cpuGrayChunk(const CodeGeometry& g, const LayerSlice& s)
+bool Worker::grayChunkCpu(const CodeGeometry& g, const LayerSlice& s)
 {
     const quint64 numOfCols   = g.numOfCols;
     const quint64 wordsPerRow = g.wordsPerRow;
@@ -173,7 +173,7 @@ bool Worker::cpuGrayChunk(const CodeGeometry& g, const LayerSlice& s)
 //
 // Отмена проверяется только между чанками: чанк короткий, и задержка отмены
 // незаметна.
-bool Worker::cpuXorShortChunk(const CodeGeometry& g, quint64 r, const LayerSlice& s)
+bool Worker::xorChunkCpuShort(const CodeGeometry& g, quint64 r, const LayerSlice& s)
 {
     const quint64 numOfRows   = g.numOfRows;
     const quint64 numOfCols   = g.numOfCols;
@@ -249,7 +249,7 @@ bool Worker::cpuXorShortChunk(const CodeGeometry& g, quint64 r, const LayerSlice
 // сочетание — массив позиций. Нить берёт masksPerThread сочетаний подряд от
 // своего стартового номера и шагает nextPositions, XOR-я только изменившиеся
 // строки.
-bool Worker::cpuXorLongChunk(const CodeGeometry& g, quint64 r, const LayerSlice& s,
+bool Worker::xorChunkCpuLong(const CodeGeometry& g, quint64 r, const LayerSlice& s,
                              quint64 masksPerThread)
 {
     const quint64 numOfRows   = g.numOfRows;
@@ -349,7 +349,7 @@ bool Worker::cpuXorLongChunk(const CodeGeometry& g, quint64 r, const LayerSlice&
     }
 
     // Отмена посреди чанка: часть сочетаний не перебрана, и чанк выбрасывается
-    // целиком — ни в спектр, ни в чекпоинт (см. cpuGrayChunk).
+    // целиком — ни в спектр, ни в чекпоинт (см. grayChunkCpu).
     if (m_cancelled.load())
         return false;
     for (int t = 0; t < numThreads; ++t)

@@ -33,7 +33,7 @@ SpectrumPlot::SpectrumPlot(QCustomPlot* plot)
     m_overflowMessage->position->setCoords(0.5, 0.5);
     m_overflowMessage->setPositionAlignment(Qt::AlignCenter);
     m_overflowMessage->setText(QObject::tr("Спектральные компоненты слишком велики\n"
-                                         "Невозможно отобразить графически"));
+                                           "Невозможно отобразить графически"));
     QFont messageFont;
     messageFont.setPointSize(12);
     messageFont.setBold(true);

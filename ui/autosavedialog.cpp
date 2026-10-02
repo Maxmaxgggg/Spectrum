@@ -55,19 +55,19 @@ AutosaveDialog::AutosaveDialog(AutosaveStore* store, QWidget* parent)
 
     m_summary = new QLabel(this);
 
-    m_loadBtn      = new QPushButton(tr("Загрузить матрицу"), this);
-    m_removeBtn    = new QPushButton(tr("Удалить"), this);
-    m_removeAllBtn = new QPushButton(tr("Удалить всё"), this);
+    m_loadButton      = new QPushButton(tr("Загрузить матрицу"), this);
+    m_removeButton    = new QPushButton(tr("Удалить"), this);
+    m_removeAllButton = new QPushButton(tr("Удалить всё"), this);
     QPushButton* const folderBtn = new QPushButton(tr("Открыть папку"), this);
     QPushButton* const closeBtn  = new QPushButton(tr("Закрыть"), this);
 
-    m_loadBtn->setToolTip(tr("Вернуть матрицу этой записи в редактор,\n"
-                           "чтобы продолжить расчёт с неё."));
+    m_loadButton->setToolTip(tr("Вернуть матрицу этой записи в редактор,\n"
+                                "чтобы продолжить расчёт с неё."));
 
     QHBoxLayout* const buttons = new QHBoxLayout;
-    buttons->addWidget(m_loadBtn);
-    buttons->addWidget(m_removeBtn);
-    buttons->addWidget(m_removeAllBtn);
+    buttons->addWidget(m_loadButton);
+    buttons->addWidget(m_removeButton);
+    buttons->addWidget(m_removeAllButton);
     buttons->addStretch();
     buttons->addWidget(folderBtn);
     buttons->addWidget(closeBtn);
@@ -79,9 +79,9 @@ AutosaveDialog::AutosaveDialog(AutosaveStore* store, QWidget* parent)
 
     connect(m_tree, &QTreeWidget::itemSelectionChanged, this, &AutosaveDialog::updateButtons);
     connect(m_tree, &QTreeWidget::itemDoubleClicked, this, &AutosaveDialog::loadMatrixOfSelected);
-    connect(m_loadBtn,      &QPushButton::clicked, this, &AutosaveDialog::loadMatrixOfSelected);
-    connect(m_removeBtn,    &QPushButton::clicked, this, &AutosaveDialog::removeSelected);
-    connect(m_removeAllBtn, &QPushButton::clicked, this, &AutosaveDialog::removeAll);
+    connect(m_loadButton,      &QPushButton::clicked, this, &AutosaveDialog::loadMatrixOfSelected);
+    connect(m_removeButton,    &QPushButton::clicked, this, &AutosaveDialog::removeSelected);
+    connect(m_removeAllButton, &QPushButton::clicked, this, &AutosaveDialog::removeAll);
     connect(folderBtn,    &QPushButton::clicked, this, &AutosaveDialog::openFolder);
     connect(closeBtn,     &QPushButton::clicked, this, &QDialog::accept);
 
@@ -185,9 +185,9 @@ void AutosaveDialog::updateButtons()
     const bool any      = m_tree->topLevelItemCount() > 0;
     const bool selected = !m_tree->selectedItems().isEmpty();
 
-    m_removeBtn->setEnabled(selected);
-    m_loadBtn->setEnabled(m_tree->selectedItems().size() == 1);
-    m_removeAllBtn->setEnabled(any);
+    m_removeButton->setEnabled(selected);
+    m_loadButton->setEnabled(m_tree->selectedItems().size() == 1);
+    m_removeAllButton->setEnabled(any);
 }
 
 void AutosaveDialog::removeSelected()

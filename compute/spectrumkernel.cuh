@@ -32,7 +32,7 @@ __host__ cudaError_t copyMasksToConstant(const quint64* h_masks, int setCount, i
 
 // Простой XOR и Брауэр–Циммерман: сочетания из r строк с номерами
 // [chunkOffset, chunkOffset + chunkSize) внутри множества slot.
-__host__ void launchSpectrumKernelShort(
+__host__ void launchXorShort(
     quint64 * d_spectrum,
     const quint64 * d_binomTable,
     int numOfBlocks,
@@ -50,7 +50,7 @@ __host__ void launchSpectrumKernelShort(
 // Длинные коды (k >= 64): нить перебирает masksPerThread сочетаний подряд от
 // своего стартового (d_startPositions, по MAX_POSITIONS позиций на нить).
 // matrixGlobal — матрица в глобальной памяти; nullptr — в константной.
-__host__ void launchSpectrumKernelLong(
+__host__ void launchXorLong(
     int              numBlocks,
     int              threadsPerBlock,
     cudaStream_t     stream,
@@ -69,7 +69,7 @@ __host__ void launchSpectrumKernelLong(
 );
 // Код Грея (и дуальный расчёт): маски с номерами [chunkOffset,
 // chunkOffset + chunkSize) в порядке кода Грея.
-__host__ void launchSpectrumKernelGrayShort(
+__host__ void launchGray(
     int numOfBlocks,
     int threadsPerBlock,
     cudaStream_t stream,

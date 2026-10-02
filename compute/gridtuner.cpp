@@ -88,7 +88,7 @@ double timeChunk(const GridTuneTask& task, const LaunchGrid& grid,
                                      / uint64_t(grid.threads));
                 if (launchGrid <= 0) launchGrid = 1;
 
-                launchSpectrumKernelLong(
+                launchXorLong(
                     launchGrid, grid.threads, stream,
                     task.scratchSpectrum, task.matrixGlobal,
                     task.numOfCols, task.numOfRows, task.wordsPerRow,
@@ -97,15 +97,15 @@ double timeChunk(const GridTuneTask& task, const LaunchGrid& grid,
                     task.measureMasksPerThread, startMasks, task.numOfOnes,
                     nullptr, task.slot);
             }
-            else if (task.kernel == GridTuneTask::Kernel::GrayShort) {
-                launchSpectrumKernelGrayShort(
+            else if (task.kernel == GridTuneTask::Kernel::Gray) {
+                launchGray(
                     grid.blocks, grid.threads, stream,
                     task.scratchSpectrum,
                     task.numOfCols, task.numOfRows, task.wordsPerRow,
                     offset, chunk);
             }
             else {
-                launchSpectrumKernelShort(
+                launchXorShort(
                     task.scratchSpectrum, task.binomTable,
                     grid.blocks, grid.threads, stream,
                     task.numOfCols, task.numOfRows, task.wordsPerRow,

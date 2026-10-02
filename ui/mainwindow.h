@@ -31,37 +31,37 @@ public:
     ~MainWindow() override;
 
 signals:
-    void setInterfaceEnabled(bool enabled);
+    void interfaceEnabledChanged(bool enabled);
     void matrixChanged(int rows, int cols);
 
-    void sendSettingsToWorker( const ComputationSettings& settings );
-    void requestSettings();
+    void settingsChanged( const ComputationSettings& settings );
+    void settingsRequested();
     // Настройки расчёта из поднятого автосохранения.
-    void applySettingsFromAutosave(int algorithm, int enumType, int rank, int weight,
-                                   int componentAlgorithm);
+    void autosaveApplied(int algorithm, int enumType, int rank, int weight,
+                         int componentAlgorithm);
 
 private slots:
 
-    void on_executePBN_clicked();
-    void on_exitPBN_clicked();
-    void on_cancelPBN_clicked();
-    void handleUpdateInfoPBR(int percent);
+    void handleExecuteClicked();
+    void handleExitClicked();
+    void handleCancelClicked();
+    void handleProgressChanged(int percent);
     // Спектр от воркера: текст и график.
-    void handleSpectrum(const SpectrumCounts& spectrum);
-    void handleError(const QString& message);
+    void handleSpectrumUpdated(const SpectrumCounts& spectrum);
+    void handleErrorOccurred(const QString& message);
     void handleFinished(int);
-    void handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed,
-                                      quint64 doneOps, quint64 totalOps);
-    void showSaveLBL();
+    void handleEstimateUpdated(int elapsedSec, int minutesLeft, double speed,
+                               quint64 doneOps, quint64 totalOps);
+    void handleSpectrumSaved();
     void handleGridTuned(int blocks, int threads);
     // План Брауэра–Циммермана: показать в панели и пометить в спектре веса,
     // которые перебор не гарантирует.
     void handlePlanReady(int sets, int rows, int exactUpToWeight);
     // Ход случайного поиска: панель и пометки «ещё не найдено» в спектре.
-    void handleSearchEstimate(int weight, quint64 trialsDone, quint64 trialsTotal,
-                              double missProbability, SpectrumFloat unseenByWeight);
+    void handleSearchEstimateUpdated(int weight, quint64 trialsDone, quint64 trialsTotal,
+                                     double missProbability, SpectrumFloat unseenByWeight);
     // Код произведения: строка о ходе и точности в панели.
-    void handleProductPlan(const QString& text, int exactUpToWeight);
+    void handleProductPlanReady(const QString& text, int exactUpToWeight);
     void handleMatrixChanged();
 
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -98,8 +98,8 @@ private:
     // изменения размера идут десятками в секунду, и рисовать на каждое —
     // это и есть подлагивание. Ждём, пока размер перестанет меняться.
     QTimer*         m_plotRefreshTimer = nullptr;
-    Worker         *m_workerPtr        = nullptr;
-    QThread        *m_workerThreadPtr  = nullptr;
+    Worker         *m_worker        = nullptr;
+    QThread        *m_workerThread  = nullptr;
     SettingsDialog *m_settingsDialog   = nullptr;
     MatrixMenu     *m_matrixMenu       = nullptr;
 
@@ -132,7 +132,7 @@ private:
     void pauseComputation();
     void resumeComputation();
 
-    void setWorker();
+    void setupWorker();
     // Текст, подсказка и значок кнопки запуска — по текущему состоянию.
     // Одним местом: раньше эти три вещи выставлялись в шести, и стоило
     // добавить состояние, как подпись и значок разъезжались.
@@ -162,8 +162,8 @@ private:
     void applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& record);
     // Пока матрица подставляется из записи, правкой её считать нельзя.
     bool m_applyingAutosave = false;
-    void setMatrixMenu();
-    void setToolTips();
+    void setupMatrixMenu();
+    void setupToolTips();
     void connectSettingsDialog();
     void applySettings();
     void saveSettings(); 

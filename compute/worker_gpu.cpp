@@ -10,7 +10,7 @@
 
 #include <cassert>
 
-void Worker::computeSpectrumGpuGrayShort(const CodeGeometry& g)
+void Worker::computeGrayGpu(const CodeGeometry& g)
 {
     ChunkPlan plan;
     plan.layered     = false;
@@ -19,9 +19,9 @@ void Worker::computeSpectrumGpuGrayShort(const CodeGeometry& g)
     plan.chunkTarget = g.chunkSize;
     plan.stream      = m_buffers->stream.get();
     plan.run = [this, &g](quint64, const LayerSlice& s) {
-        launchSpectrumKernelGrayShort(g.blocksGpu, g.threadsGpu, m_buffers->stream.get(), m_buffers->d_spectrum.get(),
-                                      int(g.numOfCols), int(g.numOfRows), int(g.wordsPerRow),
-                                      s.offset, s.size);
+        launchGray(g.blocksGpu, g.threadsGpu, m_buffers->stream.get(), m_buffers->d_spectrum.get(),
+                   int(g.numOfCols), int(g.numOfRows), int(g.wordsPerRow),
+                   s.offset, s.size);
         return true;
     };
     runChunks(g, plan);
@@ -29,7 +29,7 @@ void Worker::computeSpectrumGpuGrayShort(const CodeGeometry& g)
     updateSpectrum(int(g.numOfCols));
 }
 
-void Worker::computeSpectrumGpuNoGrayShort(const CodeGeometry& g)
+void Worker::computeXorGpuShort(const CodeGeometry& g)
 {
     ChunkPlan plan;
     plan.totalOps    = totalLayerOps(g);
@@ -38,9 +38,9 @@ void Worker::computeSpectrumGpuNoGrayShort(const CodeGeometry& g)
     plan.chunkTarget = g.chunkSize;
     plan.stream      = m_buffers->stream.get();
     plan.run = [this, &g](quint64 r, const LayerSlice& s) {
-        launchSpectrumKernelShort(m_buffers->d_spectrum.get(), m_buffers->d_binomTable.get(), g.blocksGpu, g.threadsGpu,
-                                  m_buffers->stream.get(), int(g.numOfCols), int(g.numOfRows), int(g.wordsPerRow),
-                                  s.offset, s.size, r, s.slot);
+        launchXorShort(m_buffers->d_spectrum.get(), m_buffers->d_binomTable.get(), g.blocksGpu, g.threadsGpu,
+                       m_buffers->stream.get(), int(g.numOfCols), int(g.numOfRows), int(g.wordsPerRow),
+                       s.offset, s.size, r, s.slot);
         return true;
     };
     runChunks(g, plan);
@@ -51,7 +51,7 @@ void Worker::computeSpectrumGpuNoGrayShort(const CodeGeometry& g)
 // Длинные коды (k >= 64): нить ядра берёт masksPerThread сочетаний подряд от
 // своего стартового сочетания. Стартовые сочетания разбирает хост — по
 // номеру, массивом позиций — и копирует на устройство перед каждым чанком.
-void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
+void Worker::computeXorGpuLong(const CodeGeometry& g)
 {
     const quint64 numOfRows       = g.numOfRows;
     const int     threadsPerBlock = g.threadsGpu;
@@ -139,10 +139,10 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
         #else
         uint64_t* const maskCounter = nullptr;
         #endif
-        launchSpectrumKernelLong(grid, threadsPerBlock, m_buffers->stream.get(), m_buffers->d_spectrum.get(), m_buffers->d_matrix.get(),
-                                 int(g.numOfCols), int(numOfRows), int(g.wordsPerRow), chunkSize,
-                                 d_slots.get(), masksPerThread, numStartMasks, r, maskCounter,
-                                 slice.slot);
+        launchXorLong(grid, threadsPerBlock, m_buffers->stream.get(), m_buffers->d_spectrum.get(), m_buffers->d_matrix.get(),
+                      int(g.numOfCols), int(numOfRows), int(g.wordsPerRow), chunkSize,
+                      d_slots.get(), masksPerThread, numStartMasks, r, maskCounter,
+                      slice.slot);
         // Синхронизации после ядра нет: хост переписывает только тот буфер
         // стартовых сочетаний, с которого копирование уже закончилось, а
         // остальное упорядочено самим потоком.

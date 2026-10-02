@@ -26,7 +26,7 @@
 //
 // Чекпоинтов по ходу нет: пришлось бы писать на диск всю таблицу, а поиск по
 // самой своей природе короткий — его предел ставит память под слова.
-void Worker::computeSpectrumLeon(const CodeGeometry& g)
+void Worker::computeLeon(const CodeGeometry& g)
 {
     const int rows  = int(g.numOfRows);
     const int cols  = int(g.numOfCols);
@@ -107,7 +107,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         if (due.estimate)
             reportEstimate();
         if (due.bar)
-            reportProgressBar();
+            reportProgress();
         if (due.spectrum || force) {
             m_progress.markSpectrum();
             updateSpectrum(cols);
@@ -125,8 +125,8 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
                     missTotal += double(found[size_t(w)]) * q / std::max(1.0 - q, 1e-300);
                 unseen[w] = float(chao[size_t(w)]);
             }
-            emit searchEstimate(maxWeight, collected, target,
-                                std::min(1.0, missTotal), unseen);
+            emit searchEstimateUpdated(maxWeight, collected, target,
+                                       std::min(1.0, missTotal), unseen);
         }
     };
 

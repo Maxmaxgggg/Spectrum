@@ -85,11 +85,11 @@ void Worker::reportEstimate()
         return;
     m_progress.markEstimate();
     m_runState.elapsedSec = m_progress.elapsedSec();
-    emit updateRemainingMinutes(int(m_progress.elapsedSec()),
-                                m_progress.minutesLeft(),
-                                m_progress.speed(),
-                                m_progress.doneOps(),
-                                m_progress.totalOps());
+    emit estimateUpdated(int(m_progress.elapsedSec()),
+                         m_progress.minutesLeft(),
+                         m_progress.speed(),
+                         m_progress.doneOps(),
+                         m_progress.totalOps());
 }
 
 // Ход одного шага расчёта произведения: общий счётчик подменяется на шаг,
@@ -102,15 +102,15 @@ void Worker::reportStageProgress(quint64 done, quint64 total)
     if (due.estimate)
         reportEstimate();
     if (due.bar)
-        reportProgressBar();
+        reportProgress();
 }
 
-void Worker::reportProgressBar()
+void Worker::reportProgress()
 {
     if (m_probeMode)
         return;
     m_progress.markBar();
-    emit updateInfoPBR(m_progress.percent());
+    emit progressChanged(m_progress.percent());
 }
 
 // Чекпоинт по ходу перебора: (rOffset, chunkOffset) — первое ещё не
@@ -151,7 +151,7 @@ void Worker::runChunks(const CodeGeometry& g, const ChunkPlan& plan)
     m_progress.begin(plan.totalOps, m_runState.doneOps, m_runState.elapsedSec);
     // При продолжении с чекпоинта полоса сразу показывает пройденное.
     if (!m_probeMode)
-        emit updateInfoPBR(m_progress.percent());
+        emit progressChanged(m_progress.percent());
 
     const int cols = int(g.numOfCols);
     // У кода Грея слой один: rOffset там не используется (а проба потолка
@@ -193,7 +193,7 @@ void Worker::runChunks(const CodeGeometry& g, const ChunkPlan& plan)
                 updateSpectrum(cols);
             }
             if (due.bar)
-                reportProgressBar();
+                reportProgress();
             if (due.checkpoint)
                 saveCheckpoint(plan, cols, r, offset);
             if (m_cancelled.load())
@@ -207,7 +207,7 @@ void Worker::setLiveIntervals(int spectrumMs, int checkpointSeconds)
     if (spectrumMs <= 0 || checkpointSeconds <= 0)
         return;
     m_progress.setIntervals(std::chrono::milliseconds{ spectrumMs },
-                          std::chrono::seconds{ checkpointSeconds });
+                            std::chrono::seconds{ checkpointSeconds });
 }
 
 // Прерывание сразу после сохранения: состояние на диске согласовано, и
@@ -302,7 +302,7 @@ void Worker::makeCheckpoint(int numOfCols, bool finished)
     // одним файлом на папку, иначе на коде (1000,997) каждое сохранение тащило
     // бы с собой мегабайт нулей и единиц.
     m_autosave.save(autosaveKeyMatrix(), record);
-    emit showSaveLBL();
+    emit spectrumSaved();
 }
 
 void Worker::setAutosaveRoot(const QString& dir)
@@ -371,7 +371,7 @@ void Worker::measureUpdateRate()
         // Просить спектр как можно чаще, сохранений не делать: проба не имеет
         // права трогать состояние расчёта.
         m_progress.setIntervals(std::chrono::milliseconds{ 0 },
-                              std::chrono::hours{ 24 });
+                                std::chrono::hours{ 24 });
         m_progress.setOpsCheckpoint(0);
 
         emit updateRateProbeStarted();
@@ -621,7 +621,7 @@ void Worker::tuneGrid(CodeGeometry& g)
 
     const bool gray = !m_settings.layered();
     task.kernel = g.isLongCode ? GridTuneTask::Kernel::XorLong
-                : gray         ? GridTuneTask::Kernel::GrayShort
+                : gray         ? GridTuneTask::Kernel::Gray
                                : GridTuneTask::Kernel::XorShort;
 
     // Отдельный буфер спектра: замер не имеет права попасть в настоящий.
@@ -633,7 +633,7 @@ void Worker::tuneGrid(CodeGeometry& g)
     // Слой, на котором идёт замер, и его размер. У кода Грея слоёв нет —
     // маски нумеруются сплошь.
     quint64 layerRank = 0;
-    if (task.kernel == GridTuneTask::Kernel::GrayShort) {
+    if (task.kernel == GridTuneTask::Kernel::Gray) {
         task.availableMasks = 1ULL << g.numOfRows;
         task.totalMasks     = task.availableMasks;
     }
@@ -725,16 +725,16 @@ void Worker::dispatchComputation(const CodeGeometry& g)
             "код Грея неприменим: больше 63 строк не помещается в маску");
 
     if (m_settings.algorithmType == ComputationSettings::RandomInfoSets)
-        computeSpectrumLeon(g);
+        computeLeon(g);
     else if (gray)
-        g.useGpu ? computeSpectrumGpuGrayShort(g)
-                 : computeSpectrumCpuGrayShort(g);
+        g.useGpu ? computeGrayGpu(g)
+                 : computeGrayCpu(g);
     else if (g.isLongCode)
-        g.useGpu ? computeSpectrumGpuNoGrayLong(g)
-                 : computeSpectrumCpuNoGrayLong(g);
+        g.useGpu ? computeXorGpuLong(g)
+                 : computeXorCpuLong(g);
     else
-        g.useGpu ? computeSpectrumGpuNoGrayShort(g)
-                 : computeSpectrumCpuNoGrayShort(g);
+        g.useGpu ? computeXorGpuShort(g)
+                 : computeXorCpuShort(g);
 }
 
 // Забирает итоговый спектр, рассылает сигналы и освобождает ресурсы.
@@ -743,7 +743,7 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
     if (m_cancelled.load()) {
         initializeRunState(LoadMode::Reset);
         emit finished(Constants::ERROR_OCCURRED);
-        emit updateInfoPBR(0);
+        emit progressChanged(0);
         updateSpectrum(int(g.numOfCols));
         releaseResources();
         return;
@@ -809,7 +809,7 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
     // замеру: иначе в панели остаётся «перебрано 47,6 из 48,0 млрд,
     // осталось 1 мин» при состоянии «готово».
     reportEstimate();
-    emit updateInfoPBR(100);
+    emit progressChanged(100);
     emit finished(int(duration_cast<seconds>(steady_clock::now() - startedAt).count()));
 
     releaseResources();
@@ -849,7 +849,7 @@ void Worker::computeSpectrumImpl()
     if (m_settings.algorithmType == ComputationSettings::ProductCode) {
         m_buffers->h_spectrum.allocate(g.spectrumSize, HostBuffer<quint64>::Kind::Paged);
         m_buffers->h_spectrum.fillZero();
-        computeSpectrumProduct(g);
+        computeProduct(g);
         finishComputation(g, startedAt);
         return;
     }

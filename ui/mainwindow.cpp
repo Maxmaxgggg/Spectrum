@@ -25,7 +25,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_ui(new Ui::MainWindow)
 {
     m_ui->setupUi(this);
-    // Значок сохранения: невидим, пока не мигнёт при записи (showSaveLBL).
+    // Значок сохранения: невидим, пока не мигнёт при записи (handleSpectrumSaved).
     // Эффект прозрачности в .ui не задаётся — только кодом.
     m_saveLBLOpacityEffect = new QGraphicsOpacityEffect(m_ui->saveLBL);
     m_ui->saveLBL->setGraphicsEffect(m_saveLBLOpacityEffect);
@@ -33,7 +33,12 @@ MainWindow::MainWindow(QWidget* parent)
     m_saveLBLOpacityEffect->setOpacity(0.0);
     m_settingsDialog = new SettingsDialog(this);
     m_spectrumPlot = std::make_unique<SpectrumPlot>(m_ui->spectrumCPT);
-    connect( m_ui->matrixPTE, &FilterPlainTextEdit::textChanged, this,  &MainWindow::handleMatrixChanged    );
+    // Кнопки связаны явно, а не автосвязыванием по имени on_<объект>_<сигнал>:
+    // то молча отваливается при переименовании объекта в форме.
+    connect(m_ui->executePBN, &QPushButton::clicked, this, &MainWindow::handleExecuteClicked);
+    connect(m_ui->exitPBN,    &QPushButton::clicked, this, &MainWindow::handleExitClicked);
+    connect(m_ui->cancelPBN,  &QPushButton::clicked, this, &MainWindow::handleCancelClicked);
+    connect(m_ui->matrixPTE,  &FilterPlainTextEdit::textChanged, this, &MainWindow::handleMatrixChanged);
     connect(m_ui->autosaveACN, &QAction::triggered,
         this, &MainWindow::showAutosaveDialog);
     connect(m_ui->settingsACN, &QAction::triggered,
@@ -61,12 +66,12 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_ui->spectrumCPT->installEventFilter(this);
     connectSettingsDialog();
-    setWorker();
-    setMatrixMenu();
-    setToolTips();
+    setupWorker();
+    setupMatrixMenu();
+    setupToolTips();
     // Настройки диалога нужны окну сразу: от алгоритма зависит, показывать ли
     // панель второй матрицы. Пустая матрица сигнала о смене не даёт.
-    emit requestSettings();
+    emit settingsRequested();
     handleMatrixChanged();
     // Старые чекпоинты лежали в реестре, по мегабайту с матрицей на запись.
     // Переносим их в файлы один раз и вычищаем ветку.
@@ -78,21 +83,21 @@ MainWindow::MainWindow(QWidget* parent)
 MainWindow::~MainWindow()
 {
     saveSettings();
-    if (m_workerPtr){
-        m_workerPtr->cancel();
+    if (m_worker){
+        m_worker->cancel();
     }
-    if(m_workerThreadPtr->isRunning()){
-        m_workerThreadPtr->quit();
-        m_workerThreadPtr->wait();
+    if(m_workerThread->isRunning()){
+        m_workerThread->quit();
+        m_workerThread->wait();
     }
-    if(m_workerPtr){
-        delete m_workerPtr;
-        m_workerPtr = nullptr;
+    if(m_worker){
+        delete m_worker;
+        m_worker = nullptr;
     }
     delete m_ui;
 }
 
-void MainWindow::setMatrixMenu()
+void MainWindow::setupMatrixMenu()
 {
 
     m_matrixMenu = new MatrixMenu(m_ui->loadMatrixACN, m_ui->saveMatrixACN, m_ui->createMatrixACN, this);
@@ -137,7 +142,7 @@ void MainWindow::applyAutosave(const Matrix& matrix, const AutosaveRecord& recor
         m_pendingMatrix   = matrix;
         m_pendingRecord   = record;
         m_pendingAutosave = true;
-        on_cancelPBN_clicked();
+        handleCancelClicked();
         return;
     }
 
@@ -167,9 +172,9 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
     int weight = record.bzWeight;
     if (record.algorithm == ComputationSettings::RandomInfoSets) weight = record.leonWeight;
     if (product)                                                  weight = record.productWeight;
-    emit applySettingsFromAutosave(int(record.algorithm), int(record.enumType),
-                                   product ? record.productRank : record.maxRows, weight,
-                                   product ? (record.productMissExponent > 0
+    emit autosaveApplied(int(record.algorithm), int(record.enumType),
+                         product ? record.productRank : record.maxRows, weight,
+                         product ? (record.productMissExponent > 0
                                                   ? int(ComputationSettings::RandomInfoSets)
                                                   : int(ComputationSettings::BrouwerZimmermann))
                                            : 0);
@@ -186,7 +191,7 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
     if (shownUpTo >= 0)
         for (int w = shownUpTo + 1; w < spectrum.size(); ++w)
             spectrum.counts[w] = 0;
-    handleSpectrum(spectrum);
+    handleSpectrumUpdated(spectrum);
 
     const double total = totalOperations(record, matrix.size());
     const int percent = total > 0.0 ? int(100.0 * double(record.state.doneOps) / total) : 0;
@@ -222,7 +227,7 @@ void MainWindow::updateExecuteButton()
     }
 }
 
-void MainWindow::handleSpectrum(const SpectrumCounts& spectrum)
+void MainWindow::handleSpectrumUpdated(const SpectrumCounts& spectrum)
 {
     m_lastSpectrum = spectrum;
     showSpectrumText();
@@ -287,7 +292,7 @@ void MainWindow::setupDocks()
     m_matrixPages->addWidget(m_ui->matrixPTE);
     m_matrixPages->addWidget(m_matrix2PTE);
     m_matrixDock   = makeDock(m_matrixPages, tr("Матрица"),
-                            UiStrings::MATRIX_TOOLTIP,   "matrixDock");
+                              UiStrings::MATRIX_TOOLTIP,   "matrixDock");
 
     // Вкладки — в заголовке панели, в одной строке с её кнопками.
     m_matrixTabBar = new QTabBar;
@@ -307,13 +312,13 @@ void MainWindow::setupDocks()
         m_matrix2PTE->setPlainText(first);
     });
     m_spectrumDock = makeDock(m_ui->spectrumPTE, tr("Спектр кодовых слов"),
-                            UiStrings::SPECTRUM_TOOLTIP, "spectrumDock");
+                              UiStrings::SPECTRUM_TOOLTIP, "spectrumDock");
     m_plotDock     = makeDock(m_ui->spectrumCPT, tr("График спектра"),
-                            UiStrings::PLOT_TOOLTIP,     "plotDock");
+                              UiStrings::PLOT_TOOLTIP,     "plotDock");
 
     m_statsPanel = new StatsPanel(this);
     m_statsDock  = makeDock(m_statsPanel, tr("Ход расчёта"),
-                          UiStrings::STATS_TOOLTIP, "statsDock");
+                            UiStrings::STATS_TOOLTIP, "statsDock");
 
     // Швартуется только первый док; остальные добавляет splitDockWidget. Если
     // добавить все три через addDockWidget, они складываются в одну область
@@ -379,7 +384,7 @@ void MainWindow::resetLayout()
     m_plotDock->show();
 }
 
-void MainWindow::setToolTips() {
+void MainWindow::setupToolTips() {
     m_ui->cancelPBN->setToolTip(UiStrings::CANCEL_TOOLTIP);
     // Квадрат остановки у отмены не меняется, поэтому ставится один раз.
     m_ui->cancelPBN->setIcon(FluentIcons::icon(this, FluentIcons::STOP));
@@ -388,36 +393,36 @@ void MainWindow::setToolTips() {
     m_ui->exitPBN->setIcon(FluentIcons::icon(this, FluentIcons::EXIT));
 }
 
-void MainWindow::setWorker()
+void MainWindow::setupWorker()
 {
-    m_workerPtr = new Worker;
-    m_workerThreadPtr = new QThread(this);
-    if (!m_workerPtr) return;
+    m_worker = new Worker;
+    m_workerThread = new QThread(this);
+    if (!m_worker) return;
 
-    m_workerPtr->moveToThread(m_workerThreadPtr);
+    m_worker->moveToThread(m_workerThread);
 
-    connect( m_workerPtr,       &Worker::updateInfoPBR,                  this,      &MainWindow::handleUpdateInfoPBR,                  Qt::QueuedConnection );
-    connect( m_workerPtr,       &Worker::spectrumUpdated,                this,      &MainWindow::handleSpectrum,                       Qt::QueuedConnection );
-    connect( m_workerPtr,       &Worker::updateRemainingMinutes,         this,      &MainWindow::handleUpdateRemainingMinutes,         Qt::QueuedConnection );
-    connect( m_workerPtr,       &Worker::errorOccurred,                  this,      &MainWindow::handleError,                          Qt::QueuedConnection );
-    connect( m_workerPtr,       &Worker::finished,                       this,      &MainWindow::handleFinished,                       Qt::QueuedConnection );
-    connect( m_workerPtr,       &Worker::showSaveLBL,                    this,      &MainWindow::showSaveLBL,                          Qt::QueuedConnection );
-    connect( m_workerPtr,       &Worker::gridTuned,                      this,      &MainWindow::handleGridTuned,                      Qt::QueuedConnection );
-    connect( m_workerPtr,       &Worker::planReady,                      this,      &MainWindow::handlePlanReady,                      Qt::QueuedConnection );
-    connect( m_workerPtr,       &Worker::searchEstimate,                 this,      &MainWindow::handleSearchEstimate,                 Qt::QueuedConnection );
-    connect( m_workerPtr,       &Worker::productPlan,                    this,      &MainWindow::handleProductPlan,                    Qt::QueuedConnection );
-    connect( m_workerPtr,       &Worker::updateRateMeasured,             m_settingsDialog, &SettingsDialog::applyMeasuredRate,            Qt::QueuedConnection );
+    connect(m_worker, &Worker::progressChanged,       this,             &MainWindow::handleProgressChanged,       Qt::QueuedConnection);
+    connect(m_worker, &Worker::spectrumUpdated,       this,             &MainWindow::handleSpectrumUpdated,       Qt::QueuedConnection);
+    connect(m_worker, &Worker::estimateUpdated,       this,             &MainWindow::handleEstimateUpdated,       Qt::QueuedConnection);
+    connect(m_worker, &Worker::errorOccurred,         this,             &MainWindow::handleErrorOccurred,         Qt::QueuedConnection);
+    connect(m_worker, &Worker::finished,              this,             &MainWindow::handleFinished,              Qt::QueuedConnection);
+    connect(m_worker, &Worker::spectrumSaved,         this,             &MainWindow::handleSpectrumSaved,         Qt::QueuedConnection);
+    connect(m_worker, &Worker::gridTuned,             this,             &MainWindow::handleGridTuned,             Qt::QueuedConnection);
+    connect(m_worker, &Worker::planReady,             this,             &MainWindow::handlePlanReady,             Qt::QueuedConnection);
+    connect(m_worker, &Worker::searchEstimateUpdated, this,             &MainWindow::handleSearchEstimateUpdated, Qt::QueuedConnection);
+    connect(m_worker, &Worker::productPlanReady,      this,             &MainWindow::handleProductPlanReady,      Qt::QueuedConnection);
+    connect(m_worker, &Worker::updateRateMeasured,    m_settingsDialog, &SettingsDialog::applyMeasuredRate,       Qt::QueuedConnection);
     // Проба останавливается тем же способом, которым пользователь останавливает
     // расчёт. Отсчёт начинается по сигналу воркера, а не с самой просьбы: перед
     // замером может пройти подбор сетки, и он занимает секунды.
-    connect( m_workerPtr, &Worker::updateRateProbeStarted, this, [this]() {
+    connect( m_worker, &Worker::updateRateProbeStarted, this, [this]() {
         QTimer::singleShot(Constants::PROBE_DURATION_MS, this, [this]() {
-            if (m_workerPtr)
-                m_workerPtr->cancel();
+            if (m_worker)
+                m_worker->cancel();
         });
     }, Qt::QueuedConnection );
 
-    connect( this,            &MainWindow::sendSettingsToWorker,       m_workerPtr, &Worker::setSettings,                           Qt::QueuedConnection );
+    connect(this, &MainWindow::settingsChanged, m_worker, &Worker::setSettings, Qt::QueuedConnection);
 }
 
 void MainWindow::connectSettingsDialog()
@@ -425,17 +430,17 @@ void MainWindow::connectSettingsDialog()
     if (!m_settingsDialog) return;
 
 
-    connect( this,     &MainWindow::matrixChanged,            m_settingsDialog, &SettingsDialog::handleMatrixChanged     );
-    connect( this,     &MainWindow::setInterfaceEnabled,      m_settingsDialog, &SettingsDialog::setInterfaceEnabled     );
-    connect( this,     &MainWindow::requestSettings,          m_settingsDialog, &SettingsDialog::handleSettingsRequested );
-    connect( this,     &MainWindow::applySettingsFromAutosave, m_settingsDialog, &SettingsDialog::applyFromAutosave       );
+    connect(this, &MainWindow::matrixChanged,           m_settingsDialog, &SettingsDialog::handleMatrixChanged);
+    connect(this, &MainWindow::interfaceEnabledChanged, m_settingsDialog, &SettingsDialog::setInterfaceEnabled);
+    connect(this, &MainWindow::settingsRequested,       m_settingsDialog, &SettingsDialog::handleSettingsRequested);
+    connect(this, &MainWindow::autosaveApplied,         m_settingsDialog, &SettingsDialog::applyFromAutosave);
 
     // Записываем матрицу при получении
     // Замер потолка обновления: короткий расчёт на настройках, которые сейчас
     // выставлены в диалоге, — не на тех, что подтверждены кнопкой.
     connect( m_settingsDialog, &SettingsDialog::measureUpdateRateRequested,
         this, [this]( const ComputationSettings& requested ) {
-            if (!m_workerPtr)
+            if (!m_worker)
                 return;
             // Без матрицы пробе не с чем работать, а описание задачи на пустой
             // матрице лезет за её первую строку.
@@ -450,13 +455,13 @@ void MainWindow::connectSettingsDialog()
             probe.matrix  = m_ui->matrixPTE->toStringList();
             probe.matrix2 = m_matrix2PTE->toStringList();
 
-            m_workerThreadPtr->start();
-            QMetaObject::invokeMethod(m_workerPtr, "setSettings", Qt::QueuedConnection,
+            m_workerThread->start();
+            QMetaObject::invokeMethod(m_worker, "setSettings", Qt::QueuedConnection,
                                       Q_ARG(ComputationSettings, probe));
-            QMetaObject::invokeMethod(m_workerPtr, "measureUpdateRate", Qt::QueuedConnection);
+            QMetaObject::invokeMethod(m_worker, "measureUpdateRate", Qt::QueuedConnection);
         });
 
-    connect( m_settingsDialog, &SettingsDialog::sendSettingsToWidget,
+    connect( m_settingsDialog, &SettingsDialog::settingsChanged,
         this, [this]( const ComputationSettings& fromDialog ) {
             const ComputationSettings::Algorithm before = m_settings.algorithmType;
             m_settings = fromDialog;
@@ -472,19 +477,19 @@ void MainWindow::connectSettingsDialog()
                 m_runState = RunState::Idle;
                 updateExecuteButton();
             }
-            emit sendSettingsToWorker(m_settings);
+            emit settingsChanged(m_settings);
 
             // Идущему расчёту настройки через очередь не доходят: воркер до
             // самого конца не возвращается в свой цикл событий. Живые интервалы
             // передаются напрямую.
-            if (m_workerPtr && (m_runState == RunState::Running || m_runState == RunState::Paused))
-                m_workerPtr->setLiveIntervals(m_settings.timeIntSet.updateSpectrumInterval,
-                                            m_settings.timeIntSet.saveSpectrumInterval);
+            if (m_worker && (m_runState == RunState::Running || m_runState == RunState::Paused))
+                m_worker->setLiveIntervals(m_settings.timeIntSet.updateSpectrumInterval,
+                                           m_settings.timeIntSet.saveSpectrumInterval);
         });
 }
 
 
-void MainWindow::on_executePBN_clicked()
+void MainWindow::handleExecuteClicked()
 {
     // Одна и та же кнопка запускает, ставит на паузу и продолжает расчёт.
     switch (m_runState) {
@@ -532,7 +537,7 @@ void MainWindow::startComputation()
 {
     const bool resuming = m_runState == RunState::Loaded;
 
-    if (!m_workerPtr) {
+    if (!m_worker) {
         QMessageBox::warning(this, UiStrings::ERROR_TITLE, tr("Worker не подключён"));
         return;
     }
@@ -546,7 +551,7 @@ void MainWindow::startComputation()
         return;
     }
 
-    emit setInterfaceEnabled(false);
+    emit interfaceEnabledChanged(false);
     m_ui->matrixPTE->setReadOnly(true);
     m_matrix2PTE->setReadOnly(true);
     m_ui->cancelPBN->setEnabled(true);
@@ -555,8 +560,8 @@ void MainWindow::startComputation()
     m_ui->infoPBR->setValue(0);
 
     // Поток нужен уже сейчас: настройки уходят воркеру через очередь событий.
-    m_workerThreadPtr->start();
-    emit requestSettings();
+    m_workerThread->start();
+    emit settingsRequested();
 
     // Запись подняли из диалога — пользователь уже сказал, что продолжает,
     // и спрашивать второй раз незачем.
@@ -576,15 +581,15 @@ void MainWindow::startComputation()
 
     // Режим задаётся всегда, а не только при найденном сохранении: иначе
     // воркер начинал бы с того состояния, что осталось от прошлого запуска.
-    QMetaObject::invokeMethod(m_workerPtr, "initializeRunState", Qt::QueuedConnection,
+    QMetaObject::invokeMethod(m_worker, "initializeRunState", Qt::QueuedConnection,
                               Q_ARG(LoadMode, mode));
 
-    // Настройки к этому моменту уже пришли от диалога по requestSettings.
+    // Настройки к этому моменту уже пришли от диалога по settingsRequested.
     m_statsPanel->showTask(m_settings);
     m_statsPanel->clearProgress();
     m_unseenByWeight.clear();
 
-    QMetaObject::invokeMethod(m_workerPtr, "computeSpectrum", Qt::QueuedConnection);
+    QMetaObject::invokeMethod(m_worker, "computeSpectrum", Qt::QueuedConnection);
 
     m_runState = RunState::Running;
     updateExecuteButton();
@@ -592,8 +597,8 @@ void MainWindow::startComputation()
 
 void MainWindow::pauseComputation()
 {
-    if (m_workerPtr)
-        m_workerPtr->pause();
+    if (m_worker)
+        m_worker->pause();
 
     m_runState = RunState::Paused;
     setWindowTitle(UiStrings::PAUSE_TEXT);
@@ -603,8 +608,8 @@ void MainWindow::pauseComputation()
 
 void MainWindow::resumeComputation()
 {
-    if (m_workerPtr)
-        m_workerPtr->resume();
+    if (m_worker)
+        m_worker->resume();
 
     m_runState = RunState::Running;
     m_statsPanel->showState(tr("Идёт расчёт"));
@@ -616,34 +621,34 @@ void MainWindow::resumeComputation()
                                           : UiStrings::MAIN_TITLE);
 }
 
-void MainWindow::on_exitPBN_clicked()
+void MainWindow::handleExitClicked()
 {
-    if( m_workerPtr ){
-        m_workerPtr->cancel();
+    if( m_worker ){
+        m_worker->cancel();
     }
-    if( m_workerThreadPtr ){
-        m_workerThreadPtr->quit();
-        m_workerThreadPtr->wait();
+    if( m_workerThread ){
+        m_workerThread->quit();
+        m_workerThread->wait();
     }
     
-    emit setInterfaceEnabled(   true  );
+    emit interfaceEnabledChanged(   true  );
     saveSettings();
     m_ui->matrixPTE->setReadOnly( false );
     m_matrix2PTE->setReadOnly( false );
     qApp->exit();
 }
 
-void MainWindow::on_cancelPBN_clicked()
+void MainWindow::handleCancelClicked()
 {
-    if (m_workerPtr) {
-        m_workerPtr->cancel();
+    if (m_worker) {
+        m_worker->cancel();
     }
-    if (m_workerThreadPtr) {
-        m_workerThreadPtr->quit();
-        m_workerThreadPtr->wait();
+    if (m_workerThread) {
+        m_workerThread->quit();
+        m_workerThread->wait();
     }
 
-    emit setInterfaceEnabled(   true  );
+    emit interfaceEnabledChanged(   true  );
     m_ui->matrixPTE->setReadOnly( false );
     m_matrix2PTE->setReadOnly( false );
     m_ui->cancelPBN->setEnabled(  false );
@@ -653,7 +658,7 @@ void MainWindow::on_cancelPBN_clicked()
 // Worker signal handlers
 //
 
-void MainWindow::handleUpdateInfoPBR(int percent)
+void MainWindow::handleProgressChanged(int percent)
 {
     // Обновляем прогрессбар в ui
     m_ui->infoPBR->setValue(percent);
@@ -675,23 +680,23 @@ void MainWindow::handlePlanReady(int sets, int rows, int exactUpToWeight)
     Q_UNUSED(sets); Q_UNUSED(rows); Q_UNUSED(exactUpToWeight);
 }
 
-void MainWindow::handleSearchEstimate(int weight, quint64 trialsDone, quint64 trialsTotal,
-                                      double missProbability, SpectrumFloat unseenByWeight)
+void MainWindow::handleSearchEstimateUpdated(int weight, quint64 trialsDone, quint64 trialsTotal,
+                                             double missProbability, SpectrumFloat unseenByWeight)
 {
     Q_UNUSED(weight); Q_UNUSED(trialsDone); Q_UNUSED(trialsTotal); Q_UNUSED(missProbability);
     this->m_unseenByWeight = unseenByWeight;
     showSpectrumText();
 }
 
-void MainWindow::handleProductPlan(const QString& text, int exactUpToWeight)
+void MainWindow::handleProductPlanReady(const QString& text, int exactUpToWeight)
 {
     // Что сейчас считается — в строке состояния: другой строки под это нет.
     m_statsPanel->showState(text);
     Q_UNUSED(exactUpToWeight);
 }
 
-void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed,
-                                              quint64 doneOps, quint64 totalOps)
+void MainWindow::handleEstimateUpdated(int elapsedSec, int minutesLeft, double speed,
+                                       quint64 doneOps, quint64 totalOps)
 {
     m_remainingMinutes = minutesLeft;
 
@@ -704,7 +709,7 @@ void MainWindow::handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, d
     this->setWindowTitle(tr("%1 — осталось %2")
                              .arg(UiStrings::MAIN_TITLE, Format::remainingTime(m_remainingMinutes)));
 }
-void MainWindow::showSaveLBL()
+void MainWindow::handleSpectrumSaved()
 {
     m_ui->saveLBL->setToolTip(UiStrings::SAVE_LBL_ICON_TOOLTIP);
     QPropertyAnimation* anim = new QPropertyAnimation(m_saveLBLOpacityEffect, "opacity", this);
@@ -763,7 +768,7 @@ void MainWindow::updateMatrixTitles()
     m_matrixTabBar->setTabText(0, tr("Матрица 1") + size(m_ui->matrixPTE->toStringList()));
     m_matrixTabBar->setTabText(1, tr("Матрица 2") + size(m_matrix2PTE->toStringList()));
 }
-void MainWindow::handleError(const QString& message)
+void MainWindow::handleErrorOccurred(const QString& message)
 {
     QMessageBox::critical(this, UiStrings::ERROR_TITLE, message);
     // reset UI
@@ -775,12 +780,12 @@ void MainWindow::handleFinished(int elapsedSec)
 {
     m_runState = RunState::Idle;
     
-    if(m_workerThreadPtr->isRunning()){
-        m_workerThreadPtr->quit();
-        m_workerThreadPtr->wait();
+    if(m_workerThread->isRunning()){
+        m_workerThread->quit();
+        m_workerThread->wait();
     }
-    m_workerPtr->resume();
-    emit setInterfaceEnabled(   true  );
+    m_worker->resume();
+    emit interfaceEnabledChanged(   true  );
     m_ui->matrixPTE->setReadOnly( false );
     m_matrix2PTE->setReadOnly( false );
     m_ui->cancelPBN->setEnabled(  false );
@@ -788,8 +793,8 @@ void MainWindow::handleFinished(int elapsedSec)
 
     updateExecuteButton();
     this->setWindowTitle( UiStrings::MAIN_TITLE  );
-    if ( m_workerPtr->isCancelled() ) {
-        m_workerPtr->uncancel();
+    if ( m_worker->isCancelled() ) {
+        m_worker->uncancel();
         // Расчёт останавливали ради загрузки сохранения — вот теперь можно.
         if (m_pendingAutosave) {
             m_pendingAutosave = false;

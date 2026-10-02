@@ -25,7 +25,7 @@ struct GridTuneTask
 {
     enum class Kernel {
         XorShort,   // простой перебор сочетаний, k <= 63
-        GrayShort,  // код Грея (он же дуальный расчёт), k <= 63
+        Gray,       // код Грея (он же дуальный расчёт), k <= 63
         XorLong     // длинные коды, k >= 64
     };
 

@@ -409,17 +409,17 @@ bool trialStern(const quint64* matrix, int rows, int cols, int wordsPerRow,
     zero.assign(static_cast<size_t>(words), 0ULL);
     std::vector<quint64>& word = sc.word;
     word.resize(static_cast<size_t>(words));
-    auto rowPtr = [&](uint32_t r) { return r == none ? zero.data() : g + size_t(r) * words; };
+    auto rowOf = [&](uint32_t r) { return r == none ? zero.data() : g + size_t(r) * words; };
     auto probe = [&](uint32_t kk, uint32_t b0, uint32_t b1) {
-        const quint64* r2 = rowPtr(b0);
-        const quint64* r3 = rowPtr(b1);
+        const quint64* r2 = rowOf(b0);
+        const quint64* r3 = rowOf(b1);
         for (uint32_t i = start[size_t(kk)]; i < start[size_t(kk) + 1]; ++i) {
             const uint32_t packed = sortedRows[size_t(i)];
             const uint32_t a0 = packed & 0xFFFFu, a1 = packed >> 16;
             if (a0 == none && b0 == none)
                 continue;   // «пусто, пусто» — нулевое слово
-            const quint64* r0 = rowPtr(a0);
-            const quint64* r1 = rowPtr(a1);
+            const quint64* r0 = rowOf(a0);
+            const quint64* r1 = rowOf(a1);
             int weight = 0;
             for (int w = 0; w < words; ++w) {
                 const quint64 x = r0[w] ^ r1[w] ^ r2[w] ^ r3[w];

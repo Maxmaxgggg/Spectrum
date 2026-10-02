@@ -104,7 +104,7 @@ void StatsPanel::showTask(const ComputationSettings& settings)
                           : tr("до границы Толхёйзена");
     }
     m_algorithmValue->setText(algorithmName(settings.algorithmType)
-                            + QStringLiteral(", ") + enumeration);
+                              + QStringLiteral(", ") + enumeration);
 }
 
 void StatsPanel::showGrid(int blocks, int threads)

@@ -71,7 +71,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     const int n = rows.first().length();
 
     if (k <= m_productBruteForceMaxK) {
-        emit productPlan(tr("%1: полный перебор (2^%2 слов)…").arg(label).arg(k), -1);
+        emit productPlanReady(tr("%1: полный перебор (2^%2 слов)…").arg(label).arg(k), -1);
         m_progress.begin(1ULL << k, 0, 0);
         Product::Component c = Product::bruteForce(rows, std::min(weightUpTo, n),
                                                    [this]() { return m_cancelled.load() != 0; },
@@ -81,7 +81,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
                                                    m_productBruteForceMaxK);
         if (m_cancelled.load())
             throw std::runtime_error("расчёт отменён");
-        emit updateInfoPBR(100);
+        emit progressChanged(100);
         return c;
     }
 
@@ -91,7 +91,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     const ComponentPlan plan = planComponent(rows, weightUpTo, wantWords);
     const bool full = plan.algorithm == ComputationSettings::GrayCode
                    || plan.algorithm == ComputationSettings::DualCode;
-    emit productPlan(tr("%1: %2…").arg(label, plan.what), -1);
+    emit productPlanReady(tr("%1: %2…").arg(label, plan.what), -1);
 
     Worker sub;
     sub.setAutosaveRoot(m_autosaveRootDir);
@@ -111,8 +111,8 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     sub.initializeRunState(LoadMode::Reset);
 
     QString error;
-    connect(&sub, &Worker::updateInfoPBR,           this, &Worker::updateInfoPBR);
-    connect(&sub, &Worker::updateRemainingMinutes,  this, &Worker::updateRemainingMinutes);
+    connect(&sub, &Worker::progressChanged,           this, &Worker::progressChanged);
+    connect(&sub, &Worker::estimateUpdated,  this, &Worker::estimateUpdated);
     connect(&sub, &Worker::spectrumUpdated,         this, &Worker::spectrumUpdated);
     connect(&sub, &Worker::gridTuned,               this, &Worker::gridTuned);
     connect(&sub, &Worker::errorOccurred, [&error](const QString& m) { error = m; });
@@ -147,7 +147,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
 // Код произведения C1 ⊗ C2 — см. product.h. Три шага: минимальные веса
 // компонент, спектры и списки лёгких слов до нужного предела, свёртка по
 // рангам. Отмена по ходу — исключение, как и ошибка компоненты.
-void Worker::computeSpectrumProduct(const CodeGeometry& g)
+void Worker::computeProduct(const CodeGeometry& g)
 {
     const QStringList& g1 = m_settings.matrix;
     const QStringList& g2 = m_settings.matrix2;
@@ -275,13 +275,13 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
         }
 
         const quint64 words1 = lightWords(c1, limit1);
-        emit productPlan(tr("ранг %1: наборы компоненты 1 (%2 слов веса до %3)…")
+        emit productPlanReady(tr("ранг %1: наборы компоненты 1 (%2 слов веса до %3)…")
                              .arg(r).arg(QString::number(words1)).arg(limit1), -1);
         m_progress.begin(std::max<quint64>(1, words1), 0, 0);
         const bool ok1 = Product::profiles(c1, r, limit1, WORK_LIMIT, p1, false, cancelledPoll, onProgress);
 
         const quint64 words2 = lightWords(c2, limit2);
-        emit productPlan(tr("ранг %1: наборы компоненты 2 (%2 слов веса до %3)…")
+        emit productPlanReady(tr("ранг %1: наборы компоненты 2 (%2 слов веса до %3)…")
                              .arg(r).arg(QString::number(words2)).arg(limit2), -1);
         m_progress.begin(std::max<quint64>(1, words2), 0, 0);
         const bool ok2 = ok1 && Product::profiles(c2, r, limit2, WORK_LIMIT, p2, true, cancelledPoll, onProgress);
@@ -292,14 +292,14 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
             break;
         }
 
-        emit productPlan(tr("ранг %1: свёртка профилей (%2 x %3)…")
+        emit productPlanReady(tr("ранг %1: свёртка профилей (%2 x %3)…")
                              .arg(r).arg(QString::number(p1.size())).arg(QString::number(p2.size())), -1);
         m_progress.begin(std::max<quint64>(1, p1.size()), 0, 0);
         const std::vector<quint64> part = Product::rankR(p1, p2, r, target, onProgress);
         for (size_t w = 0; w < total.size(); ++w)
             total[w] += part[w];
         ranksDone = r;
-        emit updateInfoPBR(100);
+        emit progressChanged(100);
     }
 
     m_productExactUpTo = exactFor(ranksDone);
@@ -319,8 +319,8 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
                                 .arg(ranksDone).arg(m_productExactUpTo)
                                 .arg(notes.isEmpty() ? QString() : QStringLiteral("; ") + notes.join(QStringLiteral("; ")))
                                 .arg(m_productMissExponent > 0 ? tr("полно") : tr("точно"));
-    emit productPlan(summary, m_productExactUpTo);
+    emit productPlanReady(summary, m_productExactUpTo);
     m_progress.setDoneOps(1);
-    emit updateInfoPBR(100);
+    emit progressChanged(100);
     updateSpectrum(int(g.numOfCols));
 }

@@ -46,7 +46,7 @@ private:
 
     QTreeWidget* m_tree        = nullptr;
     QLabel*      m_summary     = nullptr;
-    QPushButton* m_removeBtn   = nullptr;
-    QPushButton* m_removeAllBtn = nullptr;
-    QPushButton* m_loadBtn     = nullptr;
+    QPushButton* m_removeButton   = nullptr;
+    QPushButton* m_removeAllButton = nullptr;
+    QPushButton* m_loadButton     = nullptr;
 };

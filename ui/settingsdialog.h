@@ -32,7 +32,7 @@ public:
 
 signals:
     // Сигнал для отправки настроек виджету
-    void sendSettingsToWidget( const ComputationSettings& settings );
+    void settingsChanged( const ComputationSettings& settings );
     // Просьба прогнать пробу: короткий расчёт, по которому видно, как часто
     // спектр успевает обновляться на этих настройках.
     void measureUpdateRateRequested( const ComputationSettings& settings );

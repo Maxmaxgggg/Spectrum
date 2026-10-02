@@ -59,7 +59,7 @@ MatrixSlotsDialog::MatrixSlotsDialog(Mode mode, const QString& matrixText, QWidg
 
     auto* const buttons = new QDialogButtonBox(this);
     m_okButton = buttons->addButton(mode == Mode::Load ? tr("Загрузить") : tr("Сохранить"),
-                                  QDialogButtonBox::AcceptRole);
+                                    QDialogButtonBox::AcceptRole);
     if (mode == Mode::Load) {
         m_removeButton = buttons->addButton(tr("Удалить"), QDialogButtonBox::DestructiveRole);
         connect(m_removeButton, &QPushButton::clicked, this, &MatrixSlotsDialog::removeSelected);
@@ -179,7 +179,7 @@ void MatrixSlotsDialog::accept()
     }
     const QString name = m_nameEdit->text().trimmed();
     m_library.save(m_selected, name.isEmpty() ? tr("Матрица %1").arg(MatrixLibrary::dimensions(m_matrixText)) : name,
-                 m_matrixText);
+                   m_matrixText);
     QDialog::accept();
 }
 
