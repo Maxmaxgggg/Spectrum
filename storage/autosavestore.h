@@ -1,5 +1,6 @@
 #pragma once
 
+#include "infosets.h"
 #include "settings.h"
 #include "types.h"
 
@@ -105,8 +106,8 @@ struct AutosaveEntry
 bool canResume(const AutosaveRecord& record, const ComputationSettings& settings);
 
 // Глубина перебора, которой запись Брауэра–Циммермана отвечает при заданном
-// весе: по её множествам. Ноль, если множеств в записи нет.
-int resumeRows(const AutosaveRecord& record, int weight, int rows, int cols);
+// весе: по её множествам. Нулевая, если множеств в записи нет.
+InfoSets::Depth resumeDepth(const AutosaveRecord& record, int weight, int rows, int cols);
 
 // Полное число операций расчёта записи — по нему считается процент готовности.
 // Через double: точность здесь не нужна, а сумма биномов для кода длиной под

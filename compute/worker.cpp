@@ -42,12 +42,18 @@ static LayerSlice sliceLayer(const CodeGeometry& g, quint64 perSet,
 
 quint64 Worker::totalLayerOps(const CodeGeometry& g) const
 {
-    const quint64 perSet = totalCombinations(g.rows, g.maxRows);
-    if (g.setCount <= 1)
-        return perSet;
-    if (perSet > std::numeric_limits<quint64>::max() / quint64(g.setCount))
-        return std::numeric_limits<quint64>::max();
-    return perSet * quint64(g.setCount);
+    const quint64 limit = std::numeric_limits<quint64>::max();
+    // Слои до maxRows − 1 идут по всем множествам, последний — по первым
+    // lastLayerSets. Переполнение упирается в потолок, как в totalCombinations.
+    const quint64 below = g.maxRows > 0 ? totalCombinations(g.rows, g.maxRows - 1) : 0;
+    const quint64 top   = g.maxRows <= g.rows ? m_binomTable(g.rows, g.maxRows) : 0;
+    const quint64 sets  = quint64(std::max(1, g.setCount));
+    const quint64 last  = quint64(std::max(1, std::min(g.lastLayerSets, g.setCount)));
+    if (below > limit / sets || top > limit / last)
+        return limit;
+    const quint64 a = below * sets;
+    const quint64 b = top * last;
+    return a > limit - b ? limit : a + b;
 }
 
 // Полное число кодовых слов при переборе до maxRows строк включительно.
@@ -161,9 +167,12 @@ void Worker::runChunks(const CodeGeometry& g, const ChunkPlan& plan)
 
     for (quint64 r = firstLayer; r <= lastLayer; ++r) {
         // Слой — сочетания по каждому из множеств, подряд. Чанк не пересекает
-        // границу множества, поэтому бывает короче обычного.
+        // границу множества, поэтому бывает короче обычного. Последний слой
+        // Брауэра–Циммермана проходят только первые lastLayerSets множеств.
         const quint64 perSet = plan.layerSize(r);
-        const quint64 total  = perSet * quint64(g.setCount);
+        const quint64 sets   = r == lastLayer ? quint64(std::max(1, std::min(g.lastLayerSets, g.setCount)))
+                                              : quint64(g.setCount);
+        const quint64 total  = perSet * sets;
         quint64 offset = (r == firstLayer) ? m_runState.chunkOffset : 0;
 
         while (offset < total) {
@@ -509,8 +518,10 @@ void Worker::planInfoSets(CodeGeometry& g) const
         g.setColumns.append(QVector<int>(set.columns.begin(), set.columns.end()));
     }
     g.matrixWords     = quint64(g.setRows.size());
-    g.maxRows         = quint64(InfoSets::rowsForWeight(g.setOverlaps, m_settings.bzWeight, rows, cols));
-    g.guaranteedBelow = InfoSets::guaranteedBelow(g.setOverlaps, int(g.maxRows), rows, cols);
+    const InfoSets::Depth depth = InfoSets::depthForWeight(g.setOverlaps, m_settings.bzWeight, rows, cols);
+    g.maxRows         = quint64(depth.maxRows);
+    g.lastLayerSets   = depth.lastLayerSets;
+    g.guaranteedBelow = InfoSets::guaranteedBelow(g.setOverlaps, depth, rows, cols);
 }
 
 // Упаковывает матрицу в биты и раскладывает буферы по памяти.
@@ -761,10 +772,21 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
     // независимы и идут по возрастанию, поэтому досчитанный до maxRows спектр —
     // это ровно начало расчёта до большего maxRows. Состояние помечается как
     // «всё до maxRows пройдено», и следующий запуск продолжит со следующего
-    // слоя, а не с нуля.
+    // слоя, а не с нуля. Если последний слой пройден не по всем множествам,
+    // продолжение начнётся с первого непройденного.
+    //
+    // Запись могла уйти дальше плана: продолжили расчёт до меньшего веса,
+    // чем был, — тогда перебирать было нечего, и пройденное остаётся как есть.
+    // Отметка «пройдено» назад не двигается: иначе следующее продолжение
+    // перебрало бы часть слоя второй раз.
     if (m_settings.layered()) {
-        m_runState.rOffset     = g.maxRows + 1;
-        m_runState.chunkOffset = 0;
+        const bool partial = g.lastLayerSets < g.setCount;
+        const quint64 rEnd = partial ? g.maxRows : g.maxRows + 1;
+        const quint64 cEnd = partial ? quint64(g.lastLayerSets) * m_binomTable(g.rows, g.maxRows) : 0;
+        if (rEnd > m_runState.rOffset || (rEnd == m_runState.rOffset && cEnd >= m_runState.chunkOffset)) {
+            m_runState.rOffset     = rEnd;
+            m_runState.chunkOffset = cEnd;
+        }
     }
     else if (m_settings.algorithm == ComputationSettings::RandomInfoSets
              || m_settings.algorithm == ComputationSettings::ProductCode) {

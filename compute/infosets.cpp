@@ -202,25 +202,47 @@ std::vector<int> overlapsOf(const QVector<QVector<int>>& columns)
     return overlaps;
 }
 
-int guaranteedBelow(const std::vector<int>& overlaps, int r, int rows, int cols)
+int guaranteedBelow(const std::vector<int>& overlaps, Depth depth, int rows, int cols)
 {
     if (overlaps.empty())
         return 0;
-    if (r >= rows)
+    const int sets = int(overlaps.size());
+    const int last = std::max(1, std::min(depth.lastLayerSets, sets));
+    if (depth.maxRows >= rows)
         return cols + 1;
 
+    // Множество j пройдено до r_j строк: слово, которое оно не нашло, несёт на
+    // нём не меньше r_j + 1 единиц, из них на ещё не занятых столбцах — не
+    // меньше r_j + 1 − overlap_j.
     int bound = 0;
-    for (int overlap : overlaps)
-        bound += std::max(0, r + 1 - overlap);
+    for (int j = 0; j < sets; ++j) {
+        const int depthOfSet = j < last ? depth.maxRows : depth.maxRows - 1;
+        bound += std::max(0, depthOfSet + 1 - overlaps[size_t(j)]);
+    }
     return std::min(bound, cols + 1);
 }
 
-int rowsForWeight(const std::vector<int>& overlaps, int weight, int rows, int cols)
+Depth depthForWeight(const std::vector<int>& overlaps, int weight, int rows, int cols)
 {
+    const int sets = std::max(1, int(overlaps.size()));
     for (int r = 0; r < rows; ++r)
-        if (guaranteedBelow(overlaps, r, rows, cols) > weight)
-            return r;
-    return rows;
+        for (int last = 1; last <= sets; ++last)
+            if (guaranteedBelow(overlaps, Depth{ r, last }, rows, cols) > weight)
+                return Depth{ r, last };
+    return Depth{ rows, 1 };
+}
+
+double combinationsFor(Depth depth, int sets, int rows)
+{
+    // Слой maxRows по всем множествам — это то же, что maxRows−1 по всем и
+    // ещё один полный слой; считаем всё в double: точность тут не нужна.
+    const double full = combinationsUpTo(rows, depth.maxRows - 1);
+    double top = 1.0;
+    for (int i = 0; i < depth.maxRows && i < rows; ++i)
+        top = top * double(rows - i) / double(i + 1);
+    if (depth.maxRows > rows)
+        top = 0.0;
+    return double(sets) * full + double(std::min(depth.lastLayerSets, sets)) * top;
 }
 
 int setsForWeight(const std::vector<int>& overlaps, int weight, int rows, int cols)
@@ -229,8 +251,8 @@ int setsForWeight(const std::vector<int>& overlaps, int weight, int rows, int co
     double bestCost = 0.0;
     for (int m = 1; m <= int(overlaps.size()); ++m) {
         const std::vector<int> prefix(overlaps.begin(), overlaps.begin() + m);
-        const int    r    = rowsForWeight(prefix, weight, rows, cols);
-        const double cost = double(m) * combinationsUpTo(rows, r);
+        const Depth  depth = depthForWeight(prefix, weight, rows, cols);
+        const double cost  = combinationsFor(depth, m, rows);
         if (bestSets == 0 || cost < bestCost) {
             bestSets = m;
             bestCost = cost;

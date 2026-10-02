@@ -52,9 +52,11 @@ Worker::ComponentPlan Worker::planComponent(const QStringList& rows, int weightU
             std::vector<int> overlaps;
             for (const InfoSets::InfoSet& set : sets) overlaps.push_back(set.overlap);
             const int m = InfoSets::setsForWeight(overlaps, limit, k, n);
-            const int r = InfoSets::rowsForWeight(overlaps, limit, k, n);
+            const InfoSets::Depth depth =
+                InfoSets::depthForWeight(std::vector<int>(overlaps.begin(), overlaps.begin() + m), limit, k, n);
+            const int r = depth.maxRows;
             if (r < k) {
-                const double cost = double(m) * Leon::wordsPerTrial(k, r);
+                const double cost = InfoSets::combinationsFor(depth, m, k);
                 consider(ComputationSettings::BrouwerZimmermann, cost * 1.001,   // при равенстве — полный
                          tr("Брауэр–Циммерман до веса %1 (%2 множ., до %3 строк)").arg(limit).arg(m).arg(r));
             }

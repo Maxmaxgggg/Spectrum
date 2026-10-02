@@ -64,6 +64,10 @@ struct CodeGeometry
     // одно из множеств (см. infosets.h). В обычном расчёте множество одно —
     // введённая матрица, и все поля ниже пустые.
     int                   setCount        = 1;
+    // Сколько первых множеств проходят последний слой maxRows; остальные
+    // перебираются до maxRows − 1 (см. infosets.h). Без Брауэра–Циммермана
+    // множество одно, и слой проходится целиком.
+    int                   lastLayerSets   = 1;
     std::vector<int>      setOverlaps;
     std::vector<quint64>  setMasks;         // setCount x wordsPerRow
     std::vector<quint64>  setRows;          // setCount x rows x wordsPerRow
@@ -199,8 +203,9 @@ signals:
 private:
     /* Функции для работы с биноминальными коэффициентами */
     quint64   totalCombinations(quint64 k, quint64 maxRows) const;
-    // Полное число операций расчёта: комбинации до maxRows по каждому из
-    // множеств. В обычном расчёте множество одно.
+    // Полное число операций расчёта: комбинации до maxRows − 1 по каждому из
+    // множеств и слой maxRows по первым lastLayerSets. В обычном расчёте
+    // множество одно.
     quint64   totalLayerOps(const CodeGeometry& g) const;
 
 

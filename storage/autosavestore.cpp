@@ -98,11 +98,11 @@ AutosaveRecord AutosaveRecord::fromJson(const QJsonObject& obj)
     return r;
 }
 
-int resumeRows(const AutosaveRecord& record, int weight, int rows, int cols)
+InfoSets::Depth resumeDepth(const AutosaveRecord& record, int weight, int rows, int cols)
 {
     if (record.infoSets.isEmpty())
-        return 0;
-    return InfoSets::rowsForWeight(InfoSets::overlapsOf(record.infoSets), weight, rows, cols);
+        return InfoSets::Depth{ 0, 1 };
+    return InfoSets::depthForWeight(InfoSets::overlapsOf(record.infoSets), weight, rows, cols);
 }
 
 bool canResume(const AutosaveRecord& record, const ComputationSettings& settings)
@@ -121,9 +121,9 @@ bool canResume(const AutosaveRecord& record, const ComputationSettings& settings
         // шёл перебор и какое множество засчитывало какое слово.
         if (record.infoSets.isEmpty() || settings.matrix.isEmpty())
             return false;
-        maxRows = quint64(resumeRows(record, settings.bzWeight,
-                                     settings.matrix.size(),
-                                     settings.matrix.first().length()));
+        maxRows = quint64(resumeDepth(record, settings.bzWeight,
+                                      settings.matrix.size(),
+                                      settings.matrix.first().length()).maxRows);
     }
 
     // Слой rOffset пройден частично: его вклад уже лежит в спектре, поэтому
@@ -148,13 +148,24 @@ double totalOperations(const AutosaveRecord& record, int rows)
 
     const int maxRows = record.maxRows > 0 ? qMin(record.maxRows, rows) : rows;
 
+    // У Брауэра–Циммермана слои до последнего — по всем множествам, последний
+    // — по части (см. infosets.h); глубина выводится из веса, как в расчёте.
+    if (record.algorithm == ComputationSettings::BrouwerZimmermann
+        && !record.infoSets.isEmpty() && !record.state.spectrum.isEmpty()) {
+        const int cols = record.state.spectrum.size() - 1;
+        const std::vector<int> overlaps = InfoSets::overlapsOf(record.infoSets);
+        const InfoSets::Depth  depth    = InfoSets::depthForWeight(overlaps, record.bzWeight, rows, cols);
+        return InfoSets::combinationsFor(depth, int(overlaps.size()), rows);
+    }
+
     double total = 0.0;
     double term  = 1.0;               // C(rows, 0)
     for (int r = 0; r <= maxRows; ++r) {
         total += term;
         term = term * double(rows - r) / double(r + 1);
     }
-    // У Брауэра–Циммермана каждый слой перебирается по всем множествам.
+    // Запись Брауэра–Циммермана без множеств или без спектра: оценка по
+    // полным слоям.
     if (record.algorithm == ComputationSettings::BrouwerZimmermann)
         total *= double(qMax(1, record.infoSets.size()));
     return total;

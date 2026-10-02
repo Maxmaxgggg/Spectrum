@@ -41,6 +41,7 @@
 #include "isd.h"
 #include "leonkernel.cuh"
 #include "leon.h"
+#include "mixing.h"
 #include "product.h"
 #include "bch.h"
 #include "hamming.h"
@@ -259,7 +260,13 @@ static quint64 expectedTotalOps(const RunConfig& cfg)
         const int weight = cfg.bzWeight > 0 ? cfg.bzWeight : 8;
         sets = quint64(InfoSets::setsForWeight(overlaps, weight, rows, cols));
         overlaps.resize(size_t(sets));
-        maxRows = quint64(InfoSets::rowsForWeight(overlaps, weight, rows, cols));
+        const InfoSets::Depth depth = InfoSets::depthForWeight(overlaps, weight, rows, cols);
+        // Слои до последнего — по всем множествам, последний — по первым
+        // lastLayerSets.
+        quint64 below = 0;
+        for (quint64 r = 0; r + 1 <= quint64(depth.maxRows); ++r)
+            below += Reference::binom(k, r);
+        return below * sets + Reference::binom(k, quint64(depth.maxRows)) * quint64(depth.lastLayerSets);
     }
     quint64 total = 0;
     for (quint64 r = 0; r <= maxRows; ++r)
@@ -2663,6 +2670,176 @@ static void testBrouwerZimmermannWorker()
     }
 }
 
+// Последний слой Брауэра–Циммермана — только по тем множествам, что нужны
+// для гарантии (см. infosets.h). Проверяется трижды: план — против перебора
+// всех глубин, спектр расчёта — против полного перебора на каждом весе, где
+// слой вышел неполным, и досчёт — с неполного слоя на полный.
+static void testBzPartialLayer()
+{
+    g_out << Qt::endl << QStringLiteral("Брауэр–Циммерман: неполный последний слой") << Qt::endl;
+
+    // 1. План. Наименьшая глубина в порядке (слой, множеств в нём) с
+    //    гарантией выше веса; у предыдущей по этому порядку — не выше.
+    {
+        Mixing::Xorshift64 rng{ 0x5EEDBEEFULL };
+        int bad = 0, partial = 0, checked = 0;
+        for (int trial = 0; trial < 300; ++trial) {
+            const int rows = 4 + int(rng.next() % 40);
+            const int cols = rows + 1 + int(rng.next() % (4 * rows));
+            const int sets = 1 + int(rng.next() % 6);
+            std::vector<int> overlaps(size_t(sets), 0);
+            for (int j = 1; j < sets; ++j)
+                overlaps[size_t(j)] = std::min(rows, overlaps[size_t(j - 1)] + int(rng.next() % 4));
+            for (int weight = 0; weight <= cols; ++weight) {
+                const InfoSets::Depth d = InfoSets::depthForWeight(overlaps, weight, rows, cols);
+                ++checked;
+                if (d.lastLayerSets < sets && d.maxRows < rows)
+                    ++partial;
+                const int bound = InfoSets::guaranteedBelow(overlaps, d, rows, cols);
+                // Предыдущая глубина: на одно множество меньше в последнем слое
+                // или, если оно одно, — полный предыдущий слой.
+                InfoSets::Depth prev = d;
+                if (d.lastLayerSets > 1) prev.lastLayerSets = d.lastLayerSets - 1;
+                else                     prev = InfoSets::Depth{ d.maxRows - 1, sets };
+                const bool prevOk = d.maxRows == 0 && d.lastLayerSets == 1
+                                    ? true
+                                    : InfoSets::guaranteedBelow(overlaps, prev, rows, cols) <= weight;
+                const bool ok = (bound > weight || d.maxRows >= rows) && prevOk;
+                if (!ok && ++bad <= 5)
+                    g_out << QStringLiteral("      k=%1 n=%2 вес %3: глубина (%4, %5), гарантия %6")
+                                 .arg(rows).arg(cols).arg(weight).arg(d.maxRows).arg(d.lastLayerSets).arg(bound)
+                          << Qt::endl;
+            }
+        }
+        const QString what = QStringLiteral("план: %1 весов, из них с неполным слоем %2").arg(checked).arg(partial);
+        if (bad == 0 && partial > 0) { ++g_passed; g_out << "  ok       " << what << Qt::endl; }
+        else { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl; }
+    }
+
+    // 2. Спектр. Каждый вес, на котором план расчёта вышел с неполным
+    //    последним слоем, сверяется с полным перебором.
+    struct Case { QString name; QStringList rows; };
+    const QVector<Case> cases = {
+        { QStringLiteral("Голей [24,12]"),      Reference::golay24_12() },
+        { QStringLiteral("случайный [40,16]"),  Bz::scramble(Bz::systematicRandom(16, 40, 7), 11) },
+        { QStringLiteral("случайный [60,20]"),  Bz::scramble(Bz::systematicRandom(20, 60, 3), 5) },
+        { QStringLiteral("случайный [70,14]"),  Bz::scramble(Bz::systematicRandom(14, 70, 17), 3) },
+        { QStringLiteral("случайный [96,24]"),  Bz::scramble(Bz::systematicRandom(24, 96, 9), 2) },
+        { QStringLiteral("случайный [33,18]"),  Bz::scramble(Bz::systematicRandom(18, 33, 23), 8) },
+    };
+    int partialRuns = 0;
+    for (const Case& c : cases) {
+        const Spectrum exact = Reference::bruteForce(c.rows);
+        const int rows = c.rows.size();
+        const int cols = c.rows.first().length();
+        int words = 0;
+        const std::vector<quint64> packed = InfoSets::packRows(c.rows, words);
+        const int fit = std::max(1, Constants::MAX_CONST_WORDS / std::max(1, rows * words));
+        const std::vector<InfoSets::InfoSet> found =
+            InfoSets::find(packed.data(), rows, cols, words, std::min(Constants::MAX_INFO_SETS, fit));
+        std::vector<int> overlaps;
+        for (const InfoSets::InfoSet& set : found) overlaps.push_back(set.overlap);
+
+        for (int weight = 1; weight <= cols / 2; ++weight) {
+            std::vector<int> used = overlaps;
+            used.resize(size_t(InfoSets::setsForWeight(overlaps, weight, rows, cols)));
+            const InfoSets::Depth d = InfoSets::depthForWeight(used, weight, rows, cols);
+            if (d.lastLayerSets >= int(used.size()) || d.maxRows >= rows)
+                continue;
+            ++partialRuns;
+            RunConfig cfg;
+            cfg.matrix    = c.rows;
+            cfg.algorithm = Algorithm::BrouwerZimmermann;
+            cfg.bzWeight  = weight;
+            cfg.device    = ComputeDevice::Cpu;
+            const QString name = QStringLiteral("%1, вес %2: слой %3 по %4 из %5 множеств")
+                                     .arg(c.name).arg(weight).arg(d.maxRows).arg(d.lastLayerSets).arg(used.size());
+            const Spectrum cpu = checkBzExact(name + QStringLiteral(", CPU"), cfg, exact);
+            cfg.device = ComputeDevice::Gpu;
+            const Spectrum gpu = checkBzExact(name + QStringLiteral(", GPU"), cfg, exact);
+            if (g_gpuAvailable)
+                expectSame(name + QStringLiteral(": CPU и GPU совпадают"), cpu, gpu);
+        }
+    }
+    {
+        const QString what = QStringLiteral("прогонов с неполным слоем: %1").arg(partialRuns);
+        if (partialRuns >= 10) { ++g_passed; g_out << "  ok       " << what << Qt::endl; }
+        else { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl; }
+    }
+
+    // 3. Досчёт и обрыв. С неполного слоя — на тот же слой по большему числу
+    //    множеств и на следующий слой; обрыв посреди неполного слоя.
+    {
+        RunConfig cfg;
+        cfg.matrix    = Bz::scramble(Bz::systematicRandom(24, 96, 9), 2);
+        cfg.algorithm = Algorithm::BrouwerZimmermann;
+        cfg.device    = ComputeDevice::Cpu;
+        RunConfig gpuCfg = cfg; gpuCfg.device = ComputeDevice::Gpu;
+
+        // Веса, на которых слой выходит неполным, и следующий за каждым.
+        int words = 0;
+        const std::vector<quint64> packed = InfoSets::packRows(cfg.matrix, words);
+        const std::vector<InfoSets::InfoSet> found = InfoSets::find(packed.data(), 24, 96, words, 8);
+        std::vector<int> overlaps;
+        for (const InfoSets::InfoSet& set : found) overlaps.push_back(set.overlap);
+        int from = -1;
+        for (int w = 4; w < 20 && from < 0; ++w) {
+            std::vector<int> used = overlaps;
+            used.resize(size_t(InfoSets::setsForWeight(overlaps, w, 24, 96)));
+            std::vector<int> usedNext = overlaps;
+            usedNext.resize(size_t(InfoSets::setsForWeight(overlaps, w + 1, 24, 96)));
+            const InfoSets::Depth d = InfoSets::depthForWeight(used, w, 24, 96);
+            // Досчёт возможен только по тем же множествам.
+            if (used.size() == usedNext.size() && d.lastLayerSets < int(used.size()))
+                from = w;
+        }
+        if (from < 0) {
+            ++g_failed;
+            g_out << QStringLiteral("  ПРОВАЛ   нет веса с неполным слоем для проверки досчёта") << Qt::endl;
+        }
+        else {
+            checkExtendBz(QStringLiteral("CPU [96,24]: вес %1 (неполный слой), потом %2").arg(from).arg(from + 1),
+                          cfg, from, from + 1);
+            checkExtendBz(QStringLiteral("CPU [96,24]: вес %1, потом %2").arg(from).arg(from + 4), cfg, from, from + 4);
+            checkExtendBz(QStringLiteral("GPU [96,24]: вес %1, потом %2").arg(from).arg(from + 1), gpuCfg, from, from + 1);
+        }
+    }
+    {
+        // Обрыв внутри неполного слоя: слой должен быть больше чанка, а чанк
+        // CPU — миллион комбинаций. У [96,48] слой из пяти строк — 1,7 млн.
+        RunConfig cfg;
+        cfg.matrix    = Bz::scramble(Bz::systematicRandom(48, 96, 33), 6);
+        cfg.algorithm = Algorithm::BrouwerZimmermann;
+        cfg.device    = ComputeDevice::Cpu;
+
+        int words = 0;
+        const std::vector<quint64> packed = InfoSets::packRows(cfg.matrix, words);
+        const int fit = std::max(1, Constants::MAX_CONST_WORDS / std::max(1, 48 * words));
+        const std::vector<InfoSets::InfoSet> found =
+            InfoSets::find(packed.data(), 48, 96, words, std::min(Constants::MAX_INFO_SETS, fit));
+        std::vector<int> overlaps;
+        for (const InfoSets::InfoSet& set : found) overlaps.push_back(set.overlap);
+        for (int w = 6; w < 16; ++w) {
+            std::vector<int> used = overlaps;
+            used.resize(size_t(InfoSets::setsForWeight(overlaps, w, 48, 96)));
+            const InfoSets::Depth d = InfoSets::depthForWeight(used, w, 48, 96);
+            const quint64 top = Reference::binom(48, quint64(d.maxRows));
+            if (d.lastLayerSets >= int(used.size()) || top * quint64(d.lastLayerSets) < 3000000)
+                continue;
+            cfg.bzWeight = w;
+            const quint64 total = expectedTotalOps(cfg);
+            const quint64 stop  = total - top * quint64(d.lastLayerSets) / 2;
+            checkResume(QStringLiteral("CPU [96,48], вес %1: обрыв в неполном слое (%2 из %3 множеств)")
+                            .arg(w).arg(d.lastLayerSets).arg(used.size()),
+                        cfg, cfg, 1000000, stop);
+            RunConfig gpuCfg = cfg; gpuCfg.device = ComputeDevice::Gpu;
+            checkResume(QStringLiteral("GPU [96,48], вес %1: обрыв в неполном слое").arg(w),
+                        gpuCfg, gpuCfg, 1000000, stop);
+            break;
+        }
+    }
+}
+
 // Расчёт по Брауэру–Циммерману на матрице из файла: план, время, спектр.
 //
 // Запуск: SpectrumTests.exe --bz-run <файл матрицы> <вес> [cpu|gpu]
@@ -3894,6 +4071,7 @@ int main(int argc, char* argv[])
     testProbeLeavesNoTrace();
     testBrouwerZimmermann();
     testBrouwerZimmermannWorker();
+    testBzPartialLayer();
     testLeonModel();
     testLeonWorker();
     testBchCode();
