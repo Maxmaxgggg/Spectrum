@@ -19,6 +19,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <chrono>
 #include <cmath>
 #include <numeric>
@@ -2764,7 +2765,7 @@ static void testLeonWorker()
         Leon::windowEnabled = false;
         for (const Twin& t : twins) {
             const int n = t.rows.first().length(), k = t.rows.size();
-            const bool shared = leonFitsShared(k, n, (n + 63) / 64);
+            const int tier = leonSharedTier(k, n, (n + 63) / 64, 0);
             // Глубина у устройств может разойтись из-за разной цены Гаусса;
             // сравнивать имеет смысл только при одинаковой.
             const Leon::Plan cpuPlan = Leon::plan(n, k, t.weight, 1e-12, false);
@@ -2789,7 +2790,7 @@ static void testLeonWorker()
             clearCheckpoints();
             expectLeon(QStringLiteral("%1 (%2) CPU и GPU слово в слово: попыток %3 и %4, весов %5")
                            .arg(t.name)
-                           .arg(shared ? QStringLiteral("shared") : QStringLiteral("global"))
+                           .arg(tier == 0 ? QStringLiteral("global") : tier == 1 ? QStringLiteral("shared") : QStringLiteral("shared+"))
                            .arg(cpuTrials).arg(gpuTrials).arg(cpu.size()),
                        !cpu.isEmpty() && cpu == gpu && cpuTrials == gpuTrials,
                        QStringLiteral("CPU: %1\n      GPU: %2").arg(formatSpectrum(cpu), formatSpectrum(gpu)));
@@ -2894,10 +2895,12 @@ static int leonRun(const QString& path, int weight, int missExponent, const QStr
     cfg.algorithm        = Algorithm::RandomInfoSets;
     cfg.leonWeight       = weight;
     cfg.leonMissExponent = missExponent;
-    cfg.device           = device == QStringLiteral("gpu") ? ComputeDevice::GPU : ComputeDevice::CPU;
+    cfg.device           = device.startsWith(QStringLiteral("gpu")) ? ComputeDevice::GPU : ComputeDevice::CPU;
     cfg.threadsCpu       = omp_get_num_procs();
-    // «cpu-plain» — процессор без окна Штерна–Дюмера, для сравнения.
-    Leon::windowEnabled = device != QStringLiteral("cpu-plain");
+    // «cpu-plain» — процессор без окна Штерна–Дюмера, для сравнения;
+    // «gpu-window» — видеокарта с окном.
+    Leon::windowEnabled    = device != QStringLiteral("cpu-plain");
+    Leon::gpuWindowEnabled = device == QStringLiteral("gpu-window");
 
     const int k = cfg.matrix.size();
     const int n = cfg.matrix.first().length();
@@ -3408,6 +3411,64 @@ int main(int argc, char* argv[])
                    .arg(plan.rows).arg(plan.window).arg(plan.trials).arg(double(plan.trials) * plan.costPerTrial, 0, 'g', 3)
                    .arg(plain.rows).arg(plain.trials).arg(double(plain.trials) * plain.costPerTrial, 0, 'g', 3) << Qt::endl;
         out << QStringLiteral("  (sink %1)").arg(sink) << Qt::endl;
+        out.flush();
+        return 0;
+    }
+
+    // --gpu-gauss-bench <файл> [попыток] [p] — цена попытки ядра Леона на
+    // видеокарте: p = 0 — один Гаусс (перебора нет), p = 1, 2 — с перебором;
+    // слов не выкладывается (maxWeight = 0). Печатает ярус памяти и мкс на
+    // попытку по пропускной способности.
+    if (args.contains(QStringLiteral("--gpu-gauss-bench"))) {
+        const int at = args.indexOf(QStringLiteral("--gpu-gauss-bench"));
+        RunConfig cfg;
+        if (at + 1 >= args.size() || !loadMatrixOrCase(args.at(at + 1), cfg)) return 2;
+        const int trials = at + 2 < args.size() ? args.at(at + 2).toInt() : 2048;
+        const int maxP   = at + 3 < args.size() ? args.at(at + 3).toInt() : 2;
+        int words = 0;
+        const std::vector<quint64> packed = InfoSets::packRows(cfg.matrix, words);
+        const int k = cfg.matrix.size(), n = cfg.matrix.first().length();
+        const int tier = leonSharedTier(k, n, words, 0);
+        DeviceBuffer<quint64> d_mat, d_out, d_scratch;
+        DeviceBuffer<unsigned> d_count;
+        d_mat.allocate(packed.size());
+        CUDA_CALL(cudaMemcpy(d_mat.get(), packed.data(), packed.size() * sizeof(quint64), cudaMemcpyHostToDevice));
+        d_out.allocate(size_t(1024) * words);
+        d_count.allocate(1);
+        const size_t scratchWords = leonScratchWords(k, n, words, 2, 0, 0);
+        if (scratchWords > 0) d_scratch.allocate(scratchWords * size_t(trials));
+        out << QStringLiteral("[%1,%2], ярус памяти %3 (%4), попыток %5:")
+                   .arg(n).arg(k).arg(tier)
+                   .arg(tier == 0 ? QStringLiteral("глобальная") : tier == 1 ? QStringLiteral("разделяемая") : QStringLiteral("большая разделяемая"))
+                   .arg(trials) << Qt::endl;
+        for (int p = 0; p <= maxP; ++p) {
+            LeonLaunch L;
+            L.matrix = d_mat.get(); L.rows = k; L.cols = n; L.wordsPerRow = words;
+            L.rowsPerTrial = p; L.maxWeight = 0; L.firstTrial = 0; L.trials = trials;
+            L.outWords = d_out.get(); L.outCount = d_count.get(); L.capacity = 1024;
+            L.scratch = d_scratch.get();
+            d_count.fillZero();
+            launchLeonTrials(L, LEON_THREADS, nullptr);   // прогрев
+            CUDA_CALL(cudaDeviceSynchronize());
+            const auto t0 = std::chrono::steady_clock::now();
+            launchLeonTrials(L, LEON_THREADS, nullptr);
+            CUDA_CALL(cudaDeviceSynchronize());
+            const double us = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / trials * 1e6;
+            out << QStringLiteral("  p=%1: %2 мкс на попытку").arg(p).arg(us, 0, 'f', 1) << Qt::endl;
+            if (p == 0) {   // PROFILE: такты по фазам столбца у нити 0 блока 0
+                std::vector<quint64> prof(7, 0);
+                CUDA_CALL(cudaMemcpy(prof.data(), d_out.get(), 7 * sizeof(quint64), cudaMemcpyDeviceToHost));
+                const double cols = double(std::max<quint64>(1, prof[6]));
+                if (getenv("LEON_GAUSS") && std::string(getenv("LEON_GAUSS")) != "col")
+                    out << QStringLiteral("    тактов на группу (нить 0): ключи %1, поиск опор %2, фаза B %3, исключение %4; групп %5")
+                               .arg(prof[0] / cols, 0, 'f', 0).arg(prof[1] / cols, 0, 'f', 0).arg(prof[2] / cols, 0, 'f', 0)
+                               .arg(prof[3] / cols, 0, 'f', 0).arg(prof[6]) << Qt::endl;
+                else
+                out << QStringLiteral("    тактов на столбец (нить 0): поиск %1 (из них загрузки %6), барьер %2, обмен+барьер %3, исключение %4, барьер %5")
+                           .arg(prof[0] / cols, 0, 'f', 0).arg(prof[1] / cols, 0, 'f', 0).arg(prof[2] / cols, 0, 'f', 0)
+                           .arg(prof[3] / cols, 0, 'f', 0).arg(prof[4] / cols, 0, 'f', 0).arg(prof[5] / cols, 0, 'f', 0) << Qt::endl;
+            }
+        }
         out.flush();
         return 0;
     }

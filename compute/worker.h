@@ -80,6 +80,7 @@ struct CodeGeometry
     quint64               leonTrials        = 0;
     double                leonWordsPerTrial = 0.0;
     int                   leonWindow        = 0;     // окно Штерна–Дюмера; 0 — без окна
+    double                leonPairs         = 0.0;   // пар списков за попытку по профилю ключей
 };
 
 Q_DECLARE_METATYPE(LoadMode)

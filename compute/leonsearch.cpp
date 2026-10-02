@@ -210,7 +210,8 @@ quint64 trialsForAll(int n, int k, int weight, int rows, double miss,
     return trialsForAll(n, k, weight, rows, 0, miss, foundByWeight);
 }
 
-bool windowEnabled = true;
+bool windowEnabled    = true;
+bool gpuWindowEnabled = false;
 
 SternProfile sternProfile(const QStringList& matrix)
 {
@@ -289,7 +290,7 @@ Plan plan(int n, int k, int weight, double miss, bool gpu, const SternProfile* p
             bestCost           = cost;
         }
     }
-    if (gpu || !windowEnabled || !profile || profile->window <= 0)
+    if ((gpu && !gpuWindowEnabled) || !windowEnabled || !profile || profile->window <= 0)
         return best;
 
     // Окно Штерна–Дюмера (только процессор). Замер одного потока (мкс на

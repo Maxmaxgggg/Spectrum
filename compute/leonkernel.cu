@@ -3,17 +3,15 @@
 #include "defines.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
 namespace {
 
-// Заготовленные варианты числа слов в строке. В разделяемой памяти — до
-// восьми (512 бит), в глобальной — до MAX_BLOCKWORDS.
-constexpr int SHARED_MAX_WORDS = 8;
+// Заготовленные варианты числа слов в строке — до MAX_BLOCKWORDS, что в
+// разделяемой памяти, что в глобальной.
 
-// До стольких строк на лэйн опоры группы ищет один варп (см. Гаусс в ядре).
-constexpr int SMALL_ROWS_PER_LANE = 8;
 
 // Шаг строки в рабочей копии — слов. Нечётный: 64-битные обращения варпа
 // к соседним строкам тогда попадают в разные банки разделяемой памяти, а с
@@ -122,11 +120,15 @@ __device__ __forceinline__ bool light(int weight, const LeonLaunch& P)
 }
 
 // Блок = попытка. В разделяемой памяти: если влезла, матрица k x WORDS;
-// таблица четырёх русских (2^S x WORDS); порядок столбцов (uint16 x n);
-// флаги опорных строк и ключи группы (uint8 x k). Не влезшая матрица — в
-// своём куске P.scratch.
+// таблица четырёх русских (2^S x WORDS); ключи окна (uint32 x k); порядок
+// столбцов (uint16 x n); флаги опорных строк и ключи группы (uint8 x k);
+// пометки опорных столбцов (uint8 x n). Не влезшая матрица — в своём куске
+// P.scratch, там же хеш-таблица окна.
+// Регистров — под четыре блока на мультипроцессор у коротких строк (64 на
+// нить) и два у длинных (128): опорная строка и суммы живут в регистрах,
+// и без этой рамки компилятор берёт 72 и оставляет три блока.
 template <int WORDS, bool GLOBAL>
-__global__ void leonTrialsKernel(LeonLaunch P)
+__global__ void __launch_bounds__(LEON_THREADS, WORDS <= 8 ? 4 : 2) leonTrialsKernel(LeonLaunch P)
 {
     constexpr int STRIDE = rowStride(WORDS);
     extern __shared__ uint64_t s_mem[];
@@ -134,29 +136,35 @@ __global__ void leonTrialsKernel(LeonLaunch P)
     const int n = P.cols;
     const int S = P.gaussGroup;
 
+    uint64_t* const scratch = P.scratch ? P.scratch + size_t(blockIdx.x) * P.scratchWords : nullptr;
     uint64_t* m;
     uint64_t* table;
     if (GLOBAL) {
-        m     = P.scratch + size_t(blockIdx.x) * size_t(k) * STRIDE;
+        m     = scratch;
         table = s_mem;
     } else {
         m     = s_mem;
         table = m + size_t(k) * STRIDE;
     }
-    uint16_t* const order = reinterpret_cast<uint16_t*>(table + (size_t(1) << S) * STRIDE);
-    uint8_t*  const flag  = reinterpret_cast<uint8_t*>(order + n);   // строка уже опорная
-    uint8_t*  const key   = flag + k;                                 // биты строки на столбцах группы
+    uint32_t* const winKey   = reinterpret_cast<uint32_t*>(table + (P.gaussTable ? (size_t(1) << S) * STRIDE : 0));
+    uint16_t* const order    = reinterpret_cast<uint16_t*>(winKey + (P.window > 0 ? ((k + 1) & ~1) : 0));
+    uint16_t* const rowOf    = order + n;                                // строка i-й по порядку опоры
+    uint8_t*  const flag     = reinterpret_cast<uint8_t*>(rowOf + k);   // строка уже опорная
+    uint8_t*  const key      = flag + k;                                 // биты строки на столбцах группы
+    uint8_t*  const colPivot = key + k;                                  // столбец опорный
 
     const int tid = threadIdx.x;
     const int B   = blockDim.x;
 
-    // 1. Копия матрицы; слова за wordsPerRow — нули. Флаги опорных строк — нули.
+    // 1. Копия матрицы; слова за wordsPerRow — нули. Флаги строк и столбцов — нули.
     for (int e = tid; e < k * WORDS; e += B) {
         const int r = e / WORDS, w = e % WORDS;
         m[size_t(r) * STRIDE + w] = (w < P.wordsPerRow) ? P.matrix[size_t(r) * P.wordsPerRow + w] : 0ULL;
     }
     for (int r = tid; r < k; r += B)
         flag[r] = 0;
+    for (int c = tid; c < n; c += B)
+        colPivot[c] = 0;
     // 2. Случайный порядок столбцов — Фишер–Йетс одной нитью, n обменов.
     if (tid == 0) {
         for (int c = 0; c < n; ++c) order[c] = uint16_t(c);
@@ -196,38 +204,99 @@ __global__ void leonTrialsKernel(LeonLaunch P)
     int found = 0;             // опорных строк найдено — у всех нитей одно и то же
     if (S == 1) {
         // Гаусс по одному столбцу — для матрицы в разделяемой памяти (см.
-        // gaussGroupFor). Опора ищется одним варпом, прочие ждут; на
-        // столбец два барьера.
+        // gaussGroupFor). Строки не переставляются: список кандидатов
+        // (cand — строки, ещё не ставшие опорными) сжимается на месте, и
+        // опору ищут по нему все варпы разом — свои кандидаты по
+        // (tid, tid + B, …), минимум по варпам через s_min. На столбец два
+        // барьера.
+        //
+        // Профиль (clock64, [961,676] в большой разделяемой памяти, один
+        // блок на мультипроцессор): исключение упирается в пропускную
+        // способность разделяемой памяти (полстроки на опору × 34 слова —
+        // около 700 тактов на столбец), а поиск одним варпом стоил ещё
+        // 700 и перестановка строк с барьером — 270. Биты своих строк
+        // загружаются разом (маска need), опорная строка — в регистрах.
+        uint16_t* const cand = rowOf;   // до конца Гаусса — список кандидатов
+        for (int r = tid; r < k; r += B)
+            cand[r] = uint16_t(r);
+        __syncthreads();
+        int remaining = k;
         for (int idx = 0; idx < n && found < k; ++idx) {
-            const int c = order[idx];
-            if (tid < 32) {
-                int best = 0x7fffffff;
-                for (int r = tid; r < k; r += 32)
-                    if (!flag[r] && bitAt(m + size_t(r) * STRIDE, c)) { best = r; break; }
+            const int c  = order[idx];
+            const int cw = c >> 6;
+            const uint64_t cm = 1ULL << (c & 63);
+            int best = 0x7fffffff;
+            for (int i = tid; i < remaining && best == 0x7fffffff; i += B * 4) {
+                // По четыре кандидата за шаг: загрузки независимы.
+                int      r[4];
+                uint64_t v[4];
                 #pragma unroll
-                for (int off = 16; off > 0; off >>= 1)
-                    best = min(best, __shfl_xor_sync(0xffffffffu, best, off));
-                if (tid == 0) s_min[idx & 1][0] = best;
-            }
-            __syncthreads();
-            const int src = s_min[idx & 1][0];
-            if (src == 0x7fffffff)
-                continue;   // столбец зависим от прежних
-            const uint64_t* pivot = m + size_t(src) * STRIDE;
-            for (int r = tid; r < k; r += B) {
-                if (r == src) { flag[r] = 1; continue; }
-                uint64_t* row = m + size_t(r) * STRIDE;
-                if (bitAt(row, c)) {
-                    #pragma unroll
-                    for (int w = 0; w < WORDS; ++w) row[w] ^= pivot[w];
+                for (int j = 0; j < 4; ++j) {
+                    r[j] = (i + B * j < remaining) ? int(cand[i + B * j]) : -1;
+                    v[j] = r[j] >= 0 ? m[size_t(r[j]) * STRIDE + cw] : 0ULL;
                 }
+                #pragma unroll
+                for (int j = 0; j < 4; ++j)
+                    if (best == 0x7fffffff && r[j] >= 0 && (v[j] & cm)) best = (i + B * j);   // позиция в cand
             }
+            #pragma unroll
+            for (int off = 16; off > 0; off >>= 1)
+                best = min(best, __shfl_xor_sync(0xffffffffu, best, off));
+            if (lane == 0) s_min[idx & 1][warp] = best;
+            __syncthreads();
+            int pos = 0x7fffffff;
+            for (int w = 0; w < warps; ++w) pos = min(pos, s_min[idx & 1][w]);
+            if (pos == 0x7fffffff)
+                continue;   // столбец зависим от прежних
+            const int src = cand[pos];
+            uint64_t pv[WORDS];
+            #pragma unroll
+            for (int w = 0; w < WORDS; ++w) pv[w] = m[size_t(src) * STRIDE + w];
+            // Свои строки с единицей в столбце — маской, загрузки разом.
+            unsigned need = 0;
+            #pragma unroll
+            for (int i = 0; i < 16; ++i) {
+                const int r = tid + i * B;
+                if (r < k && r != src && (m[size_t(r) * STRIDE + cw] & cm))
+                    need |= 1u << i;
+            }
+            for (int r = tid + 16 * B; r < k; r += B)   // строк больше 16 на нить — редкость
+                if (r != src && (m[size_t(r) * STRIDE + cw] & cm)) {
+                    uint64_t* row = m + size_t(r) * STRIDE;
+                    #pragma unroll
+                    for (int w = 0; w < WORDS; ++w) row[w] ^= pv[w];
+                }
+            while (need) {
+                const int i = __ffs(need) - 1;
+                need &= need - 1;
+                uint64_t* row = m + size_t(tid + i * B) * STRIDE;
+                #pragma unroll
+                for (int w = 0; w < WORDS; ++w) row[w] ^= pv[w];
+            }
+            // Опора выбывает из кандидатов: на её место — последний. Список
+            // читается только при поиске, после барьера.
+            if (tid == 0) {
+                colPivot[c] = 1;
+                cand[pos]   = cand[remaining - 1];
+                cand[remaining - 1] = uint16_t(src);   // хвост списка — опоры по порядку с конца
+            }
+            --remaining;
             ++found;
             __syncthreads();
         }
+        // Хвост cand — опоры в порядке появления с конца: rowOf[i] = опора i.
+        // Кандидатов остаться не должно (ранг проверен хостом).
+        for (int i = tid; i < k / 2; i += B) {
+            const uint16_t a = cand[i], b = cand[k - 1 - i];
+            cand[i] = b; cand[k - 1 - i] = a;
+        }
+        __syncthreads();
     }
+    long long gprof[6] = { 0, 0, 0, 0, 0, 0 };   // PROFILE
+    int groups = 0;
     for (int idx = 0; S > 1 && idx < n && found < k; idx += S) {
         const int width = min(S, n - idx);
+        long long g0 = clock64(); ++groups;   // PROFILE
 
         // Ключи своих строк: биты на столбцах группы, младший — первый столбец.
         for (int r = tid; r < k; r += B) {
@@ -238,10 +307,11 @@ __global__ void leonTrialsKernel(LeonLaunch P)
             key[r] = uint8_t(x);
         }
 
+        long long g1 = clock64(); gprof[0] += g1 - g0;   // PROFILE keys
         // Опоры группы: по столбцу — незанятая строка с битом j, первая по
         // номеру; её ключ вычитается из ключей прочих строк с битом j.
         int s = 0;
-        if (k <= 32 * SMALL_ROWS_PER_LANE) {
+        if (k <= 32 * P.searchRowsPerLane) {
             // Короткая матрица: все ключи обходит один варп, без барьеров
             // блока — на 96 строках обмены и барьеры восьми варпов стоили
             // больше самого Гаусса. Остальные варпы ждут у барьера.
@@ -297,8 +367,10 @@ __global__ void leonTrialsKernel(LeonLaunch P)
             __syncthreads();
         }
         found += s;
+        long long g2 = clock64(); gprof[1] += g2 - g1;   // PROFILE search
         if (s == 0)
             continue;
+        if (tid < s) { colPivot[s_pivotCol[tid]] = 1; rowOf[found - s + tid] = uint16_t(s_pivotRow[tid]); }
 
         // Обратная матрица ключей опор на опорных столбцах — Гаусс–Жордан
         // на s строках по 2s бит: ключи собирают s лэйнов нулевого варпа,
@@ -339,25 +411,30 @@ __global__ void leonTrialsKernel(LeonLaunch P)
             for (int t = 0; t < s; ++t)
                 if ((s_inv[i] >> t) & 1u) v ^= s_stage[t * STRIDE + w];
             m[size_t(s_pivotRow[i]) * STRIDE + w] = v;
-            table[(size_t(1) << i) * STRIDE + w]  = v;
+            if (P.gaussTable)
+                table[(size_t(1) << i) * STRIDE + w] = v;
         }
         __syncthreads();
-        // Остальные записи таблицы — суммы записей с одним битом.
-        const int entries = 1 << s;
-        for (int e = tid; e < entries * WORDS; e += B) {
-            const int x = e / WORDS, w = e % WORDS;
-            if (x & (x - 1)) {
-                uint64_t v = 0;
-                for (int i = 0; i < s; ++i)
-                    if ((x >> i) & 1) v ^= table[(size_t(1) << i) * STRIDE + w];
-                table[size_t(x) * STRIDE + w] = v;
-            } else if (x == 0) {
-                table[w] = 0ULL;
+        if (P.gaussTable) {
+            // Остальные записи таблицы — суммы записей с одним битом.
+            const int entries = 1 << s;
+            for (int e = tid; e < entries * WORDS; e += B) {
+                const int x = e / WORDS, w = e % WORDS;
+                if (x & (x - 1)) {
+                    uint64_t v = 0;
+                    for (int i = 0; i < s; ++i)
+                        if ((x >> i) & 1) v ^= table[(size_t(1) << i) * STRIDE + w];
+                    table[size_t(x) * STRIDE + w] = v;
+                } else if (x == 0) {
+                    table[w] = 0ULL;
+                }
             }
+            __syncthreads();
         }
-        __syncthreads();
+        long long g3 = clock64(); gprof[2] += g3 - g2;   // PROFILE phase B
         // Исключение: каждая своя строка, кроме опор группы, складывается с
-        // записью таблицы по своим битам на опорных столбцах.
+        // записью таблицы по своим битам на опорных столбцах — или прямо с
+        // приведёнными опорами по этим битам, если таблицы нет.
         for (int r = tid; r < k; r += B) {
             bool pivot = false;
             for (int i = 0; i < s; ++i) pivot |= (r == s_pivotRow[i]);
@@ -377,15 +454,151 @@ __global__ void leonTrialsKernel(LeonLaunch P)
             }
             if (x == 0)
                 continue;
-            const uint64_t* t = table + size_t(x) * STRIDE;
+            if (P.gaussTable) {
+                const uint64_t* t = table + size_t(x) * STRIDE;
+                #pragma unroll
+                for (int w = 0; w < WORDS; ++w) acc[w] ^= t[w];
+            } else {
+                for (int i = 0; i < s; ++i) {
+                    if (!((x >> i) & 1u)) continue;
+                    const uint64_t* t = m + size_t(s_pivotRow[i]) * STRIDE;
+                    #pragma unroll
+                    for (int w = 0; w < WORDS; ++w) acc[w] ^= t[w];
+                }
+            }
             #pragma unroll
-            for (int w = 0; w < WORDS; ++w) row[w] = acc[w] ^ t[w];
+            for (int w = 0; w < WORDS; ++w) row[w] = acc[w];
         }
         __syncthreads();
+        long long g4 = clock64(); gprof[3] += g4 - g3;   // PROFILE phase C
+    }
+    if (S > 1 && blockIdx.x == 0 && tid == 0 && P.maxWeight == 0) {   // PROFILE
+        for (int i = 0; i < 4; ++i) P.outWords[i] = uint64_t(gprof[i]);
+        P.outWords[4] = 0; P.outWords[5] = 0;
+        P.outWords[6] = uint64_t(groups);
     }
     // Ранг проверен хостом заранее; если что — попытка просто пустая.
     if (found < k)
         return;
+
+    const int p = P.rowsPerTrial;
+    auto rowAt = [&](int r) { return m + size_t(r) * STRIDE; };
+
+    // 4а. Окно Штерна–Дюмера (см. Leon::trialStern): окно — последние
+    //     window неопорных столбцов порядка, ключ строки — её биты на окне,
+    //     половины — опоры [0, k/2) и [k/2, k) по порядку их появления
+    //     (rowOf), как строки приведённой матрицы на хосте: попытка с тем
+    //     же номером даёт те же пары, что и trialStern.
+    //     Комбинации до p опор первой половины — список в рабочем буфере
+    //     блока: запись (ключ, номера опор + 1 по 13 бит) под номером
+    //     комбинации, цепочки по хешу ключа (head/next; открытая адресация
+    //     не годится: у структурных кодов ключи повторяются сотнями, и
+    //     сплошные серии ячеек ходят насквозь). Комбинации второй половины
+    //     идут по цепочке и кладут найденные пары в общий список пар, а
+    //     потом пары суммируются всеми нитями поровну: у пары до четырёх
+    //     строк, а у одного ключа пар может быть сотни — считать их лэйном,
+    //     нашедшим цепочку, значит держать варп в одной нити. Список пар
+    //     полон — пара считается на месте. Пара «пусто, пусто» — нулевое
+    //     слово.
+    if (P.window > 0) {
+        __shared__ int      s_win[32];
+        __shared__ int      s_lw;
+        __shared__ unsigned s_pairs;
+        if (tid == 0) {
+            int cnt = 0;
+            for (int i = n - 1; i >= 0 && cnt < P.window; --i)
+                if (!colPivot[order[i]]) s_win[cnt++] = order[i];
+            s_lw    = cnt;
+            s_pairs = 0;
+        }
+        __syncthreads();
+        const int lw = s_lw;
+        for (int i = tid; i < k; i += B) {
+            const uint64_t* row = rowAt(rowOf[i]);
+            uint32_t x = 0;
+            for (int b = 0; b < lw; ++b)
+                x |= uint32_t(bitAt(row, s_win[b])) << b;
+            winKey[i] = x;
+        }
+
+        // Рабочий буфер блока: головы цепочек, записи, ссылки, список пар.
+        int*      const head  = reinterpret_cast<int*>(scratch + (GLOBAL ? size_t(k) * STRIDE : 0));
+        uint64_t* const entry = reinterpret_cast<uint64_t*>(head + P.hashSlots);
+        int*      const next  = reinterpret_cast<int*>(entry + P.listA);
+        uint64_t* const pairs = reinterpret_cast<uint64_t*>(next + ((P.listA + 1) & ~1u));
+        for (uint64_t i = tid; i < P.hashSlots; i += B)
+            head[i] = -1;
+        __syncthreads();
+
+        const int shift = P.hashShift;
+        const int h1    = k / 2;
+        auto chainOf = [&](uint32_t kk) { return int((kk * 0x9E3779B1u) >> shift); };
+        auto put = [&](unsigned idx, uint32_t kk, int a, int b) {
+            entry[idx] = (uint64_t(kk) << 26) | (uint64_t(a + 1) << 13) | uint64_t(b + 1);
+            next[idx]  = atomicExch(head + chainOf(kk), int(idx));
+        };
+        // Номер комбинации: 0 — пусто, 1..h1 — одиночные, дальше пары по a.
+        if (tid == 0)
+            put(0u, 0u, -1, -1);
+        for (int a = tid; a < h1; a += B)
+            put(unsigned(1 + a), winKey[a], a, -1);
+        if (p >= 2)
+            for (int a = warp; a < h1; a += warps) {
+                const unsigned base = unsigned(1 + h1) + unsigned(a) * unsigned(h1 - 1) - unsigned(a) * unsigned(a - 1) / 2u;
+                for (int b = a + 1 + lane; b < h1; b += 32)
+                    put(base + unsigned(b - a - 1), winKey[a] ^ winKey[b], a, b);
+            }
+        __syncthreads();
+
+        auto sumPair = [&](uint64_t e, int b0, int b1) {
+            const int a0 = int((e >> 13) & 0x1FFFu) - 1, a1 = int(e & 0x1FFFu) - 1;
+            uint64_t acc[WORDS];
+            #pragma unroll
+            for (int w = 0; w < WORDS; ++w) acc[w] = 0ULL;
+            const int rs[4] = { a0, a1, b0, b1 };
+            for (int i = 0; i < 4; ++i) {
+                if (rs[i] < 0) continue;
+                const uint64_t* row = rowAt(rowOf[rs[i]]);
+                #pragma unroll
+                for (int w = 0; w < WORDS; ++w) acc[w] ^= row[w];
+            }
+            int wt = 0;
+            #pragma unroll
+            for (int w = 0; w < WORDS; ++w) wt += __popcll(acc[w]);
+            if (light(wt, P))
+                emitWord<WORDS>(P, acc, nullptr, wt);
+        };
+        auto probe = [&](uint32_t kk, int b0, int b1) {
+            for (int i = __ldcg(head + chainOf(kk)); i >= 0; i = __ldcg(next + i)) {
+                const uint64_t e = __ldcg(reinterpret_cast<const unsigned long long*>(entry + i));
+                if (uint32_t((e >> 26) & 0xFFFFFu) != kk)
+                    continue;
+                if ((e & 0x3FFFFFFu) == 0ULL && b0 < 0)
+                    continue;   // «пусто, пусто»
+                const unsigned slot = atomicAdd(&s_pairs, 1u);
+                if (slot < P.pairCapacity)
+                    pairs[slot] = (uint64_t(i) << 26) | (uint64_t(b0 + 1) << 13) | uint64_t(b1 + 1);
+                else
+                    sumPair(e, b0, b1);
+            }
+        };
+        if (tid == 0)
+            probe(0u, -1, -1);
+        for (int b = h1 + tid; b < k; b += B)
+            probe(winKey[b], b, -1);
+        if (p >= 2)
+            for (int a = h1 + warp; a < k; a += warps)
+                for (int b = a + 1 + lane; b < k; b += 32)
+                    probe(winKey[a] ^ winKey[b], a, b);
+        __syncthreads();
+
+        const unsigned total = min(s_pairs, P.pairCapacity);
+        for (unsigned i = tid; i < total; i += B) {
+            const uint64_t rec = pairs[i];
+            sumPair(entry[rec >> 26], int((rec >> 13) & 0x1FFFu) - 1, int(rec & 0x1FFFu) - 1);
+        }
+        return;
+    }
 
     // 4. Перебор комбинаций до p строк. Единица работы — варп, а не нить:
     //    у 32 лэйнов либо общий префикс в регистрах и свои хвосты подряд
@@ -394,10 +607,8 @@ __global__ void leonTrialsKernel(LeonLaunch P)
     //    широковещательно). В обоих случаях лэйны делают одинаковое число
     //    шагов: раньше у каждой нити был свой хвост своей длины, и в варпе
     //    работало в среднем 8 лэйнов из 32.
-    const int p = P.rowsPerTrial;
     uint64_t acc[WORDS], acc2[WORDS];
 
-    auto rowAt = [&](int r) { return m + size_t(r) * STRIDE; };
     auto load = [&](uint64_t* dst, const uint64_t* row) {
         #pragma unroll
         for (int w = 0; w < WORDS; ++w) dst[w] = row[w];
@@ -553,13 +764,48 @@ __global__ void seenRehashKernel(const uint64_t* oldFp, const unsigned* oldHits,
     }
 }
 
-size_t sharedBytesFor(int rows, int cols, int words, bool global, int group)
+size_t sharedBytesFor(int rows, int cols, int words, bool global, int tableGroup, int window)
 {
-    size_t bytes = size_t(cols) * sizeof(uint16_t) + 2 * size_t(rows);
-    bytes += (size_t(1) << group) * rowStride(words) * sizeof(uint64_t);
+    size_t bytes = size_t(cols) * sizeof(uint16_t) + size_t(rows) * sizeof(uint16_t)   // порядок, опоры по порядку
+                 + 2 * size_t(rows) + size_t(cols);                                     // флаги, ключи группы, столбцы
+    if (window > 0)
+        bytes += size_t((rows + 1) & ~1) * sizeof(uint32_t);                            // ключи окна
+    if (tableGroup > 0)
+        bytes += (size_t(1) << tableGroup) * rowStride(words) * sizeof(uint64_t);       // таблица четырёх русских
     if (!global)
         bytes += size_t(rows) * rowStride(words) * sizeof(uint64_t);
     return bytes;
+}
+
+// Как вести Гаусс: ширина группы, таблица, поиск опор одним варпом.
+struct GaussMode
+{
+    int  group   = 1;
+    bool table   = false;
+    int  rowsPerLane = 8;
+};
+
+// Пределы разделяемой памяти устройства: обычный на блок и по опт-ину
+// (на Ampere — 99 КБ против 48).
+struct SharedLimits
+{
+    size_t perBlock = 48 * 1024;
+    size_t optIn    = 48 * 1024;
+};
+SharedLimits sharedLimits()
+{
+    static SharedLimits limits;
+    static bool known = false;
+    if (!known) {
+        known = true;
+        int device = 0, value = 0;
+        cudaGetDevice(&device);
+        if (cudaDeviceGetAttribute(&value, cudaDevAttrMaxSharedMemoryPerBlock, device) == cudaSuccess && value > 0)
+            limits.perBlock = size_t(value);
+        if (cudaDeviceGetAttribute(&value, cudaDevAttrMaxSharedMemoryPerBlockOptin, device) == cudaSuccess && value > 0)
+            limits.optIn = size_t(value);
+    }
+    return limits;
 }
 
 // Статическая разделяемая память ядра: буфер опорных строк, минимумы по
@@ -584,7 +830,7 @@ size_t staticSharedBytes(int words)
 int gaussGroupFor(int rows, int cols, int words, bool global, int threadsPerBlock)
 {
     if (!global)
-        return sharedBytesFor(rows, cols, words, false, 1) <= size_t(Constants::MAX_SHARED_BYTES) ? 1 : 0;
+        return 0;
     static int sharedPerSm = -1, reservedPerBlock = 0, threadsPerSm = 0;
     if (sharedPerSm < 0) {
         int device = 0;
@@ -600,13 +846,13 @@ int gaussGroupFor(int rows, int cols, int words, bool global, int threadsPerBloc
     }
     const int byThreads = std::max(1, threadsPerSm / std::max(1, threadsPerBlock));
     auto blocksFor = [&](int group) {
-        const size_t bytes = sharedBytesFor(rows, cols, words, global, group)
+        const size_t bytes = sharedBytesFor(rows, cols, words, global, group, 1)
                            + staticSharedBytes(words) + size_t(reservedPerBlock);
         return int(size_t(sharedPerSm) / bytes);
     };
     int best = 0;
     for (int group = 1; group <= 8; ++group) {
-        if (sharedBytesFor(rows, cols, words, global, group) > size_t(Constants::MAX_SHARED_BYTES))
+        if (sharedBytesFor(rows, cols, words, global, group, 1) > size_t(Constants::MAX_SHARED_BYTES))
             break;
         if (group > 1 && blocksFor(group) < std::min(byThreads, blocksFor(1)))
             break;
@@ -631,11 +877,25 @@ int leonRowStride(int wordsPerRow)
     return padded == 0 ? 0 : rowStride(padded);
 }
 
+int leonSharedTier(int rows, int cols, int wordsPerRow, int window)
+{
+    const int words = leonPaddedWords(wordsPerRow);
+    if (rows <= 0 || cols <= 0 || words == 0)
+        return 0;
+    const size_t bytes = sharedBytesFor(rows, cols, words, false, 0, window);
+    if (bytes <= size_t(Constants::MAX_SHARED_BYTES))
+        return 1;
+    // Большая: по опт-ину, один блок на мультипроцессор. Статическая
+    // память ядра — в тот же предел.
+    const SharedLimits limits = sharedLimits();
+    if (limits.optIn > limits.perBlock && bytes + staticSharedBytes(words) <= limits.optIn)
+        return 2;
+    return 0;
+}
+
 bool leonFitsShared(int rows, int cols, int wordsPerRow)
 {
-    if (rows <= 0 || cols <= 0 || wordsPerRow <= 0 || wordsPerRow > SHARED_MAX_WORDS)
-        return false;
-    return gaussGroupFor(rows, cols, wordsPerRow, false, LEON_THREADS) > 0;
+    return leonSharedTier(rows, cols, wordsPerRow, 0) > 0;
 }
 
 size_t leonSharedBytes(int rows, int cols, int wordsPerRow)
@@ -643,9 +903,58 @@ size_t leonSharedBytes(int rows, int cols, int wordsPerRow)
     const int words = leonPaddedWords(wordsPerRow);
     if (rows <= 0 || cols <= 0 || words == 0)
         return 0;
-    const bool global = !leonFitsShared(rows, cols, wordsPerRow);
+    const int  tier   = leonSharedTier(rows, cols, wordsPerRow, 0);
+    const bool global = tier == 0;
     const int  group  = gaussGroupFor(rows, cols, words, global, LEON_THREADS);
-    return group == 0 ? 0 : sharedBytesFor(rows, cols, words, global, group);
+    if (global && group == 0)
+        return 0;
+    return sharedBytesFor(rows, cols, words, global, global ? group : 0, 0);
+}
+
+// Гаусс по ярусу: в глобальной памяти — четыре русских с таблицей (проходы
+// по строкам — латентность DRAM, таблица их сокращает); в разделяемой —
+// без таблицы: в обычной разделяемой памяти (ярус 1) по столбцу — там
+// сложение дёшево, а барьеров при 2–4 блоках на мультипроцессор хватает
+// кому перекрыть; в большой (ярус 2) блок на мультипроцессоре один, ядро
+// стоит у барьеров, и группа по восемь столбцов с четырьмя барьерами
+// вместо шестнадцати выигрывает; опоры там ищет один варп.
+GaussMode gaussModeFor(int rows, int cols, int words, int tier, int threadsPerBlock)
+{
+    GaussMode mode;
+    if (tier == 0) {
+        mode.group = gaussGroupFor(rows, cols, words, true, threadsPerBlock);
+        mode.table = mode.group > 1;
+    }
+    if (const char* forced = getenv("LEON_GAUSS")) {   // EXPERIMENT: col | group | table
+        const std::string f = forced;
+        if (f == "col") { mode.group = 1; mode.table = false; }
+        if (f == "group") { mode.group = 8; mode.table = false; mode.rowsPerLane = 32; }
+        if (f == "table") { mode.group = tier == 0 ? mode.group : 6; mode.table = true; mode.rowsPerLane = 32; }
+    }
+    return mode;
+}
+
+size_t leonScratchWords(int rows, int cols, int wordsPerRow, int rowsPerTrial, int window,
+                        unsigned pairCapacity, uint64_t* hashSlots, unsigned* listA)
+{
+    const int    words  = leonPaddedWords(wordsPerRow);
+    const bool   global = leonSharedTier(rows, cols, wordsPerRow, window) == 0;
+    size_t       total  = global ? size_t(rows) * size_t(rowStride(words)) : 0;
+    uint64_t     slots  = 0;
+    unsigned     list   = 0;
+    if (window > 0) {
+        const unsigned h1 = unsigned(rows / 2);
+        list  = 1u + h1 + (rowsPerTrial >= 2 ? h1 * (h1 - 1) / 2u : 0u);
+        slots = 2;
+        while (double(slots) < 2.0 * list) slots <<= 1;
+        total += size_t(slots) / 2                 // головы цепочек, int32
+                + size_t(list)                     // записи
+                + (size_t(list) + 1) / 2           // ссылки, int32
+                + size_t(pairCapacity);            // список пар
+    }
+    if (hashSlots) *hashSlots = slots;
+    if (listA) *listA = list;
+    return total;
 }
 
 void launchSeenRehash(const uint64_t* oldFp, const unsigned* oldHits, const uint16_t* oldWeight,
@@ -666,41 +975,67 @@ void launchSeenRehash(const uint64_t* oldFp, const unsigned* oldHits, const uint
 void launchLeonTrials(const LeonLaunch& launch, int threadsPerBlock, cudaStream_t stream)
 {
     const int  words  = leonPaddedWords(launch.wordsPerRow);
-    const bool global = !leonFitsShared(launch.rows, launch.cols, launch.wordsPerRow);
+    const int  tier   = leonSharedTier(launch.rows, launch.cols, launch.wordsPerRow, launch.window);
+    const bool global = tier == 0;
     if (words == 0)
         throw std::invalid_argument("строка матрицы длиннее, чем умеет ядро случайного поиска");
-    if (global && launch.scratch == nullptr)
-        throw std::invalid_argument("матрица не помещается в разделяемую память, а рабочий буфер не задан");
+    if ((global || launch.window > 0) && launch.scratch == nullptr)
+        throw std::invalid_argument("ядру случайного поиска нужен рабочий буфер, а он не задан");
+    if (launch.window > 0 && (launch.window > 20 || launch.rows > 0x1FFF || launch.pairCapacity == 0))
+        throw std::invalid_argument("окно Штерна–Дюмера на видеокарте: окно до 20 столбцов, строк до 8191, список пар не задан");
     if (launch.trials <= 0)
         return;
 
-    const int group = gaussGroupFor(launch.rows, launch.cols, words, global, threadsPerBlock);
-    if (group == 0)
+    const GaussMode mode = gaussModeFor(launch.rows, launch.cols, words, tier, threadsPerBlock);
+    if (mode.group == 0)
         throw std::invalid_argument("порядок столбцов не помещается в разделяемую память");
-    const size_t sharedBytes = sharedBytesFor(launch.rows, launch.cols, words, global, group);
+    const size_t sharedBytes = sharedBytesFor(launch.rows, launch.cols, words, global,
+                                              mode.table ? mode.group : 0, launch.window);
     LeonLaunch L = launch;
-    L.gaussGroup = group;
+    L.gaussGroup        = mode.group;
+    L.gaussTable        = mode.table;
+    L.searchRowsPerLane = mode.rowsPerLane;
+    L.scratchWords = leonScratchWords(L.rows, L.cols, L.wordsPerRow, L.rowsPerTrial, L.window,
+                                      L.pairCapacity, &L.hashSlots, &L.listA);
+    L.hashShift = 32;
+    for (uint64_t v = L.hashSlots; v > 1; v >>= 1) --L.hashShift;
 
-    #define LAUNCH_LEON(W, G) leonTrialsKernel<W, G><<<L.trials, threadsPerBlock, sharedBytes, stream>>>(L)
-    if (!global) {
-        switch (words) {
-            case 1: LAUNCH_LEON(1, false); break;   case 2: LAUNCH_LEON(2, false); break;
-            case 3: LAUNCH_LEON(3, false); break;   case 4: LAUNCH_LEON(4, false); break;
-            case 5: LAUNCH_LEON(5, false); break;   case 6: LAUNCH_LEON(6, false); break;
-            case 7: LAUNCH_LEON(7, false); break;   default: LAUNCH_LEON(8, false); break;
+    // Большая разделяемая память — по опт-ину: ядру разрешается больше
+    // обычных 48 КБ (один раз на вариант; статическая память ядра — в тот
+    // же предел).
+    #define LAUNCH_LEON(W, G)                                                                       \
+        do {                                                                                        \
+            if (tier == 2) {                                                                        \
+                static bool optedIn = false;                                                        \
+                if (!optedIn) {                                                                     \
+                    optedIn = true;                                                                 \
+                    cudaFuncAttributes fa{};                                                        \
+                    cudaFuncGetAttributes(&fa, leonTrialsKernel<W, G>);                             \
+                    cudaFuncSetAttribute(leonTrialsKernel<W, G>,                                    \
+                                         cudaFuncAttributeMaxDynamicSharedMemorySize,               \
+                                         int(sharedLimits().optIn - fa.sharedSizeBytes));           \
+                    cudaFuncSetAttribute(leonTrialsKernel<W, G>,                                    \
+                                         cudaFuncAttributePreferredSharedMemoryCarveout, 100);      \
+                }                                                                                   \
+            }                                                                                       \
+            leonTrialsKernel<W, G><<<L.trials, threadsPerBlock, sharedBytes, stream>>>(L);          \
+        } while (0)
+    #define LAUNCH_LEON_WORDS(G)                                                                    \
+        switch (words) {                                                                            \
+            case  1: LAUNCH_LEON( 1, G); break;   case  2: LAUNCH_LEON( 2, G); break;               \
+            case  3: LAUNCH_LEON( 3, G); break;   case  4: LAUNCH_LEON( 4, G); break;               \
+            case  5: LAUNCH_LEON( 5, G); break;   case  6: LAUNCH_LEON( 6, G); break;               \
+            case  7: LAUNCH_LEON( 7, G); break;   case  8: LAUNCH_LEON( 8, G); break;               \
+            case 10: LAUNCH_LEON(10, G); break;   case 12: LAUNCH_LEON(12, G); break;               \
+            case 14: LAUNCH_LEON(14, G); break;   case 16: LAUNCH_LEON(16, G); break;               \
+            case 20: LAUNCH_LEON(20, G); break;   case 24: LAUNCH_LEON(24, G); break;               \
+            case 28: LAUNCH_LEON(28, G); break;   default: LAUNCH_LEON(32, G); break;               \
         }
-    } else {
-        switch (words) {
-            case  1: LAUNCH_LEON( 1, true); break;   case  2: LAUNCH_LEON( 2, true); break;
-            case  3: LAUNCH_LEON( 3, true); break;   case  4: LAUNCH_LEON( 4, true); break;
-            case  5: LAUNCH_LEON( 5, true); break;   case  6: LAUNCH_LEON( 6, true); break;
-            case  7: LAUNCH_LEON( 7, true); break;   case  8: LAUNCH_LEON( 8, true); break;
-            case 10: LAUNCH_LEON(10, true); break;   case 12: LAUNCH_LEON(12, true); break;
-            case 14: LAUNCH_LEON(14, true); break;   case 16: LAUNCH_LEON(16, true); break;
-            case 20: LAUNCH_LEON(20, true); break;   case 24: LAUNCH_LEON(24, true); break;
-            case 28: LAUNCH_LEON(28, true); break;   default: LAUNCH_LEON(32, true); break;
-        }
-    }
+    if (!global)
+        LAUNCH_LEON_WORDS(false)
+    else
+        LAUNCH_LEON_WORDS(true)
+    #undef LAUNCH_LEON_WORDS
     #undef LAUNCH_LEON
 
     const cudaError_t err = cudaGetLastError();

@@ -1415,14 +1415,26 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     constexpr quint64 kCapacityMax = 8ULL << 20;   // слов в буфере, потолок
     quint64           capacity     = 1ULL << 20;
 
-    // Матрица, не влезшая в разделяемую память, у каждого блока своя — в
-    // рабочем буфере. Буфер на слот не больше 128 МБ, им и ограничена пачка.
-    const bool   global       = !leonFitsShared(rows, cols, words);
-    const size_t scratchWords = global ? size_t(rows) * size_t(leonRowStride(words)) : 0;
+    // Матрица, не влезшая в разделяемую память, и хеш-таблица окна у каждого
+    // блока свои — в рабочем буфере. Буфер на слот не больше 128 МБ (с окном
+    // — четверти свободной памяти, до гигабайта: таблица блока — мегабайты),
+    // им и ограничена пачка.
+    // Список пар окна — с запасом вчетверо против профиля: пар в попытке
+    // столько же по порядку, что и в попытке 0, но не поровну.
+    const unsigned pairCapacity = g.leonWindow > 0
+        ? unsigned(std::min(64.0e6, std::max(4096.0, 4.0 * g.leonPairs))) : 0u;
+    const size_t scratchWords = leonScratchWords(rows, cols, words, depth, g.leonWindow, pairCapacity);
     quint64      blocksMax    = kBatchMax;
-    if (global)
+    if (scratchWords > 0) {
+        quint64 budget = 128ULL << 20;
+        if (g.leonWindow > 0) {
+            size_t freeBytes = 0, totalBytes = 0;
+            CUDA_CALL(cudaMemGetInfo(&freeBytes, &totalBytes));
+            budget = std::min<quint64>(1024ULL << 20, quint64(freeBytes) / 4);
+        }
         blocksMax = std::max<quint64>(1, std::min<quint64>(kBatchMax,
-                        (128ULL << 20) / (scratchWords * sizeof(quint64))));
+                        budget / (scratchWords * sizeof(quint64))));
+    }
 
     DeviceBuffer<quint64> d_mat;
     d_mat.allocate(size_t(rows) * words);
@@ -1448,7 +1460,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     };
     for (Slot& s : slot) {
         allocateOut(s);
-        if (global)
+        if (scratchWords > 0)
             s.d_scratch.allocate(size_t(blocksMax) * scratchWords);
         s.d_count.allocate(1);
         s.h_count.allocate(1, HostBuffer<unsigned>::Kind::Pinned);
@@ -1581,6 +1593,8 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         L.outCount     = s.d_count.get();
         L.capacity     = unsigned(capacity);
         L.scratch      = s.d_scratch.get();
+        L.window       = g.leonWindow;
+        L.pairCapacity = pairCapacity;
         if (seen.capacity > 0) {
             L.seenFp     = seen.fp.get();
             L.seenHits   = seen.hits.get();
@@ -2312,14 +2326,15 @@ CodeGeometry Worker::describeTask() const
         if (g.useGpu && leonSharedBytes(int(g.numOfRows), int(g.numOfCols), int(g.wordsPerRow)) == 0)
             throw std::invalid_argument(
                 "стохастический поиск на видеокарте: строка длиннее, чем умеет ядро — выберите CPU");
-        // Профиль ключей окна — по самой матрице, на видеокарте окна нет.
-        const Leon::SternProfile profile = g.useGpu ? Leon::SternProfile()
-                                                    : Leon::sternProfile(g.matrix);
+        // Профиль ключей окна — по самой матрице.
+        const Leon::SternProfile profile = g.useGpu && !Leon::gpuWindowEnabled
+                                               ? Leon::SternProfile() : Leon::sternProfile(g.matrix);
         const Leon::Plan plan = Leon::plan(int(g.numOfCols), int(g.numOfRows),
                                            settings.leonWeight, settings.leonMissProbability(),
                                            g.useGpu, &profile);
         g.maxRows           = quint64(plan.rows);
         g.leonWindow        = plan.window;
+        g.leonPairs         = plan.window > 0 ? profile.pairs[plan.rows][plan.window] : 0.0;
         g.leonTrials        = plan.trials;
         g.leonWordsPerTrial = plan.costPerTrial;
     }

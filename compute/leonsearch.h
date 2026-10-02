@@ -128,6 +128,9 @@ struct Plan
 // ключей (sternProfile) окно не рассматривается: цена попытки с окном
 // зависит от матрицы, а не только от размеров.
 extern bool windowEnabled;
+// Окно на видеокарте: ядро его умеет (хеш-таблица блока в глобальной
+// памяти), но цена попытки там ещё не откалибрована — пока по запросу.
+extern bool gpuWindowEnabled;
 Plan plan(int n, int k, int weight, double miss, bool gpu = false,
           const SternProfile* profile = nullptr);
 
