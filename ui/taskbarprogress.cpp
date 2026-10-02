@@ -14,7 +14,7 @@ inline ITaskbarList3* asTaskbar(void* p) { return static_cast<ITaskbarList3*>(p)
 #endif
 
 TaskbarProgress::TaskbarProgress(QWidget* window)
-    : window(window)
+    : m_window(window)
 {
 #ifdef Q_OS_WIN
     ITaskbarList3* list = nullptr;
@@ -28,7 +28,7 @@ TaskbarProgress::TaskbarProgress(QWidget* window)
         list->Release();
         return;
     }
-    taskbar = list;
+    m_taskbar = list;
 #else
     Q_UNUSED(window);
 #endif
@@ -37,31 +37,31 @@ TaskbarProgress::TaskbarProgress(QWidget* window)
 TaskbarProgress::~TaskbarProgress()
 {
 #ifdef Q_OS_WIN
-    if (taskbar) {
-        asTaskbar(taskbar)->Release();
-        taskbar = nullptr;
+    if (m_taskbar) {
+        asTaskbar(m_taskbar)->Release();
+        m_taskbar = nullptr;
     }
 #endif
 }
 
 bool TaskbarProgress::isAvailable() const
 {
-    return taskbar != nullptr;
+    return m_taskbar != nullptr;
 }
 
 void TaskbarProgress::setPercent(int percent)
 {
 #ifdef Q_OS_WIN
-    if (!taskbar || !window)
+    if (!m_taskbar || !m_window)
         return;
 
-    const HWND hwnd = reinterpret_cast<HWND>(window->winId());
+    const HWND hwnd = reinterpret_cast<HWND>(m_window->winId());
     if (percent <= 0 || percent >= 100) {
-        asTaskbar(taskbar)->SetProgressState(hwnd, TBPF_NOPROGRESS);
+        asTaskbar(m_taskbar)->SetProgressState(hwnd, TBPF_NOPROGRESS);
     }
     else {
-        asTaskbar(taskbar)->SetProgressState(hwnd, TBPF_NORMAL);
-        asTaskbar(taskbar)->SetProgressValue(hwnd, percent, 100);
+        asTaskbar(m_taskbar)->SetProgressState(hwnd, TBPF_NORMAL);
+        asTaskbar(m_taskbar)->SetProgressValue(hwnd, percent, 100);
     }
 #else
     Q_UNUSED(percent);

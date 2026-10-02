@@ -167,12 +167,12 @@ inline bool swapOne(Sys& s, std::mt19937_64& rng)
 
 // Суммы до p строк — как Leon::trial.
 template <class Visit>
-void enumerateSums(const Sys& s, int p, int W, Visit&& visit)
+void enumerateSums(const Sys& s, int p, int maxWeight, Visit&& visit)
 {
     std::vector<quint64> word(size_t(s.words), 0ULL);
     struct Walker
     {
-        const Sys& s; int p; int W; std::vector<quint64>& word; Visit& visit;
+        const Sys& s; int p; int maxWeight; std::vector<quint64>& word; Visit& visit;
         void go(int from, int depth)
         {
             for (int i = from; i < s.k; ++i) {
@@ -182,7 +182,7 @@ void enumerateSums(const Sys& s, int p, int W, Visit&& visit)
                     word[size_t(w)] ^= row[w];
                     weight += popcount64(word[size_t(w)]);
                 }
-                if (weight > 0 && weight <= W)
+                if (weight > 0 && weight <= maxWeight)
                     visit(word.data(), weight);
                 if (depth + 1 < p)
                     go(i + 1, depth + 1);
@@ -191,7 +191,7 @@ void enumerateSums(const Sys& s, int p, int W, Visit&& visit)
             }
         }
     };
-    Walker walker{ s, p, W, word, visit };
+    Walker walker{ s, p, maxWeight, word, visit };
     walker.go(0, 0);
 }
 
@@ -211,7 +211,7 @@ struct SternScratch
 
 // Одна итерация Штерна–Дюмера на текущей систематической матрице.
 template <class Visit>
-void sternIteration(const Sys& s, int p, int l, int W, std::mt19937_64& rng,
+void sternIteration(const Sys& s, int p, int l, int maxWeight, std::mt19937_64& rng,
                     SternScratch& sc, Visit&& visit)
 {
     const int k = s.k, words = s.words;
@@ -288,7 +288,7 @@ void sternIteration(const Sys& s, int p, int l, int W, std::mt19937_64& rng,
         int weight = 0;
         for (int w = 0; w < words; ++w)
             weight += popcount64(sc.word[size_t(w)]);
-        if (weight > 0 && weight <= W)
+        if (weight > 0 && weight <= maxWeight)
             visit(sc.word.data(), weight);
     };
     auto probe = [&](uint32_t key, int r0, int r1, int r2) {
@@ -346,9 +346,9 @@ double trialsForAll(const std::vector<quint64>& byWeight, double miss, Prob&& pr
     double best = 0.0;
     for (int w = 1; w < int(byWeight.size()); ++w) {
         if (byWeight[size_t(w)] == 0) continue;
-        const double P = prob(w);
-        if (P <= 0.0) return INFINITY;
-        best = std::max(best, std::log(double(byWeight[size_t(w)]) / miss) / P);
+        const double catchProb = prob(w);
+        if (catchProb <= 0.0) return INFINITY;
+        best = std::max(best, std::log(double(byWeight[size_t(w)]) / miss) / catchProb);
     }
     return best;
 }
@@ -362,19 +362,19 @@ inline double sternListSize(int k, int p)
     return s;
 }
 
-// Выбор (p, l) Штерна по модели: цена итерации на одну поимку слова веса W.
-inline void chooseStern(int n, int k, int W, bool incremental, int& p, int& l)
+// Выбор (p, l) Штерна по модели: цена итерации на одну поимку слова веса maxWeight.
+inline void chooseStern(int n, int k, int maxWeight, bool incremental, int& p, int& l)
 {
     const int words = (n + 63) / 64;
     const double gauss = incremental ? 2.0 * k * words : double(k) * k * words / 8.0;
     double bestCost = INFINITY;
     for (int pp = 1; pp <= 3; ++pp) {
-        const double L = sternListSize(k, pp);
+        const double listSize = sternListSize(k, pp);
         for (int ll = 1; ll <= 26 && ll < n - k; ll++) {
-            const double P = probStern(n, k, W, pp, ll);
-            if (P <= 0.0) continue;
-            const double collisions = L * L / std::ldexp(1.0, ll);
-            const double cost = (gauss + 2.0 * L * 2.0 + collisions * 2.0 * pp * words) / P;
+            const double catchProb = probStern(n, k, maxWeight, pp, ll);
+            if (catchProb <= 0.0) continue;
+            const double collisions = listSize * listSize / std::ldexp(1.0, ll);
+            const double cost = (gauss + 2.0 * listSize * 2.0 + collisions * 2.0 * pp * words) / catchProb;
             if (cost < bestCost) { bestCost = cost; p = pp; l = ll; }
         }
     }
@@ -404,7 +404,7 @@ struct Outcome
 // Прогон варианта: до полноты эталона (reference), либо до предела итераций.
 // Если reference пуст — это построение эталона: до числа попыток по
 // аддитивной границе.
-inline Outcome runVariant(const Code& code, const Variant& v, int W, double miss, quint64 seed,
+inline Outcome runVariant(const Code& code, const Variant& v, int maxWeight, double miss, quint64 seed,
                           const Leon::WordTable* reference, Leon::WordTable& table, double maxIterations)
 {
     std::mt19937_64 rng(seed);
@@ -432,9 +432,9 @@ inline Outcome runVariant(const Code& code, const Variant& v, int W, double miss
                 swapOne(sys, rng);
         }
         if (v.stern)
-            sternIteration(sys, v.p, v.l, W, rng, scratch, visit);
+            sternIteration(sys, v.p, v.l, maxWeight, rng, scratch, visit);
         else
-            enumerateSums(sys, v.p, W, visit);
+            enumerateSums(sys, v.p, maxWeight, visit);
         ++out.iterations;
 
         if (reference) {
@@ -443,9 +443,9 @@ inline Outcome runVariant(const Code& code, const Variant& v, int W, double miss
         } else {
             // Эталон: попыток по аддитивной границе, не реже раза в 64 итерации.
             if ((out.iterations & 63) == 0 || out.iterations < 64) {
-                // Пока слов нет — на одно слово веса W.
+                // Пока слов нет — на одно слово веса maxWeight.
                 const double need = std::max(trialsForAll(table.countByWeight(), miss, prob),
-                                             std::log(1.0 / miss) / std::max(prob(W), 1e-300));
+                                             std::log(1.0 / miss) / std::max(prob(maxWeight), 1e-300));
                 if (double(out.iterations) >= need) { out.complete = true; break; }
             }
             if (double(out.iterations) >= maxIterations) break;
@@ -456,16 +456,16 @@ inline Outcome runVariant(const Code& code, const Variant& v, int W, double miss
     return out;
 }
 
-inline int compare(QTextStream& out, const Code& code, int W, int missExp, int runs,
+inline int compare(QTextStream& out, const Code& code, int maxWeight, int missExp, int runs,
                    int sternP, int sternL)
 {
     const double miss = std::pow(10.0, -missExp);
     const int n = code.n, k = code.k;
 
     // Параметры базового варианта — как в приложении.
-    const Leon::Plan plan = Leon::plan(n, k, W, miss, false);
+    const Leon::Plan plan = Leon::plan(n, k, maxWeight, miss, false);
     int pSt = 0, lSt = 0;
-    chooseStern(n, k, W, false, pSt, lSt);
+    chooseStern(n, k, maxWeight, false, pSt, lSt);
     if (sternP > 0) pSt = sternP;
     if (sternL > 0) lSt = sternL;
 
@@ -480,15 +480,15 @@ inline int compare(QTextStream& out, const Code& code, int W, int missExp, int r
     };
 
     out << QStringLiteral("[%1,%2], все слова до веса %3, пропуск 10^-%4; один поток")
-               .arg(n).arg(k).arg(W).arg(missExp) << Qt::endl;
+               .arg(n).arg(k).arg(maxWeight).arg(missExp) << Qt::endl;
 
     // Эталон: базовый вариант до числа попыток по аддитивной границе.
-    Leon::WordTable reference(code.words, W);
-    const Outcome ref = runVariant(code, variants[0], W, miss, 1, nullptr, reference, 1e12);
+    Leon::WordTable reference(code.words, maxWeight);
+    const Outcome ref = runVariant(code, variants[0], maxWeight, miss, 1, nullptr, reference, 1e12);
     out << QStringLiteral("эталон: p=%1, попыток %2, %3 с, слов %4")
                .arg(plan.rows).arg(ref.iterations).arg(ref.seconds, 0, 'f', 2).arg(ref.found) << Qt::endl;
     const std::vector<quint64> byWeight = reference.countByWeight();
-    for (int w = 1; w <= W; ++w)
+    for (int w = 1; w <= maxWeight; ++w)
         if (byWeight[size_t(w)] > 0)
             out << QStringLiteral("   %1  %2").arg(w, 3).arg(byWeight[size_t(w)], 10) << Qt::endl;
 
@@ -503,16 +503,16 @@ inline int compare(QTextStream& out, const Code& code, int W, int missExp, int r
         auto prob = [&](int w) {
             return v.stern ? probStern(n, k, w, v.p, v.l) : probLeeBrickell(n, k, w, v.p);
         };
-        const double PW    = prob(W);
-        const double need  = trialsForAll(byWeight, miss, prob);
-        const double cap   = std::max(need * 50.0, 1000.0);
+        const double probAtMax = prob(maxWeight);
+        const double need      = trialsForAll(byWeight, miss, prob);
+        const double cap       = std::max(need * 50.0, 1000.0);
 
         QStringList facts;
         double sumSec = 0.0, sumIter = 0.0, sumRate = 0.0;
         int done = 0;
         for (int r = 0; r < runs; ++r) {
-            Leon::WordTable table(code.words, W);
-            const Outcome o = runVariant(code, v, W, miss, quint64(1000 + r), &reference, table, cap);
+            Leon::WordTable table(code.words, maxWeight);
+            const Outcome o = runVariant(code, v, maxWeight, miss, quint64(1000 + r), &reference, table, cap);
             facts << QStringLiteral("%1/%2").arg(o.iterations).arg(o.seconds, 0, 'f', 2)
                          + (o.complete ? QString() : QStringLiteral("(неполно: %1 из %2)").arg(o.matched).arg(reference.size()));
             sumRate += double(o.iterations) / std::max(o.seconds, 1e-9);
@@ -524,7 +524,7 @@ inline int compare(QTextStream& out, const Code& code, int W, int missExp, int r
         Q_UNUSED(cap);
         out << QStringLiteral("%1 | %2 | %3 | %4 | %5 | %6")
                    .arg(v.name, -22).arg(params, -10)
-                   .arg(rate, 9, 'f', 1).arg(PW, 11, 'e', 2)
+                   .arg(rate, 9, 'f', 1).arg(probAtMax, 11, 'e', 2)
                    .arg(QStringLiteral("%1, %2").arg(need, 0, 'e', 2).arg(need / rate, 0, 'f', 1), 22)
                    .arg(facts.join(QStringLiteral("  ")))
             << Qt::endl;

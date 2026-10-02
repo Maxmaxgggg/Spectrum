@@ -449,7 +449,7 @@ __host__ void launchSpectrumKernelLong(
 // Шаблон по числу слов — как и в коротких ядрах, чтобы codeword жил в
 // регистрах, а не в локальной памяти.
 //
-// Массивы позиций a/old_a/changed остаются в локальной памяти: их размер
+// Массивы позиций a/oldA/changed остаются в локальной памяти: их размер
 // зависит от числа единиц в маске, известного только в рантайме, да и
 // nextPositions принимает указатель. Но горячие данные здесь именно codeword —
 // его XOR-ят на каждой изменившейся позиции и считают popcount на каждой маске.
@@ -552,19 +552,19 @@ __global__ void computeSpectrumKernelLongT(
         if (startRank + iters > chunkSize)
             iters = chunkSize - startRank;
 
-        int16_t old_a[Constants::MAX_POSITIONS];
+        int16_t oldA[Constants::MAX_POSITIONS];
 
         for (uint64_t it = 1; it < iters; ++it) {
 
             for (int i = 0; i < numOfOnes; ++i)
-                old_a[i] = a[i];
+                oldA[i] = a[i];
 
             if (!Combinations::nextPositions(a, int(numOfOnes), numRows))
                 break;
 
             int16_t changed[2 * Constants::MAX_POSITIONS];
             int numChanged;
-            Combinations::diffPositions(old_a, a, int(numOfOnes), changed, numChanged);
+            Combinations::diffPositions(oldA, a, int(numOfOnes), changed, numChanged);
 
             if (numChanged > numOfOnes) {
                 #pragma unroll
@@ -700,10 +700,10 @@ __global__ void computeSpectrumKernelGrayShortT(
         // 4) маска для k бит
         const quint64 maskAll = (k >= 64) ? ~0ULL : ((1ULL << k) - 1ULL);
 
-        auto gray_of = [] __device__(quint64 i) -> quint64 { return (i ^ (i >> 1)); };
+        auto grayOf = [] __device__(quint64 i) -> quint64 { return (i ^ (i >> 1)); };
 
         // 5) начальная маска
-        quint64 mask = (gray_of(chunkOffset + startLocal) & maskAll);
+        quint64 mask = (grayOf(chunkOffset + startLocal) & maskAll);
 
         // 6) полный XOR для начальной маски
         quint64 temp = mask;
@@ -724,9 +724,9 @@ __global__ void computeSpectrumKernelGrayShortT(
         // У соседних кодов Грея различается ровно один бит, поэтому цикл по
         // изменившимся битам делает здесь один проход.
         for (quint64 local = startLocal + 1; local < endLocal; ++local) {
-            const quint64 next_mask = (gray_of(chunkOffset + local) & maskAll);
+            const quint64 nextMask = (grayOf(chunkOffset + local) & maskAll);
 
-            quint64 changed = mask ^ next_mask;
+            quint64 changed = mask ^ nextMask;
             while (changed) {
                 const int pos = BitOps::lowestSetBit(changed);
                 changed &= (changed - 1ULL);
@@ -744,7 +744,7 @@ __global__ void computeSpectrumKernelGrayShortT(
                 runWeight = weight;
                 runLength = 1;
             }
-            mask = next_mask;
+            mask = nextMask;
         }
         atomicAdd(&s_spectrum[runWeight], runLength);
     }

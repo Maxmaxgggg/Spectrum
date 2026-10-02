@@ -23,22 +23,22 @@ constexpr double LABEL_SPACING_PX = 30.0;
 } // namespace
 
 SpectrumPlot::SpectrumPlot(QCustomPlot* plot)
-    : plot(plot)
-    , barColor(palette().value(DefaultValues::SPECTRUM_COLOR))
+    : m_plot(plot)
+    , m_barColor(palette().value(DefaultValues::SPECTRUM_COLOR))
 {
     Q_ASSERT(plot);
 
-    overflowMessage = new QCPItemText(plot);
-    overflowMessage->position->setType(QCPItemPosition::ptAxisRectRatio);
-    overflowMessage->position->setCoords(0.5, 0.5);
-    overflowMessage->setPositionAlignment(Qt::AlignCenter);
-    overflowMessage->setText(QObject::tr("Спектральные компоненты слишком велики\n"
+    m_overflowMessage = new QCPItemText(plot);
+    m_overflowMessage->position->setType(QCPItemPosition::ptAxisRectRatio);
+    m_overflowMessage->position->setCoords(0.5, 0.5);
+    m_overflowMessage->setPositionAlignment(Qt::AlignCenter);
+    m_overflowMessage->setText(QObject::tr("Спектральные компоненты слишком велики\n"
                                          "Невозможно отобразить графически"));
     QFont messageFont;
     messageFont.setPointSize(12);
     messageFont.setBold(true);
-    overflowMessage->setFont(messageFont);
-    overflowMessage->setVisible(false);
+    m_overflowMessage->setFont(messageFont);
+    m_overflowMessage->setVisible(false);
 
     // Свой курсор обязателен. QMainWindow ставит курсор-разделитель на себя,
     // когда мышь над границей доков, и дочерние виджеты его наследуют, если
@@ -54,9 +54,9 @@ SpectrumPlot::SpectrumPlot(QCustomPlot* plot)
     plot->yAxis->setNumberFormat("eb");
     plot->yAxis->setNumberPrecision(2);
 
-    bars = new QCPBars(plot->xAxis, plot->yAxis);
-    bars->setPen(QPen(Qt::black));
-    bars->setBrush(QBrush(barColor));
+    m_bars = new QCPBars(plot->xAxis, plot->yAxis);
+    m_bars->setPen(QPen(Qt::black));
+    m_bars->setBrush(QBrush(m_barColor));
 }
 
 void SpectrumPlot::setSpectrum(const SpectrumFloat& spectrum)
@@ -65,42 +65,42 @@ void SpectrumPlot::setSpectrum(const SpectrumFloat& spectrum)
         return;
 
     const int size = spectrum.size();
-    if (xValues.size() != size) {
-        xValues.resize(size);
+    if (m_xValues.size() != size) {
+        m_xValues.resize(size);
         for (int i = 0; i < size; ++i)
-            xValues[i] = i;
-        yValues.resize(size);
+            m_xValues[i] = i;
+        m_yValues.resize(size);
 
         // Подписи привязаны к числу столбцов — пересобрать в любом случае.
-        ticker.clear();
-        tickStep = -1;
+        m_ticker.clear();
+        m_tickStep = -1;
     }
 
-    firstNonZero = -1;
-    lastNonZero  = -1;
-    maxValue     = 0.0;
-    hasNonFinite = false;
+    m_firstNonZero = -1;
+    m_lastNonZero  = -1;
+    m_maxValue     = 0.0;
+    m_hasNonFinite = false;
 
     for (int i = 0; i < size; ++i) {
         const double v = double(spectrum.at(i));
         if (std::isinf(v) || std::isnan(v))
-            hasNonFinite = true;
+            m_hasNonFinite = true;
 
-        yValues[i] = v;
+        m_yValues[i] = v;
 
         if (v != 0.0) {
-            if (firstNonZero == -1)
-                firstNonZero = i;
-            lastNonZero = i;
+            if (m_firstNonZero == -1)
+                m_firstNonZero = i;
+            m_lastNonZero = i;
         }
-        if (v > maxValue)
-            maxValue = v;
+        if (v > m_maxValue)
+            m_maxValue = v;
     }
 
     // Закрытую панель не рисуем: данные сохранены, картинка соберётся при
     // показе. Иначе каждое обновление спектра тратилось бы на невидимое.
-    if (!plot->isVisible()) {
-        pendingData = true;
+    if (!m_plot->isVisible()) {
+        m_pendingData = true;
         return;
     }
 
@@ -110,11 +110,11 @@ void SpectrumPlot::setSpectrum(const SpectrumFloat& spectrum)
 
 void SpectrumPlot::refresh()
 {
-    if (yValues.isEmpty())
+    if (m_yValues.isEmpty())
         return;
 
-    if (pendingData) {
-        pendingData = false;
+    if (m_pendingData) {
+        m_pendingData = false;
         applyData();
     }
 
@@ -127,8 +127,8 @@ void SpectrumPlot::refresh()
 
 void SpectrumPlot::updateTicker()
 {
-    const int size  = xValues.size();
-    const int width = plot->width();
+    const int size  = m_xValues.size();
+    const int width = m_plot->width();
 
     // Ноль означает схлопнутый график: подписывать нечего. Вся арифметика
     // и её краевые случаи — в axisticks.h, там же и объяснение, почему это
@@ -137,10 +137,10 @@ void SpectrumPlot::updateTicker()
     if (step == 0)
         return;
 
-    if (tickStep == step && !ticker.isNull())
+    if (m_tickStep == step && !m_ticker.isNull())
         return;
 
-    tickStep = step;
+    m_tickStep = step;
 
     QVector<double>  ticks;
     QVector<QString> labels;
@@ -152,8 +152,8 @@ void SpectrumPlot::updateTicker()
     QSharedPointer<QCPAxisTickerText> textTicker(new QCPAxisTickerText);
     textTicker->addTicks(ticks, labels);
 
-    ticker = textTicker;
-    plot->xAxis->setTicker(ticker);
+    m_ticker = textTicker;
+    m_plot->xAxis->setTicker(m_ticker);
 }
 
 // Сводит спектр к тому, что реально имеет смысл рисовать.
@@ -164,10 +164,10 @@ void SpectrumPlot::updateTicker()
 // суммарная площадь по картинке равна общему числу кодовых слов.
 void SpectrumPlot::applyData()
 {
-    if (hasNonFinite) {
+    if (m_hasNonFinite) {
         // Компоненты не поместились в float: рисовать нечего.
-        overflowMessage->setVisible(true);
-        bars->setVisible(false);
+        m_overflowMessage->setVisible(true);
+        m_bars->setVisible(false);
         return;
     }
 
@@ -177,8 +177,8 @@ void SpectrumPlot::applyData()
     // тысячи на сто шестьдесят корзин загоняло эти восемь весов в две корзины
     // шириной по шесть весов — вместо графика получались два столбища во весь
     // экран.
-    const int first = firstNonZero < 0 ? 0 : int(firstNonZero);
-    const int last  = lastNonZero  < 0 ? yValues.size() - 1 : int(lastNonZero);
+    const int first = m_firstNonZero < 0 ? 0 : int(m_firstNonZero);
+    const int last  = m_lastNonZero  < 0 ? m_yValues.size() - 1 : int(m_lastNonZero);
     const int span  = last - first + 1;
 
     // Весов на столбец — целое число, и одно на все столбцы. Дробный шаг
@@ -186,15 +186,15 @@ void SpectrumPlot::applyData()
     // выходили по одному весу, а две — по два. Такая корзина складывала пару
     // соседей и торчала пиком вдвое выше остальных. Сумма при этом сходилась,
     // но глазом это читалось как всплеск в спектре, которого нет.
-    const int group = (maxBars > 0 && span > maxBars)
-                    ? (span + maxBars - 1) / maxBars
+    const int group = (m_maxBars > 0 && span > m_maxBars)
+                    ? (span + m_maxBars - 1) / m_maxBars
                     : 1;
     const int bins  = (span + group - 1) / group;
 
-    barX.resize(bins);
-    barY.resize(bins);
-    barMax   = 0.0;
-    barWidth = group;
+    m_barX.resize(bins);
+    m_barY.resize(bins);
+    m_barMax   = 0.0;
+    m_barWidth = group;
 
     for (int b = 0; b < bins; ++b) {
         // Последняя корзина может оказаться неполной: она приходится на хвост
@@ -204,37 +204,37 @@ void SpectrumPlot::applyData()
 
         double sum = 0.0;
         for (int i = from; i < to; ++i)
-            sum += yValues.at(i);
+            sum += m_yValues.at(i);
 
-        // Точка ставится в середину корзины: столбец шириной barWidth тогда
+        // Точка ставится в середину корзины: столбец шириной m_barWidth тогда
         // накрывает ровно свой диапазон весов.
-        barX[b] = (from + to - 1) / 2.0;
-        barY[b] = sum;
-        if (sum > barMax)
-            barMax = sum;
+        m_barX[b] = (from + to - 1) / 2.0;
+        m_barY[b] = sum;
+        if (sum > m_barMax)
+            m_barMax = sum;
     }
 
-    overflowMessage->setVisible(false);
-    bars->setVisible(true);
-    bars->setWidth(barWidth);
-    bars->setData(barX, barY);
-    bars->setBrush(QBrush(barColor));
-    bars->setPen(QPen(Qt::black));
+    m_overflowMessage->setVisible(false);
+    m_bars->setVisible(true);
+    m_bars->setWidth(m_barWidth);
+    m_bars->setData(m_barX, m_barY);
+    m_bars->setBrush(QBrush(m_barColor));
+    m_bars->setPen(QPen(Qt::black));
 
     // Без сглаживания. Столбец занимает ровно свою корзину, но границы корзин
     // попадают на дробные доли пикселя, и сглаживание рисовало на стыке
     // полупрозрачную кромку — она и читалась как белый зазор между столбцами,
     // которые на самом деле идут вплотную.
-    bars->setAntialiased(false);
+    m_bars->setAntialiased(false);
 }
 
 void SpectrumPlot::setMaxBars(int limit)
 {
-    if (limit == maxBars)
+    if (limit == m_maxBars)
         return;
 
-    maxBars = limit;
-    if (yValues.isEmpty())
+    m_maxBars = limit;
+    if (m_yValues.isEmpty())
         return;
 
     applyData();
@@ -245,31 +245,31 @@ void SpectrumPlot::redrawGeometry()
 {
     updateTicker();
 
-    if (hasNonFinite) {
-        plot->replot();
+    if (m_hasNonFinite) {
+        m_plot->replot();
         return;
     }
 
     // Хвосты нулей по краям не несут информации: показываем только занятый
     // диапазон весов, с запасом в один столбец с каждой стороны.
-    if (firstNonZero == -1)
-        plot->xAxis->setRange(0, xValues.size());
+    if (m_firstNonZero == -1)
+        m_plot->xAxis->setRange(0, m_xValues.size());
     else
-        plot->xAxis->setRange(firstNonZero - 1, lastNonZero + 1);
+        m_plot->xAxis->setRange(m_firstNonZero - 1, m_lastNonZero + 1);
 
     // Предел берётся по нарисованному: при группировке столбец — это сумма по
     // корзине, и она выше любого отдельного значения.
-    plot->yAxis->setRange(0.0, barMax * 1.1);
+    m_plot->yAxis->setRange(0.0, m_barMax * 1.1);
 
-    plot->replot(QCustomPlot::rpQueuedReplot);
+    m_plot->replot(QCustomPlot::rpQueuedReplot);
 }
 
 void SpectrumPlot::setBarColor(const QColor& color)
 {
-    barColor = color;
-    if (!bars)
+    m_barColor = color;
+    if (!m_bars)
         return;
 
-    bars->setBrush(QBrush(barColor));
-    plot->replot();
+    m_bars->setBrush(QBrush(m_barColor));
+    m_plot->replot();
 }

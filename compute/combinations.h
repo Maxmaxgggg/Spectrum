@@ -8,8 +8,8 @@
 // на хосте, generateBitMaskGPU в ядре), а шаг к следующему сочетанию и
 // разность позиций — дважды, на хосте и в ядре.
 //
-// C — биномиальные коэффициенты: C(n, m) для нужных n и m, в том числе
-// C(n, 0) = 1. На хосте это BinomTable, в ядре — таблица в памяти устройства.
+// binom — биномиальные коэффициенты: binom(n, m) для нужных n и m, в том числе
+// binom(n, 0) = 1. На хосте это BinomTable, в ядре — таблица в памяти устройства.
 
 #include "bitops.h"
 
@@ -22,11 +22,11 @@ namespace Combinations {
 // не расставлено (вместе с этой). Номер уменьшается на пропущенные сочетания.
 template <class Binom>
 SPECTRUM_HD unsigned nextRankedPosition(unsigned n, unsigned left, unsigned from,
-                                        unsigned long long& rank, const Binom& C)
+                                        unsigned long long& rank, const Binom& binom)
 {
     unsigned j = from;
     while (j <= n - left) {
-        const unsigned long long c = C(n - j - 1, left - 1);
+        const unsigned long long c = binom(n - j - 1, left - 1);
         if (c > rank)
             break;
         rank -= c;
@@ -37,14 +37,14 @@ SPECTRUM_HD unsigned nextRankedPosition(unsigned n, unsigned left, unsigned from
 
 // Маска из r единиц среди n <= 64 позиций по её номеру.
 template <class Binom>
-SPECTRUM_HD unsigned long long unrankMask(unsigned n, unsigned r, unsigned long long rank, const Binom& C)
+SPECTRUM_HD unsigned long long unrankMask(unsigned n, unsigned r, unsigned long long rank, const Binom& binom)
 {
     if (r == 0 || r > n)
         return 0ULL;
     unsigned long long mask = 0ULL;
     unsigned from = 0;
     for (unsigned left = r; left > 0; --left) {
-        const unsigned j = nextRankedPosition(n, left, from, rank, C);
+        const unsigned j = nextRankedPosition(n, left, from, rank, binom);
         mask |= 1ULL << j;
         from = j + 1;
     }
@@ -55,11 +55,11 @@ SPECTRUM_HD unsigned long long unrankMask(unsigned n, unsigned r, unsigned long 
 // хвост до capacity обнуляется.
 template <class Binom>
 inline void unrankPositions(unsigned long long rank, int n, int r, int16_t* positions, int capacity,
-                            const Binom& C)
+                            const Binom& binom)
 {
     unsigned from = 0;
     for (int i = 0; i < r; ++i) {
-        const unsigned j = nextRankedPosition(unsigned(n), unsigned(r - i), from, rank, C);
+        const unsigned j = nextRankedPosition(unsigned(n), unsigned(r - i), from, rank, binom);
         positions[i] = int16_t(j);
         from = j + 1;
     }

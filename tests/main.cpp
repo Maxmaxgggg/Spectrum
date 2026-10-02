@@ -57,7 +57,7 @@ using Algorithm     = ComputationSettings::Algorithm;
 using ComputeDevice = ComputationSettings::ComputeDevice;
 using EnumerationType = ComputationSettings::EnumerationType;
 
-static QTextStream out(stdout);
+static QTextStream g_out(stdout);
 static int g_passed = 0;
 static int g_failed = 0;
 static bool g_gpuAvailable = false;
@@ -221,7 +221,7 @@ static Spectrum runWorker(const RunConfig& cfg,
     worker.computeSpectrum();
 
     if (errored) {
-        out << QStringLiteral("      ошибка от Worker: ") << errorMessage << Qt::endl;
+        g_out << QStringLiteral("      ошибка от Worker: ") << errorMessage << Qt::endl;
         return Spectrum();
     }
     return stripZeros(captured);
@@ -282,7 +282,7 @@ static qint64 savedDoneOps()
 static void check(const QString& name, const RunConfig& cfg, const Spectrum& expected)
 {
     if (cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
-        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        g_out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return;
     }
 
@@ -291,14 +291,14 @@ static void check(const QString& name, const RunConfig& cfg, const Spectrum& exp
 
     if (actual == want) {
         ++g_passed;
-        out << "  ok       " << name << Qt::endl;
+        g_out << "  ok       " << name << Qt::endl;
         return;
     }
 
     ++g_failed;
-    out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
-    out << QStringLiteral("      ожидалось: ") << formatSpectrum(want)   << Qt::endl;
-    out << QStringLiteral("      получено:  ") << formatSpectrum(actual) << Qt::endl;
+    g_out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
+    g_out << QStringLiteral("      ожидалось: ") << formatSpectrum(want)   << Qt::endl;
+    g_out << QStringLiteral("      получено:  ") << formatSpectrum(actual) << Qt::endl;
 
     // Показываем расхождения поимённо — «отклонение даже на единицу» должно
     // быть видно сразу.
@@ -309,8 +309,8 @@ static void check(const QString& name, const RunConfig& cfg, const Spectrum& exp
     for (int w : weights) {
         const quint64 e = want.value(w, 0), a = actual.value(w, 0);
         if (e != a)
-            out << QStringLiteral("      вес ") << w << QStringLiteral(": ожидалось ") << e << QStringLiteral(", получено ") << a
-                << QStringLiteral(" (разница ") << (qint64(a) - qint64(e)) << ")" << Qt::endl;
+            g_out << QStringLiteral("      вес ") << w << QStringLiteral(": ожидалось ") << e << QStringLiteral(", получено ") << a
+                  << QStringLiteral(" (разница ") << (qint64(a) - qint64(e)) << ")" << Qt::endl;
     }
 }
 
@@ -320,8 +320,8 @@ static void check(const QString& name, const RunConfig& cfg, const Spectrum& exp
 static void testShortCode(const QString& label, const QStringList& matrix,
                           const Spectrum& analytic)
 {
-    out << Qt::endl << label << " (k=" << matrix.size()
-        << ", n=" << matrix.first().length() << ")" << Qt::endl;
+    g_out << Qt::endl << label << " (k=" << matrix.size()
+          << ", n=" << matrix.first().length() << ")" << Qt::endl;
 
     const Spectrum brute = Reference::bruteForce(matrix);
 
@@ -329,13 +329,13 @@ static void testShortCode(const QString& label, const QStringList& matrix,
     // иначе эталону нельзя доверять.
     if (stripZeros(brute) != stripZeros(analytic)) {
         ++g_failed;
-        out << QStringLiteral("  ПРОВАЛ   эталон: перебор разошёлся с аналитическим спектром")
-            << Qt::endl
-            << QStringLiteral("      аналитика: ") << formatSpectrum(stripZeros(analytic)) << Qt::endl
-            << QStringLiteral("      перебор:   ") << formatSpectrum(stripZeros(brute))    << Qt::endl;
+        g_out << QStringLiteral("  ПРОВАЛ   эталон: перебор разошёлся с аналитическим спектром")
+              << Qt::endl
+              << QStringLiteral("      аналитика: ") << formatSpectrum(stripZeros(analytic)) << Qt::endl
+              << QStringLiteral("      перебор:   ") << formatSpectrum(stripZeros(brute))    << Qt::endl;
         return;
     }
-    out << QStringLiteral("  ok       эталон: перебор == аналитический спектр") << Qt::endl;
+    g_out << QStringLiteral("  ok       эталон: перебор == аналитический спектр") << Qt::endl;
     ++g_passed;
 
     RunConfig cfg; cfg.matrix = matrix;
@@ -356,8 +356,8 @@ static void testShortCode(const QString& label, const QStringList& matrix,
 // его нет, но перебор остаётся абсолютным эталоном.
 static void testShortCodeAgainstBruteForce(const QString& label, const QStringList& matrix)
 {
-    out << Qt::endl << label << QStringLiteral(" (k=") << matrix.size()
-        << QStringLiteral(", n=") << matrix.first().length() << QStringLiteral(")") << Qt::endl;
+    g_out << Qt::endl << label << QStringLiteral(" (k=") << matrix.size()
+          << QStringLiteral(", n=") << matrix.first().length() << QStringLiteral(")") << Qt::endl;
 
     const Spectrum brute = Reference::bruteForce(matrix);
 
@@ -375,8 +375,8 @@ static void testShortCodeAgainstBruteForce(const QString& label, const QStringLi
 // Длинный код: полный перебор невозможен, эталон — C(n,w) на единичной матрице.
 static void testLongCode(int n, int maxRows)
 {
-    out << Qt::endl << QStringLiteral("Единичная матрица I(") << n << "), maxRows=" << maxRows
-        << QStringLiteral(" — длинный путь") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Единичная матрица I(") << n << "), maxRows=" << maxRows
+          << QStringLiteral(" — длинный путь") << Qt::endl;
 
     const Spectrum expected = Reference::identityPartialSpectrum(n, maxRows);
 
@@ -394,7 +394,7 @@ static void testLongCode(int n, int maxRows)
 // Частичный перебор на коротком коде — сверяем с ограниченным перебором.
 static void testPartialShort(const QStringList& matrix, int maxRows)
 {
-    out << Qt::endl << QStringLiteral("Частичный перебор, maxRows=") << maxRows << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Частичный перебор, maxRows=") << maxRows << Qt::endl;
 
     // Ограниченный перебор строим здесь же, отдельно от production-кода.
     const int k = matrix.size();
@@ -431,13 +431,13 @@ static void testPartialShort(const QStringList& matrix, int maxRows)
 // Простая проверка условия: ok или ПРОВАЛ с именем.
 static void expectStore(const QString& name, bool condition)
 {
-    if (condition) { ++g_passed; out << "  ok       " << name << Qt::endl; }
-    else           { ++g_failed; out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl; }
+    if (condition) { ++g_passed; g_out << "  ok       " << name << Qt::endl; }
+    else           { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl; }
 }
 
 static void testDualCode(const QString& label, const QStringList& matrix)
 {
-    out << Qt::endl << label << QStringLiteral(" — через дуальный код") << Qt::endl;
+    g_out << Qt::endl << label << QStringLiteral(" — через дуальный код") << Qt::endl;
 
     const Spectrum brute = Reference::bruteForce(matrix);
 
@@ -455,7 +455,7 @@ static void testDualCode(const QString& label, const QStringList& matrix)
 // против полного перебора самого кода, а также числа длиннее 64 бит.
 static void testMacWilliams()
 {
-    out << Qt::endl << QStringLiteral("Мак-Вильямс: спектр кода по спектру дуального") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Мак-Вильямс: спектр кода по спектру дуального") << Qt::endl;
 
     struct Case { QString name; QStringList generator; };
     const QVector<Case> cases = {
@@ -510,7 +510,7 @@ static void testMacWilliams()
 // точными.
 static void testSpectrumCounts()
 {
-    out << Qt::endl << QStringLiteral("Спектр: строки «вес - число» и обратно") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Спектр: строки «вес - число» и обратно") << Qt::endl;
 
     // [100,99]: C(100, 50) ≈ 10^29 в 64 бита не помещается.
     const int n = 100;
@@ -555,7 +555,7 @@ static void checkResume(const QString& name, const RunConfig& cfg,
     const bool needsGpu = cfg.device == ComputeDevice::Gpu
                        || resumeCfg.device == ComputeDevice::Gpu;
     if (needsGpu && !g_gpuAvailable) {
-        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        g_out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return;
     }
 
@@ -574,10 +574,10 @@ static void checkResume(const QString& name, const RunConfig& cfg,
     const quint64 total = expectedTotalOps(cfg);
     if (saved <= 0 || quint64(saved) >= total) {
         ++g_failed;
-        out << QStringLiteral("  ПРОВАЛ   ") << name
-            << QStringLiteral("  — обрыва не было: сохранено ") << saved
-            << QStringLiteral(" из ") << total
-            << QStringLiteral(" операций, возобновление не проверено") << Qt::endl;
+        g_out << QStringLiteral("  ПРОВАЛ   ") << name
+              << QStringLiteral("  — обрыва не было: сохранено ") << saved
+              << QStringLiteral(" из ") << total
+              << QStringLiteral(" операций, возобновление не проверено") << Qt::endl;
         clearCheckpoints();
         return;
     }
@@ -589,15 +589,15 @@ static void checkResume(const QString& name, const RunConfig& cfg,
 
     if (resumed == whole) {
         ++g_passed;
-        out << "  ok       " << name
-            << QStringLiteral("  (обрыв на ") << saved << QStringLiteral(" оп.)") << Qt::endl;
+        g_out << "  ok       " << name
+              << QStringLiteral("  (обрыв на ") << saved << QStringLiteral(" оп.)") << Qt::endl;
         return;
     }
 
     ++g_failed;
-    out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
-    out << QStringLiteral("      целиком:      ") << formatSpectrum(whole)   << Qt::endl;
-    out << QStringLiteral("      с прерыванием:") << formatSpectrum(resumed) << Qt::endl;
+    g_out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
+    g_out << QStringLiteral("      целиком:      ") << formatSpectrum(whole)   << Qt::endl;
+    g_out << QStringLiteral("      с прерыванием:") << formatSpectrum(resumed) << Qt::endl;
 
     QList<int> weights = whole.keys();
     for (int w : resumed.keys())
@@ -606,9 +606,9 @@ static void checkResume(const QString& name, const RunConfig& cfg,
     for (int w : weights) {
         const quint64 e = whole.value(w, 0), a = resumed.value(w, 0);
         if (e != a)
-            out << QStringLiteral("      вес ") << w << QStringLiteral(": целиком ") << e
-                << QStringLiteral(", с прерыванием ") << a
-                << QStringLiteral(" (разница ") << (qint64(a) - qint64(e)) << ")" << Qt::endl;
+            g_out << QStringLiteral("      вес ") << w << QStringLiteral(": целиком ") << e
+                  << QStringLiteral(", с прерыванием ") << a
+                  << QStringLiteral(" (разница ") << (qint64(a) - qint64(e)) << ")" << Qt::endl;
     }
 }
 
@@ -631,7 +631,7 @@ static RunConfig longConfig(ComputeDevice dev)
 
 static void testCheckpoints()
 {
-    out << Qt::endl << QStringLiteral("Чекпоинты: прерывание и возобновление") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Чекпоинты: прерывание и возобновление") << Qt::endl;
 
     // Голей (24,12): 4096 комбинаций, прерывания в разных точках.
     RunConfig golay;
@@ -731,7 +731,7 @@ static void testCheckpoints()
 static void checkCancelMidChunk(const QString& name, const RunConfig& cfg)
 {
     if (cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
-        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        g_out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return;
     }
 
@@ -758,7 +758,7 @@ static void checkCancelMidChunk(const QString& name, const RunConfig& cfg)
 
     if (!saved) {
         ++g_passed;
-        out << "  ok       " << name << QStringLiteral("  (чекпоинта нет)") << Qt::endl;
+        g_out << "  ok       " << name << QStringLiteral("  (чекпоинта нет)") << Qt::endl;
         return;
     }
 
@@ -774,19 +774,19 @@ static void checkCancelMidChunk(const QString& name, const RunConfig& cfg)
 
     if (counted == covered) {
         ++g_passed;
-        out << "  ok       " << name
-            << QStringLiteral("  (чекпоинт на %1 масок сходится со спектром)").arg(covered) << Qt::endl;
+        g_out << "  ok       " << name
+              << QStringLiteral("  (чекпоинт на %1 масок сходится со спектром)").arg(covered) << Qt::endl;
         return;
     }
     ++g_failed;
-    out << QStringLiteral("  ПРОВАЛ   ") << name
-        << QStringLiteral("  — по чекпоинту пройдено %1 масок, а в его спектре %2 слов")
-               .arg(covered).arg(counted) << Qt::endl;
+    g_out << QStringLiteral("  ПРОВАЛ   ") << name
+          << QStringLiteral("  — по чекпоинту пройдено %1 масок, а в его спектре %2 слов")
+                 .arg(covered).arg(counted) << Qt::endl;
 }
 
 static void testCancelMidChunk()
 {
-    out << Qt::endl << QStringLiteral("Отмена посреди чанка: чекпоинт сходится со спектром") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Отмена посреди чанка: чекпоинт сходится со спектром") << Qt::endl;
 
     for (ComputeDevice dev : { ComputeDevice::Cpu, ComputeDevice::Gpu }) {
         const QString who = dev == ComputeDevice::Cpu ? QStringLiteral("CPU") : QStringLiteral("GPU");
@@ -816,8 +816,8 @@ static void testCancelMidChunk()
 // числа потоков, блоков и даже устройства не должна ни на что влиять.
 static void testCheckpointPortability()
 {
-    out << Qt::endl
-        << QStringLiteral("Чекпоинты: перенос между конфигурациями") << Qt::endl;
+    g_out << Qt::endl
+          << QStringLiteral("Чекпоинты: перенос между конфигурациями") << Qt::endl;
 
     RunConfig base;
     base.matrix    = Reference::golay24_12();
@@ -888,7 +888,7 @@ static QPair<int, int> tunedGridFor(const RunConfig& cfg, bool verbose = false)
 static void checkTuned(const QString& name, const RunConfig& cfg)
 {
     if (!g_gpuAvailable) {
-        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        g_out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return;
     }
 
@@ -905,26 +905,26 @@ static void checkTuned(const QString& name, const RunConfig& cfg)
 
     if (grid.first <= 0) {
         ++g_failed;
-        out << QStringLiteral("  ПРОВАЛ   ") << name
-            << QStringLiteral("  — подбор не сработал, проверять нечего") << Qt::endl;
+        g_out << QStringLiteral("  ПРОВАЛ   ") << name
+              << QStringLiteral("  — подбор не сработал, проверять нечего") << Qt::endl;
         return;
     }
 
     if (actual == expected && !expected.isEmpty()) {
         ++g_passed;
-        out << "  ok       " << name << gridText << Qt::endl;
+        g_out << "  ok       " << name << gridText << Qt::endl;
         return;
     }
 
     ++g_failed;
-    out << QStringLiteral("  ПРОВАЛ   ") << name << gridText << Qt::endl;
-    out << QStringLiteral("      без подбора: ") << formatSpectrum(expected) << Qt::endl;
-    out << QStringLiteral("      с подбором:  ") << formatSpectrum(actual)   << Qt::endl;
+    g_out << QStringLiteral("  ПРОВАЛ   ") << name << gridText << Qt::endl;
+    g_out << QStringLiteral("      без подбора: ") << formatSpectrum(expected) << Qt::endl;
+    g_out << QStringLiteral("      с подбором:  ") << formatSpectrum(actual)   << Qt::endl;
 }
 
 static void testAutoTunedGrid()
 {
-    out << Qt::endl << QStringLiteral("Автоподбор сетки") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Автоподбор сетки") << Qt::endl;
 
     RunConfig cfg;
     cfg.device = ComputeDevice::Gpu;
@@ -982,10 +982,10 @@ static void testAutoTunedGrid()
     const QPair<int, int> cpuGrid = tunedGridFor(cpu);
     if (cpuGrid.first == 0) {
         ++g_passed;
-        out << "  ok       " << QStringLiteral("CPU: подбор не применяется") << Qt::endl;
+        g_out << "  ok       " << QStringLiteral("CPU: подбор не применяется") << Qt::endl;
     } else {
         ++g_failed;
-        out << QStringLiteral("  ПРОВАЛ   CPU: подбор вмешался") << Qt::endl;
+        g_out << QStringLiteral("  ПРОВАЛ   CPU: подбор вмешался") << Qt::endl;
     }
 }
 
@@ -993,7 +993,7 @@ static void testAutoTunedGrid()
 // чем в прошлый раз. Значит, чекпоинт обязан переноситься и через него.
 static void testAutoTunedCheckpoints()
 {
-    out << Qt::endl << QStringLiteral("Автоподбор: перенос чекпоинтов") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Автоподбор: перенос чекпоинтов") << Qt::endl;
 
     RunConfig base;
     base.matrix    = Reference::golay24_12();
@@ -1043,7 +1043,7 @@ static void testAutoTunedCheckpoints()
 // Worker настройки без матрицы.
 static void testSettingsCopy()
 {
-    out << Qt::endl << QStringLiteral("Настройки: копирование") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Настройки: копирование") << Qt::endl;
 
     ComputationSettings s;
     s.matrix        = QStringList{ QStringLiteral("1011"), QStringLiteral("0110") };
@@ -1067,7 +1067,7 @@ static void testSettingsCopy()
 
 static void testAutosaveStore()
 {
-    out << Qt::endl << QStringLiteral("Хранилище автосохранений") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Хранилище автосохранений") << Qt::endl;
 
     const QString root = QDir::tempPath() + QStringLiteral("/SpectrumTests-store");
     QDir(root).removeRecursively();
@@ -1212,7 +1212,7 @@ static void testAutosaveStore()
 // строк независимы, поэтому вперёд продолжать можно, а назад нельзя.
 static void testCanResume()
 {
-    out << Qt::endl << QStringLiteral("Годность автосохранения") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Годность автосохранения") << Qt::endl;
 
     ComputationSettings settings;
     settings.algorithmType = Algorithm::SimpleXor;
@@ -1270,7 +1270,7 @@ static void testCanResume()
 static void checkExtend(const QString& name, RunConfig cfg, int from, int to)
 {
     if (cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
-        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        g_out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return;
     }
 
@@ -1285,9 +1285,9 @@ static void checkExtend(const QString& name, RunConfig cfg, int from, int to)
     const qint64 saved = savedDoneOps();
     if (saved <= 0) {
         ++g_failed;
-        out << QStringLiteral("  ПРОВАЛ   ") << name
-            << QStringLiteral("  — после успешного расчёта записи не осталось,"
-                              " досчитывать не с чего") << Qt::endl;
+        g_out << QStringLiteral("  ПРОВАЛ   ") << name
+              << QStringLiteral("  — после успешного расчёта записи не осталось,"
+                                " досчитывать не с чего") << Qt::endl;
         clearCheckpoints();
         return;
     }
@@ -1297,20 +1297,20 @@ static void checkExtend(const QString& name, RunConfig cfg, int from, int to)
 
     if (extended == direct) {
         ++g_passed;
-        out << "  ok       " << name
-            << QStringLiteral("  (досчитано с ") << saved << QStringLiteral(" оп.)") << Qt::endl;
+        g_out << "  ok       " << name
+              << QStringLiteral("  (досчитано с ") << saved << QStringLiteral(" оп.)") << Qt::endl;
         return;
     }
 
     ++g_failed;
-    out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
-    out << QStringLiteral("      напрямую: ") << formatSpectrum(direct)   << Qt::endl;
-    out << QStringLiteral("      досчётом: ") << formatSpectrum(extended) << Qt::endl;
+    g_out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
+    g_out << QStringLiteral("      напрямую: ") << formatSpectrum(direct)   << Qt::endl;
+    g_out << QStringLiteral("      досчётом: ") << formatSpectrum(extended) << Qt::endl;
 }
 
 static void testExtendMaxRows()
 {
-    out << Qt::endl << QStringLiteral("Досчёт до большего числа строк") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Досчёт до большего числа строк") << Qt::endl;
 
     RunConfig cfg;
     cfg.matrix     = Reference::identity(20);
@@ -1342,7 +1342,7 @@ static void testExtendMaxRows()
 // этого поднимать не нужно.
 static void testAxisLabelStep()
 {
-    out << Qt::endl << QStringLiteral("Подписи оси графика") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Подписи оси графика") << Qt::endl;
 
     struct Case { int size; int width; const char* what; };
     const Case cases[] = {
@@ -1358,12 +1358,12 @@ static void testAxisLabelStep()
         const int step = axisLabelStep(c.size, c.width, 30.0);
         if (step != 0) {
             ok = false;
-            out << QStringLiteral("      %1: ожидался 0, получено %2")
-                       .arg(QString::fromUtf8(c.what)).arg(step) << Qt::endl;
+            g_out << QStringLiteral("      %1: ожидался 0, получено %2")
+                         .arg(QString::fromUtf8(c.what)).arg(step) << Qt::endl;
         }
     }
-    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("вырожденные размеры дают ноль") << Qt::endl; }
-    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   вырожденные размеры") << Qt::endl; }
+    if (ok) { ++g_passed; g_out << "  ok       " << QStringLiteral("вырожденные размеры дают ноль") << Qt::endl; }
+    else    { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   вырожденные размеры") << Qt::endl; }
 
     // На любых рабочих размерах шаг обязан лежать в [1, size] — только тогда
     // цикл по подписям заканчивается.
@@ -1373,13 +1373,13 @@ static void testAxisLabelStep()
             const int step = axisLabelStep(size, width, 30.0);
             if (step < 1 || step > size) {
                 ok = false;
-                out << QStringLiteral("      size=%1 width=%2 -> шаг %3")
-                           .arg(size).arg(width).arg(step) << Qt::endl;
+                g_out << QStringLiteral("      size=%1 width=%2 -> шаг %3")
+                             .arg(size).arg(width).arg(step) << Qt::endl;
             }
         }
     }
-    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("шаг всегда в пределах [1, длина спектра]") << Qt::endl; }
-    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   шаг вне пределов") << Qt::endl; }
+    if (ok) { ++g_passed; g_out << "  ok       " << QStringLiteral("шаг всегда в пределах [1, длина спектра]") << Qt::endl; }
+    else    { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   шаг вне пределов") << Qt::endl; }
 
     // И сам цикл: он обязан завершиться и выдать разумное число подписей.
     ok = true;
@@ -1392,13 +1392,13 @@ static void testAxisLabelStep()
             }
             if (labels < 1 || labels > size) {
                 ok = false;
-                out << QStringLiteral("      size=%1 width=%2 -> %3 подписей")
-                           .arg(size).arg(width).arg(labels) << Qt::endl;
+                g_out << QStringLiteral("      size=%1 width=%2 -> %3 подписей")
+                             .arg(size).arg(width).arg(labels) << Qt::endl;
             }
         }
     }
-    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("цикл подписей заканчивается") << Qt::endl; }
-    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   цикл подписей") << Qt::endl; }
+    if (ok) { ++g_passed; g_out << "  ok       " << QStringLiteral("цикл подписей заканчивается") << Qt::endl; }
+    else    { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   цикл подписей") << Qt::endl; }
 }
 
 // Матрица шире MAX_COLS не влезает в фиксированные массивы ядер. Раньше предел
@@ -1407,10 +1407,10 @@ static void testAxisLabelStep()
 // Теперь запуск ядра обязан отказаться с сообщением.
 static void testOversizedMatrixRejected()
 {
-    out << Qt::endl << QStringLiteral("Защита от матрицы сверх предела") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Защита от матрицы сверх предела") << Qt::endl;
 
     if (!g_gpuAvailable) {
-        out << QStringLiteral("  ПРОПУСК  (GPU недоступен)") << Qt::endl;
+        g_out << QStringLiteral("  ПРОПУСК  (GPU недоступен)") << Qt::endl;
         return;
     }
 
@@ -1433,12 +1433,12 @@ static void testOversizedMatrixRejected()
 
     if (errored) {
         ++g_passed;
-        out << QStringLiteral("  ok       матрица шириной ") << tooWide
-            << QStringLiteral(" отклонена с ошибкой") << Qt::endl;
+        g_out << QStringLiteral("  ok       матрица шириной ") << tooWide
+              << QStringLiteral(" отклонена с ошибкой") << Qt::endl;
     } else {
         ++g_failed;
-        out << QStringLiteral("  ПРОВАЛ   матрица шириной ") << tooWide
-            << QStringLiteral(" принята — ядро пишет за границу массива") << Qt::endl;
+        g_out << QStringLiteral("  ПРОВАЛ   матрица шириной ") << tooWide
+              << QStringLiteral(" принята — ядро пишет за границу массива") << Qt::endl;
     }
 
     // Код Грея перебирает 2^k масок в 64-битном слове: больше 63 строк для него
@@ -1461,13 +1461,13 @@ static void testOversizedMatrixRejected()
                                                      : QStringLiteral("GPU");
         if (err) {
             ++g_passed;
-            out << QStringLiteral("  ok       ") << dn
-                << QStringLiteral(" Грей на 70 строках отклонён") << Qt::endl;
+            g_out << QStringLiteral("  ok       ") << dn
+                  << QStringLiteral(" Грей на 70 строках отклонён") << Qt::endl;
         } else {
             ++g_failed;
-            out << QStringLiteral("  ПРОВАЛ   ") << dn
-                << QStringLiteral(" Грей на 70 строках принят — сдвиг за разрядность")
-                << Qt::endl;
+            g_out << QStringLiteral("  ПРОВАЛ   ") << dn
+                  << QStringLiteral(" Грей на 70 строках принят — сдвиг за разрядность")
+                  << Qt::endl;
         }
     }
 }
@@ -1527,8 +1527,8 @@ static int runSingleForProfiling(const QString& which)
         cfg.algorithm = Algorithm::GrayCode;
         cfg.maxRows   = 27;
     } else {
-        out << QStringLiteral("ожидалось --profile ident|rand|wide|maxshared|bigwide|biglong|graywide")
-            << Qt::endl;
+        g_out << QStringLiteral("ожидалось --profile ident|rand|wide|maxshared|bigwide|biglong|graywide")
+              << Qt::endl;
         return 2;
     }
 
@@ -1539,8 +1539,8 @@ static int runSingleForProfiling(const QString& which)
 
     quint64 total = 0;
     for (auto it = s.constBegin(); it != s.constEnd(); ++it) total += it.value();
-    out << which << QStringLiteral(": %1 с, слов %2, ненулевых весов %3")
-                        .arg(sec, 0, 'f', 2).arg(total).arg(s.size()) << Qt::endl;
+    g_out << which << QStringLiteral(": %1 с, слов %2, ненулевых весов %3")
+                          .arg(sec, 0, 'f', 2).arg(total).arg(s.size()) << Qt::endl;
     return 0;
 }
 
@@ -1663,7 +1663,7 @@ static int dumpGolden(const QString& path)
 
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        out << QStringLiteral("не удалось открыть ") << path << Qt::endl;
+        g_out << QStringLiteral("не удалось открыть ") << path << Qt::endl;
         return 1;
     }
     QTextStream fs(&f);
@@ -1671,7 +1671,7 @@ static int dumpGolden(const QString& path)
 
     for (const Case& c : cases) {
         if (c.cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
-            out << QStringLiteral("  ПРОПУСК  ") << c.name << Qt::endl;
+            g_out << QStringLiteral("  ПРОПУСК  ") << c.name << Qt::endl;
             continue;
         }
         const auto t0 = std::chrono::steady_clock::now();
@@ -1719,16 +1719,16 @@ static int dumpGolden(const QString& path)
             ++g_passed;
         }
 
-        out << QStringLiteral("  %1  %2 с, слов %3%4")
-                   .arg(c.name, -34).arg(sec, 0, 'f', 2).arg(totalWords).arg(verdict)
-            << Qt::endl;
-        out.flush();
+        g_out << QStringLiteral("  %1  %2 с, слов %3%4")
+                     .arg(c.name, -34).arg(sec, 0, 'f', 2).arg(totalWords).arg(verdict)
+              << Qt::endl;
+        g_out.flush();
     }
     f.close();
-    out << Qt::endl
-        << QStringLiteral("записано в ") << path << Qt::endl
-        << QStringLiteral("проверок пройдено ") << g_passed
-        << QStringLiteral(", провалено ") << g_failed << Qt::endl;
+    g_out << Qt::endl
+          << QStringLiteral("записано в ") << path << Qt::endl
+          << QStringLiteral("проверок пройдено ") << g_passed
+          << QStringLiteral(", провалено ") << g_failed << Qt::endl;
     return g_failed == 0 ? 0 : 1;
 }
 
@@ -1785,7 +1785,7 @@ static bool loadMatrixOrCase(const QString& which, RunConfig& cfg);
 static int probeOnly(const QString& which, int rows)
 {
     if (!g_gpuAvailable) {
-        out << QStringLiteral("GPU недоступен") << Qt::endl;
+        g_out << QStringLiteral("GPU недоступен") << Qt::endl;
         return 1;
     }
     clearCheckpoints();
@@ -1818,13 +1818,13 @@ static int probeOnly(const QString& which, int rows)
     if (stopper.joinable())
         stopper.join();
 
-    out << Qt::endl
-        << QStringLiteral("матрица %1 x %2, строк в переборе %3, сетка %4 x %5")
-               .arg(cfg.matrix.isEmpty() ? 0 : cfg.matrix.first().size())
-               .arg(cfg.matrix.size()).arg(cfg.maxRows)
-               .arg(cfg.blocksGpu).arg(cfg.threadsGpu) << Qt::endl
-        << QStringLiteral("проба намерила %1 отправок в секунду")
-               .arg(measured, 0, 'f', 2) << Qt::endl;
+    g_out << Qt::endl
+          << QStringLiteral("матрица %1 x %2, строк в переборе %3, сетка %4 x %5")
+                 .arg(cfg.matrix.isEmpty() ? 0 : cfg.matrix.first().size())
+                 .arg(cfg.matrix.size()).arg(cfg.maxRows)
+                 .arg(cfg.blocksGpu).arg(cfg.threadsGpu) << Qt::endl
+          << QStringLiteral("проба намерила %1 отправок в секунду")
+                 .arg(measured, 0, 'f', 2) << Qt::endl;
     return 0;
 }
 
@@ -1836,7 +1836,7 @@ static bool loadMatrixOrCase(const QString& which, RunConfig& cfg)
 
     QFile file(which);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        out << QStringLiteral("не открыть матрицу: ") << which << Qt::endl;
+        g_out << QStringLiteral("не открыть матрицу: ") << which << Qt::endl;
         return false;
     }
     cfg = RunConfig();
@@ -1863,7 +1863,7 @@ static bool loadMatrixOrCase(const QString& which, RunConfig& cfg)
 static int updateRate(const QString& which, int intervalMs, int rows)
 {
     if (!g_gpuAvailable) {
-        out << QStringLiteral("GPU недоступен") << Qt::endl;
+        g_out << QStringLiteral("GPU недоступен") << Qt::endl;
         return 1;
     }
     clearCheckpoints();
@@ -1897,17 +1897,17 @@ static int updateRate(const QString& which, int intervalMs, int rows)
     const double total = std::chrono::duration<double, std::milli>(
                              std::chrono::steady_clock::now() - started).count();
 
-    out << Qt::endl
-        << QStringLiteral("матрица %1 x %2, строк в переборе %3, сетка %4 x %5")
-               .arg(cfg.matrix.isEmpty() ? 0 : cfg.matrix.first().size())
-               .arg(cfg.matrix.size()).arg(cfg.maxRows)
-               .arg(cfg.blocksGpu).arg(cfg.threadsGpu) << Qt::endl
-        << QStringLiteral("интервал в настройках: %1 мс").arg(intervalMs) << Qt::endl
-        << QStringLiteral("расчёт занял %1 с, отправок спектра %2")
-               .arg(total / 1000.0, 0, 'f', 2).arg(stamps.size()) << Qt::endl;
+    g_out << Qt::endl
+          << QStringLiteral("матрица %1 x %2, строк в переборе %3, сетка %4 x %5")
+                 .arg(cfg.matrix.isEmpty() ? 0 : cfg.matrix.first().size())
+                 .arg(cfg.matrix.size()).arg(cfg.maxRows)
+                 .arg(cfg.blocksGpu).arg(cfg.threadsGpu) << Qt::endl
+          << QStringLiteral("интервал в настройках: %1 мс").arg(intervalMs) << Qt::endl
+          << QStringLiteral("расчёт занял %1 с, отправок спектра %2")
+                 .arg(total / 1000.0, 0, 'f', 2).arg(stamps.size()) << Qt::endl;
 
     if (stamps.size() < 2) {
-        out << QStringLiteral("отправок слишком мало, увеличьте число строк") << Qt::endl;
+        g_out << QStringLiteral("отправок слишком мало, увеличьте число строк") << Qt::endl;
         return 0;
     }
 
@@ -1922,20 +1922,20 @@ static int updateRate(const QString& which, int intervalMs, int rows)
     QStringList shown;
     for (int i = 1; i < stamps.size() && shown.size() < 40; ++i)
         shown.append(QString::number(stamps.at(i) - stamps.at(i - 1), 'f', 1));
-    out << QStringLiteral("паузы подряд, мс: ") << shown.join(QStringLiteral(" ")) << Qt::endl;
+    g_out << QStringLiteral("паузы подряд, мс: ") << shown.join(QStringLiteral(" ")) << Qt::endl;
 
     const double sum = std::accumulate(gaps.begin(), gaps.end(), 0.0);
-    out << QStringLiteral("пауза между отправками: медиана %1 мс, среднее %2 мс, "
-                          "минимум %3, максимум %4")
-               .arg(gaps.at(gaps.size() / 2), 0, 'f', 1)
-               .arg(sum / gaps.size(), 0, 'f', 1)
-               .arg(gaps.first(), 0, 'f', 1)
-               .arg(gaps.last(), 0, 'f', 1) << Qt::endl
-        // Делить надо на всё время прогона, а не на сумму пауз: при двух
-        // отправках сумма пауз — это одна пауза, и получается бодрое «86 в
-        // секунду» вместо честных 0,3.
-        << QStringLiteral("получилось %1 отправок в секунду")
-               .arg(1000.0 * stamps.size() / total, 0, 'f', 2) << Qt::endl;
+    g_out << QStringLiteral("пауза между отправками: медиана %1 мс, среднее %2 мс, "
+                            "минимум %3, максимум %4")
+                 .arg(gaps.at(gaps.size() / 2), 0, 'f', 1)
+                 .arg(sum / gaps.size(), 0, 'f', 1)
+                 .arg(gaps.first(), 0, 'f', 1)
+                 .arg(gaps.last(), 0, 'f', 1) << Qt::endl
+          // Делить надо на всё время прогона, а не на сумму пауз: при двух
+          // отправках сумма пауз — это одна пауза, и получается бодрое «86 в
+          // секунду» вместо честных 0,3.
+          << QStringLiteral("получилось %1 отправок в секунду")
+                 .arg(1000.0 * stamps.size() / total, 0, 'f', 2) << Qt::endl;
     return 0;
 }
 
@@ -1948,16 +1948,16 @@ static int tuneOnly(const QString& which)
 {
     RunConfig base;
     if (!sweepCase(which, base)) {
-        out << QStringLiteral("ожидалось --tune wide|narrow|gray|long") << Qt::endl;
+        g_out << QStringLiteral("ожидалось --tune wide|narrow|gray|long") << Qt::endl;
         return 2;
     }
     if (!g_gpuAvailable) {
-        out << QStringLiteral("GPU недоступен") << Qt::endl;
+        g_out << QStringLiteral("GPU недоступен") << Qt::endl;
         return 1;
     }
 
-    out << QStringLiteral("Подбор сетки, случай ") << which << Qt::endl;
-    out.flush();
+    g_out << QStringLiteral("Подбор сетки, случай ") << which << Qt::endl;
+    g_out.flush();
 
     const QPair<int, int> chosen = tunedGridFor(base, true);
     fflush(stdout);
@@ -1981,17 +1981,17 @@ static int tuneOnly(const QString& which)
     const double plain2 = timeRun(plain, sp2);
     const double plainSec = (plain1 + plain2) / 2.0;
 
-    out << Qt::endl
-        << QStringLiteral("настройки %1 x %2: %3 и %4 с (дрейф %5 %)")
-               .arg(base.blocksGpu).arg(base.threadsGpu)
-               .arg(plain1, 0, 'f', 2).arg(plain2, 0, 'f', 2)
-               .arg(plain1 > 0 ? (plain2 / plain1 - 1.0) * 100.0 : 0.0, 0, 'f', 1) << Qt::endl
-        << QStringLiteral("подбор выбрал %1 x %2: %3 с, выигрыш %4x")
-               .arg(chosen.first).arg(chosen.second).arg(tunedSec, 0, 'f', 2)
-               .arg(tunedSec > 0 ? plainSec / tunedSec : 0.0, 0, 'f', 2)
-        << ((sp1 == st && sp1 == sp2) ? QString()
-                                      : QStringLiteral("   ВНИМАНИЕ: спектр разошёлся"))
-        << Qt::endl;
+    g_out << Qt::endl
+          << QStringLiteral("настройки %1 x %2: %3 и %4 с (дрейф %5 %)")
+                 .arg(base.blocksGpu).arg(base.threadsGpu)
+                 .arg(plain1, 0, 'f', 2).arg(plain2, 0, 'f', 2)
+                 .arg(plain1 > 0 ? (plain2 / plain1 - 1.0) * 100.0 : 0.0, 0, 'f', 1) << Qt::endl
+          << QStringLiteral("подбор выбрал %1 x %2: %3 с, выигрыш %4x")
+                 .arg(chosen.first).arg(chosen.second).arg(tunedSec, 0, 'f', 2)
+                 .arg(tunedSec > 0 ? plainSec / tunedSec : 0.0, 0, 'f', 2)
+          << ((sp1 == st && sp1 == sp2) ? QString()
+                                        : QStringLiteral("   ВНИМАНИЕ: спектр разошёлся"))
+          << Qt::endl;
     return 0;
 }
 
@@ -1999,12 +1999,12 @@ static int sweepLaunchParams(const QString& which)
 {
     RunConfig base;
     if (!sweepCase(which, base)) {
-        out << QStringLiteral("ожидалось --sweep wide|narrow|gray|long") << Qt::endl;
+        g_out << QStringLiteral("ожидалось --sweep wide|narrow|gray|long") << Qt::endl;
         return 2;
     }
 
     if (!g_gpuAvailable) {
-        out << QStringLiteral("GPU недоступен") << Qt::endl;
+        g_out << QStringLiteral("GPU недоступен") << Qt::endl;
         return 1;
     }
 
@@ -2026,18 +2026,18 @@ static int sweepLaunchParams(const QString& which)
     std::sort(blocks.begin(), blocks.end());
     const QVector<int> threads { 64, 128, 256, 512, 1024 };
 
-    out << QStringLiteral("Перебор параметров, случай ") << which
-        << QStringLiteral(" (%1 мультипроцессоров)").arg(smCount) << Qt::endl << Qt::endl;
-    out << QStringLiteral("блоки \ нити");
-    for (int t : threads) out << QStringLiteral("%1").arg(t, 9);
-    out << Qt::endl;
+    g_out << QStringLiteral("Перебор параметров, случай ") << which
+          << QStringLiteral(" (%1 мультипроцессоров)").arg(smCount) << Qt::endl << Qt::endl;
+    g_out << QStringLiteral("блоки \ нити");
+    for (int t : threads) g_out << QStringLiteral("%1").arg(t, 9);
+    g_out << Qt::endl;
 
     double best = 1e9;
     int bestB = 0, bestT = 0;
     Spectrum reference;
 
     for (int b : blocks) {
-        out << QStringLiteral("%1").arg(b, 12);
+        g_out << QStringLiteral("%1").arg(b, 12);
         for (int t : threads) {
             RunConfig cfg = base;
             cfg.blocksGpu  = b;
@@ -2053,27 +2053,27 @@ static int sweepLaunchParams(const QString& which)
             const bool ok = (s == reference);
 
             if (ok && sec < best) { best = sec; bestB = b; bestT = t; }
-            out << QStringLiteral("%1").arg(ok ? QStringLiteral("%1").arg(sec, 0, 'f', 2)
-                                               : QStringLiteral("ПЛОХО"), 9);
-            out.flush();
+            g_out << QStringLiteral("%1").arg(ok ? QStringLiteral("%1").arg(sec, 0, 'f', 2)
+                                                 : QStringLiteral("ПЛОХО"), 9);
+            g_out.flush();
         }
-        out << Qt::endl;
+        g_out << Qt::endl;
     }
 
-    out << Qt::endl
-        << QStringLiteral("лучшее: %1 блоков x %2 нитей, %3 с")
-               .arg(bestB).arg(bestT).arg(best, 0, 'f', 2) << Qt::endl;
+    g_out << Qt::endl
+          << QStringLiteral("лучшее: %1 блоков x %2 нитей, %3 с")
+                 .arg(bestB).arg(bestT).arg(best, 0, 'f', 2) << Qt::endl;
     // Для сравнения — то, что стоит по умолчанию сейчас.
     RunConfig cur = base; cur.blocksGpu = 64; cur.threadsGpu = 256;
     const auto t0 = std::chrono::steady_clock::now();
     const Spectrum s = runWorker(cur);
     const double sec = std::chrono::duration<double>(
                            std::chrono::steady_clock::now() - t0).count();
-    out << QStringLiteral("сейчас по умолчанию 64 x 256: %1 с, выигрыш %2x")
-               .arg(sec, 0, 'f', 2).arg(best > 0 ? sec / best : 0.0, 0, 'f', 2)
-        << (s == reference ? QString()
-                           : QStringLiteral("   ВНИМАНИЕ: спектр разошёлся"))
-        << Qt::endl;
+    g_out << QStringLiteral("сейчас по умолчанию 64 x 256: %1 с, выигрыш %2x")
+                 .arg(sec, 0, 'f', 2).arg(best > 0 ? sec / best : 0.0, 0, 'f', 2)
+          << (s == reference ? QString()
+                             : QStringLiteral("   ВНИМАНИЕ: спектр разошёлся"))
+          << Qt::endl;
 
     // И то же самое с автоподбором — вместе со временем самого подбора.
     // Здесь видно главное: насколько выбранная замером сетка отстаёт от
@@ -2084,18 +2084,18 @@ static int sweepLaunchParams(const QString& which)
     const Spectrum st = runWorker(tuned);
     const double tunedSec = std::chrono::duration<double>(
                                std::chrono::steady_clock::now() - t1).count();
-    out.flush();
+    g_out.flush();
     const QPair<int, int> chosen = tunedGridFor(base, true);
 
-    out << QStringLiteral("автоподбор выбрал %1 x %2: %3 с, выигрыш %4x, "
-                          "до оптимума %5x")
-               .arg(chosen.first).arg(chosen.second)
-               .arg(tunedSec, 0, 'f', 2)
-               .arg(tunedSec > 0 ? sec / tunedSec : 0.0, 0, 'f', 2)
-               .arg(best > 0 ? tunedSec / best : 0.0, 0, 'f', 2)
-        << (st == reference ? QString()
-                            : QStringLiteral("   ВНИМАНИЕ: спектр разошёлся"))
-        << Qt::endl;
+    g_out << QStringLiteral("автоподбор выбрал %1 x %2: %3 с, выигрыш %4x, "
+                            "до оптимума %5x")
+                 .arg(chosen.first).arg(chosen.second)
+                 .arg(tunedSec, 0, 'f', 2)
+                 .arg(tunedSec > 0 ? sec / tunedSec : 0.0, 0, 'f', 2)
+                 .arg(best > 0 ? tunedSec / best : 0.0, 0, 'f', 2)
+          << (st == reference ? QString()
+                              : QStringLiteral("   ВНИМАНИЕ: спектр разошёлся"))
+          << Qt::endl;
     return 0;
 }
 
@@ -2141,10 +2141,10 @@ static void benchmark()
                        c, total });
     }
 
-    out << QStringLiteral("Замер скорости") << Qt::endl;
+    g_out << QStringLiteral("Замер скорости") << Qt::endl;
     for (const Case& c : cases) {
         if (c.cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
-            out << QStringLiteral("  ПРОПУСК  ") << c.name << Qt::endl;
+            g_out << QStringLiteral("  ПРОПУСК  ") << c.name << Qt::endl;
             continue;
         }
         const auto t0 = std::chrono::steady_clock::now();
@@ -2155,14 +2155,14 @@ static void benchmark()
         quint64 got = 0;
         for (auto it = s.constBegin(); it != s.constEnd(); ++it) got += it.value();
 
-        out << QStringLiteral("  %1: %2 с, %3 млн масок/с%4")
-                   .arg(c.name, -26)
-                   .arg(sec, 0, 'f', 2)
-                   .arg(sec > 0 ? c.ops / sec / 1e6 : 0.0, 0, 'f', 1)
-                   .arg(got == c.ops ? QString()
-                                     : QStringLiteral("   ВНИМАНИЕ: обработано %1 из %2")
-                                           .arg(got).arg(c.ops))
-            << Qt::endl;
+        g_out << QStringLiteral("  %1: %2 с, %3 млн масок/с%4")
+                     .arg(c.name, -26)
+                     .arg(sec, 0, 'f', 2)
+                     .arg(sec > 0 ? c.ops / sec / 1e6 : 0.0, 0, 'f', 1)
+                     .arg(got == c.ops ? QString()
+                                       : QStringLiteral("   ВНИМАНИЕ: обработано %1 из %2")
+                                             .arg(got).arg(c.ops))
+              << Qt::endl;
     }
 }
 
@@ -2174,7 +2174,7 @@ static void benchmark()
 // Пункты быстрее потолка в списке блокируются, и вся арифметика этого — здесь.
 static void testUpdateIntervals()
 {
-    out << Qt::endl << QStringLiteral("Достижимые интервалы обновления") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Достижимые интервалы обновления") << Qt::endl;
 
     // Список из настроек, миллисекунды.
     const QVector<int> list { 100, 250, 500, 1000, 5000, 10000, 30000, 60000 };
@@ -2195,12 +2195,12 @@ static void testUpdateIntervals()
     for (const Case& c : cases) {
         if (intervalReachable(c.ms, c.rate) != c.want) {
             ok = false;
-            out << QStringLiteral("      %1: %2 мс при потолке %3")
-                       .arg(QString::fromUtf8(c.what)).arg(c.ms).arg(c.rate) << Qt::endl;
+            g_out << QStringLiteral("      %1: %2 мс при потолке %3")
+                         .arg(QString::fromUtf8(c.what)).arg(c.ms).arg(c.rate) << Qt::endl;
         }
     }
-    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("достижимость интервала") << Qt::endl; }
-    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   достижимость интервала") << Qt::endl; }
+    if (ok) { ++g_passed; g_out << "  ok       " << QStringLiteral("достижимость интервала") << Qt::endl; }
+    else    { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   достижимость интервала") << Qt::endl; }
 
     // Секунда обязана оставаться достижимой на любом замере, который вообще
     // что-то поймал: на ней стоит заблокированный список.
@@ -2208,11 +2208,11 @@ static void testUpdateIntervals()
     for (double rate : { 1.0, 2.0, 6.9, 13.7, 54.6 }) {
         if (!intervalReachable(1000, rate)) {
             ok = false;
-            out << QStringLiteral("      потолок %1 не пускает секунду").arg(rate) << Qt::endl;
+            g_out << QStringLiteral("      потолок %1 не пускает секунду").arg(rate) << Qt::endl;
         }
     }
-    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("секунда достижима на любом пойманном замере") << Qt::endl; }
-    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   секунда недостижима") << Qt::endl; }
+    if (ok) { ++g_passed; g_out << "  ok       " << QStringLiteral("секунда достижима на любом пойманном замере") << Qt::endl; }
+    else    { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   секунда недостижима") << Qt::endl; }
 
     struct Pick { double rate; int want; const char* what; };
     const Pick picks[] = {
@@ -2229,12 +2229,12 @@ static void testUpdateIntervals()
         const int got = fastestAllowed(list, p.rate);
         if (got != p.want) {
             ok = false;
-            out << QStringLiteral("      %1: ожидалось %2, получено %3")
-                       .arg(QString::fromUtf8(p.what)).arg(p.want).arg(got) << Qt::endl;
+            g_out << QStringLiteral("      %1: ожидалось %2, получено %3")
+                         .arg(QString::fromUtf8(p.what)).arg(p.want).arg(got) << Qt::endl;
         }
     }
-    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("выбор самого частого допустимого") << Qt::endl; }
-    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   выбор допустимого") << Qt::endl; }
+    if (ok) { ++g_passed; g_out << "  ok       " << QStringLiteral("выбор самого частого допустимого") << Qt::endl; }
+    else    { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   выбор допустимого") << Qt::endl; }
 
     // Что бы ни вернул fastestAllowed, это обязано быть достижимо: иначе
     // подрезка сама поставила бы пункт, который не работает.
@@ -2243,12 +2243,12 @@ static void testUpdateIntervals()
         const int got = fastestAllowed(list, rate);
         if (got != 0 && !intervalReachable(got, rate)) {
             ok = false;
-            out << QStringLiteral("      потолок %1 -> %2 мс, а это недостижимо")
-                       .arg(rate).arg(got) << Qt::endl;
+            g_out << QStringLiteral("      потолок %1 -> %2 мс, а это недостижимо")
+                         .arg(rate).arg(got) << Qt::endl;
         }
     }
-    if (ok) { ++g_passed; out << "  ok       " << QStringLiteral("выбранный интервал всегда достижим") << Qt::endl; }
-    else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   выбран недостижимый интервал") << Qt::endl; }
+    if (ok) { ++g_passed; g_out << "  ok       " << QStringLiteral("выбранный интервал всегда достижим") << Qt::endl; }
+    else    { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   выбран недостижимый интервал") << Qt::endl; }
 }
 
 // Проба потолка не имеет права трогать состояние расчёта: она идёт по тем же
@@ -2257,9 +2257,9 @@ static void testUpdateIntervals()
 // последний слой, — и продолжение с него дало бы завышенный ответ.
 static void testProbeLeavesNoTrace()
 {
-    out << Qt::endl << QStringLiteral("Замер потолка обновления") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Замер потолка обновления") << Qt::endl;
     if (!g_gpuAvailable) {
-        out << QStringLiteral("  пропуск  GPU недоступен") << Qt::endl;
+        g_out << QStringLiteral("  пропуск  GPU недоступен") << Qt::endl;
         return;
     }
     RunConfig cfg;
@@ -2292,17 +2292,17 @@ static void testProbeLeavesNoTrace()
     worker.setSettings(makeSettings(cfg));
     worker.measureUpdateRate();
 
-    if (measured >= 0.0) { ++g_passed; out << "  ok       " << QStringLiteral("замер отдал результат") << Qt::endl; }
-    else { ++g_failed; out << QStringLiteral("  ПРОВАЛ   сигнала с результатом не было") << Qt::endl; }
+    if (measured >= 0.0) { ++g_passed; g_out << "  ok       " << QStringLiteral("замер отдал результат") << Qt::endl; }
+    else { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   сигнала с результатом не было") << Qt::endl; }
 
-    if (spectraSent == 0) { ++g_passed; out << "  ok       " << QStringLiteral("спектр в интерфейс не уходил") << Qt::endl; }
-    else { ++g_failed; out << QStringLiteral("  ПРОВАЛ   проба отправила спектров: %1").arg(spectraSent) << Qt::endl; }
+    if (spectraSent == 0) { ++g_passed; g_out << "  ok       " << QStringLiteral("спектр в интерфейс не уходил") << Qt::endl; }
+    else { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   проба отправила спектров: %1").arg(spectraSent) << Qt::endl; }
 
     AutosaveRecord record;
     if (!testStore().load(cfg.matrix, cfg.algorithm, record)) {
-        ++g_passed; out << "  ok       " << QStringLiteral("автосохранение не тронуто") << Qt::endl;
+        ++g_passed; g_out << "  ok       " << QStringLiteral("автосохранение не тронуто") << Qt::endl;
     } else {
-        ++g_failed; out << QStringLiteral("  ПРОВАЛ   проба записала автосохранение") << Qt::endl;
+        ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   проба записала автосохранение") << Qt::endl;
     }
 
     // И главное: после пробы обычный расчёт даёт тот же спектр, что и без неё.
@@ -2311,9 +2311,9 @@ static void testProbeLeavesNoTrace()
     // то, что проба ничего за собой не оставила.
     const Spectrum after = runWorker(cfg);
     if (!expected.isEmpty() && after == expected) {
-        ++g_passed; out << "  ok       " << QStringLiteral("расчёт после пробы даёт верный спектр") << Qt::endl;
+        ++g_passed; g_out << "  ok       " << QStringLiteral("расчёт после пробы даёт верный спектр") << Qt::endl;
     } else {
-        ++g_failed; out << QStringLiteral("  ПРОВАЛ   спектр после пробы разошёлся с эталоном") << Qt::endl;
+        ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   спектр после пробы разошёлся с эталоном") << Qt::endl;
     }
 }
 
@@ -2354,14 +2354,14 @@ static void bzReport()
         QStringList overlaps;
         for (int o : bz.overlaps) overlaps << QString::number(o);
 
-        out << Qt::endl
-            << QStringLiteral("%1  —  [%2,%3], множеств %4 (перекрытия: %5), до %6 строк")
-                   .arg(c.name).arg(n).arg(k).arg(bz.sets).arg(overlaps.join(QStringLiteral(", "))).arg(c.r)
-            << Qt::endl
-            << QStringLiteral("перебрано %1 слов вместо %2; гарантия: все слова веса < %3")
-                   .arg(bz.enumerated).arg(1ULL << k).arg(bz.guaranteedBelow)
-            << Qt::endl
-            << QStringLiteral("   вес     точно        БЦ    как сейчас") << Qt::endl;
+        g_out << Qt::endl
+              << QStringLiteral("%1  —  [%2,%3], множеств %4 (перекрытия: %5), до %6 строк")
+                     .arg(c.name).arg(n).arg(k).arg(bz.sets).arg(overlaps.join(QStringLiteral(", "))).arg(c.r)
+              << Qt::endl
+              << QStringLiteral("перебрано %1 слов вместо %2; гарантия: все слова веса < %3")
+                     .arg(bz.enumerated).arg(1ULL << k).arg(bz.guaranteedBelow)
+              << Qt::endl
+              << QStringLiteral("   вес     точно        БЦ    как сейчас") << Qt::endl;
 
         int shown = 0;
         for (auto it = exact.cbegin(); it != exact.cend() && shown < bz.guaranteedBelow + 4; ++it, ++shown) {
@@ -2376,11 +2376,11 @@ static void bzReport()
                 mark = QStringLiteral("  (вне гарантии)");
             if (v != e)
                 mark += QStringLiteral("   ← сейчас %1").arg(v < e ? QStringLiteral("недобор") : QStringLiteral("ПЕРЕБОР"));
-            out << QStringLiteral("   %1  %2  %3  %4%5")
-                       .arg(w, 3).arg(e, 10).arg(b, 8).arg(v, 10).arg(mark) << Qt::endl;
+            g_out << QStringLiteral("   %1  %2  %3  %4%5")
+                         .arg(w, 3).arg(e, 10).arg(b, 8).arg(v, 10).arg(mark) << Qt::endl;
         }
     }
-    out << Qt::endl;
+    g_out << Qt::endl;
 }
 
 // То же на матрице из файла, где точного спектра нет: сравниваются только
@@ -2395,8 +2395,8 @@ static int bzFile(const QString& path, int r, int maxSets)
     const int k = cfg.matrix.size();
     const int n = cfg.matrix.first().length();
 
-    out << QStringLiteral("[%1,%2], до %3 строк, множеств до %4").arg(n).arg(k).arg(r).arg(maxSets) << Qt::endl;
-    out.flush();
+    g_out << QStringLiteral("[%1,%2], до %3 строк, множеств до %4").arg(n).arg(k).arg(r).arg(maxSets) << Qt::endl;
+    g_out.flush();
 
     auto t = std::chrono::steady_clock::now();
     const Bz::Result bz = Bz::run(cfg.matrix, r, maxSets);
@@ -2409,14 +2409,14 @@ static int bzFile(const QString& path, int r, int maxSets)
     QStringList overlaps;
     for (int o : bz.overlaps) overlaps << QString::number(o);
 
-    out << QStringLiteral("множеств %1 (перекрытия: %2), перебрано %3 слов за %4 с; как сейчас — за %5 с")
-               .arg(bz.sets).arg(overlaps.join(QStringLiteral(", "))).arg(bz.enumerated)
-               .arg(bzSec, 0, 'f', 1).arg(naiveSec, 0, 'f', 1) << Qt::endl
-        << QStringLiteral("гарантия: все слова веса < %1 найдены").arg(bz.guaranteedBelow) << Qt::endl;
+    g_out << QStringLiteral("множеств %1 (перекрытия: %2), перебрано %3 слов за %4 с; как сейчас — за %5 с")
+                 .arg(bz.sets).arg(overlaps.join(QStringLiteral(", "))).arg(bz.enumerated)
+                 .arg(bzSec, 0, 'f', 1).arg(naiveSec, 0, 'f', 1) << Qt::endl
+          << QStringLiteral("гарантия: все слова веса < %1 найдены").arg(bz.guaranteedBelow) << Qt::endl;
     if (bz.rejectedOverlap >= 0)
-        out << QStringLiteral("следующее множество перекрыло бы прежние на %1 столбцов — не взято")
-                   .arg(bz.rejectedOverlap) << Qt::endl;
-    out << QStringLiteral("   вес        БЦ    как сейчас") << Qt::endl;
+        g_out << QStringLiteral("следующее множество перекрыло бы прежние на %1 столбцов — не взято")
+                     .arg(bz.rejectedOverlap) << Qt::endl;
+    g_out << QStringLiteral("   вес        БЦ    как сейчас") << Qt::endl;
 
     int minBz = -1, minNaive = -1;
     for (auto it = bz.spectrum.cbegin(); it != bz.spectrum.cend(); ++it)
@@ -2434,11 +2434,11 @@ static int bzFile(const QString& path, int r, int maxSets)
     for (int w : sorted) {
         if (w >= bz.guaranteedBelow + 6 && shown > 12) break;
         const QString mark = w < bz.guaranteedBelow ? QStringLiteral("  точно") : QStringLiteral("  (вне гарантии)");
-        out << QStringLiteral("   %1  %2  %3%4")
-                   .arg(w, 3).arg(bz.spectrum.value(w, 0), 8).arg(naive.value(w, 0), 10).arg(mark) << Qt::endl;
+        g_out << QStringLiteral("   %1  %2  %3%4")
+                     .arg(w, 3).arg(bz.spectrum.value(w, 0), 8).arg(naive.value(w, 0), 10).arg(mark) << Qt::endl;
         ++shown;
     }
-    out << QStringLiteral("минимальный найденный вес: БЦ %1, как сейчас %2").arg(minBz).arg(minNaive) << Qt::endl;
+    g_out << QStringLiteral("минимальный найденный вес: БЦ %1, как сейчас %2").arg(minBz).arg(minNaive) << Qt::endl;
     return 0;
 }
 
@@ -2449,7 +2449,7 @@ static int bzFile(const QString& path, int r, int maxSets)
 static Spectrum checkBzExact(const QString& name, const RunConfig& cfg, const Spectrum& exact)
 {
     if (cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
-        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        g_out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return Spectrum();
     }
     clearCheckpoints();
@@ -2483,12 +2483,12 @@ static Spectrum checkBzExact(const QString& name, const RunConfig& cfg, const Sp
 
     const QString what = QStringLiteral("%1: множеств %2, до %3 строк, точно до веса %4")
                              .arg(name).arg(g_planSets).arg(g_planRows).arg(g_planExactUpTo);
-    if (ok) { ++g_passed; out << "  ok       " << what << Qt::endl; }
+    if (ok) { ++g_passed; g_out << "  ok       " << what << Qt::endl; }
     else {
         ++g_failed;
-        out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl;
+        g_out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl;
         for (const QString& line : problems)
-            out << QStringLiteral("      ") << line << Qt::endl;
+            g_out << QStringLiteral("      ") << line << Qt::endl;
     }
     return actual;
 }
@@ -2499,18 +2499,18 @@ static void expectSame(const QString& name, const Spectrum& a, const Spectrum& b
 {
     if (a.isEmpty() || b.isEmpty())
         return;   // один из расчётов пропущен или провалился — уже отмечено
-    if (a == b) { ++g_passed; out << "  ok       " << name << Qt::endl; return; }
+    if (a == b) { ++g_passed; g_out << "  ok       " << name << Qt::endl; return; }
     ++g_failed;
-    out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl
-        << QStringLiteral("      CPU: ") << formatSpectrum(a) << Qt::endl
-        << QStringLiteral("      GPU: ") << formatSpectrum(b) << Qt::endl;
+    g_out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl
+          << QStringLiteral("      CPU: ") << formatSpectrum(a) << Qt::endl
+          << QStringLiteral("      GPU: ") << formatSpectrum(b) << Qt::endl;
 }
 
 // Досчёт до большего веса: запись после расчёта до w1 — начало расчёта до w2.
 static void checkExtendBz(const QString& name, RunConfig cfg, int from, int to)
 {
     if (cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
-        out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
+        g_out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return;
     }
     RunConfig target = cfg;  target.bzWeight = to;
@@ -2524,8 +2524,8 @@ static void checkExtendBz(const QString& name, RunConfig cfg, int from, int to)
     const qint64 saved = savedDoneOps();
     if (saved <= 0) {
         ++g_failed;
-        out << QStringLiteral("  ПРОВАЛ   ") << name
-            << QStringLiteral("  — после расчёта записи не осталось") << Qt::endl;
+        g_out << QStringLiteral("  ПРОВАЛ   ") << name
+              << QStringLiteral("  — после расчёта записи не осталось") << Qt::endl;
         clearCheckpoints();
         return;
     }
@@ -2534,19 +2534,19 @@ static void checkExtendBz(const QString& name, RunConfig cfg, int from, int to)
 
     if (extended == direct) {
         ++g_passed;
-        out << "  ok       " << name
-            << QStringLiteral("  (досчитано с ") << saved << QStringLiteral(" оп.)") << Qt::endl;
+        g_out << "  ok       " << name
+              << QStringLiteral("  (досчитано с ") << saved << QStringLiteral(" оп.)") << Qt::endl;
         return;
     }
     ++g_failed;
-    out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
-    out << QStringLiteral("      напрямую: ") << formatSpectrum(direct)   << Qt::endl;
-    out << QStringLiteral("      досчётом: ") << formatSpectrum(extended) << Qt::endl;
+    g_out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
+    g_out << QStringLiteral("      напрямую: ") << formatSpectrum(direct)   << Qt::endl;
+    g_out << QStringLiteral("      досчётом: ") << formatSpectrum(extended) << Qt::endl;
 }
 
 static void testBrouwerZimmermannWorker()
 {
-    out << Qt::endl << QStringLiteral("Брауэр–Циммерман в расчёте: CPU и GPU, короткий и длинный пути") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Брауэр–Циммерман в расчёте: CPU и GPU, короткий и длинный пути") << Qt::endl;
 
     // Короткие коды с точным спектром: гарантия и полный перебор.
     for (const BzCase& c : bzCases()) {
@@ -2592,13 +2592,13 @@ static void testBrouwerZimmermannWorker()
 
         const QString what = QStringLiteral("[140,66] длинный путь: множеств %1, до %2 строк, точно до веса %3")
                                  .arg(setsCpu).arg(rowsCpu).arg(exactCpu);
-        if (exactCpu >= cfg.bzWeight && !cpu.isEmpty()) { ++g_passed; out << "  ok       " << what << Qt::endl; }
-        else { ++g_failed; out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl; }
+        if (exactCpu >= cfg.bzWeight && !cpu.isEmpty()) { ++g_passed; g_out << "  ok       " << what << Qt::endl; }
+        else { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl; }
 
         if (g_gpuAvailable)
             expectSame(QStringLiteral("[140,66]: CPU и GPU совпадают"), cpu, gpu);
         else
-            out << QStringLiteral("  ПРОПУСК  [140,66] GPU  (GPU недоступен)") << Qt::endl;
+            g_out << QStringLiteral("  ПРОПУСК  [140,66] GPU  (GPU недоступен)") << Qt::endl;
 
         // Прототип ищет множества сам, и выше гарантии его находки другие.
         // Ниже — обязан совпасть.
@@ -2608,17 +2608,17 @@ static void testBrouwerZimmermannWorker()
         for (int w = 0; w < common; ++w)
             if (cpu.value(w, 0) != proto.spectrum.value(w, 0)) {
                 ok = false;
-                out << QStringLiteral("      вес %1: расчёт %2, прототип %3")
-                           .arg(w).arg(cpu.value(w, 0)).arg(proto.spectrum.value(w, 0)) << Qt::endl;
+                g_out << QStringLiteral("      вес %1: расчёт %2, прототип %3")
+                             .arg(w).arg(cpu.value(w, 0)).arg(proto.spectrum.value(w, 0)) << Qt::endl;
             }
         const QString vs = QStringLiteral("[140,66]: совпадает с прототипом ниже веса %1").arg(common);
-        if (ok) { ++g_passed; out << "  ok       " << vs << Qt::endl; }
-        else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   ") << vs << Qt::endl; }
+        if (ok) { ++g_passed; g_out << "  ok       " << vs << Qt::endl; }
+        else    { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   ") << vs << Qt::endl; }
     }
 
     // Возобновление и досчёт: слои с несколькими множествами и сквозной
     // нумерацией внутри слоя.
-    out << Qt::endl << QStringLiteral("Брауэр–Циммерман: сохранение и досчёт") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Брауэр–Циммерман: сохранение и досчёт") << Qt::endl;
     {
         // Слои маленькие — каждый слой каждого множества уходит одним чанком,
         // и обрыв приходится ровно на границу множества: 903 операции, стоп
@@ -2679,10 +2679,10 @@ static int bzRun(const QString& path, int weight, const QString& device)
 
     const int k = cfg.matrix.size();
     const int n = cfg.matrix.first().length();
-    out << QStringLiteral("[%1,%2], точно до веса %3, %4")
-               .arg(n).arg(k).arg(weight)
-               .arg(cfg.device == ComputeDevice::Cpu ? QStringLiteral("CPU") : QStringLiteral("GPU")) << Qt::endl;
-    out.flush();
+    g_out << QStringLiteral("[%1,%2], точно до веса %3, %4")
+                 .arg(n).arg(k).arg(weight)
+                 .arg(cfg.device == ComputeDevice::Cpu ? QStringLiteral("CPU") : QStringLiteral("GPU")) << Qt::endl;
+    g_out.flush();
 
     clearCheckpoints();
     const auto t = std::chrono::steady_clock::now();
@@ -2690,13 +2690,13 @@ static int bzRun(const QString& path, int weight, const QString& device)
     const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
     clearCheckpoints();
 
-    out << QStringLiteral("множеств %1, до %2 строк, точно до веса %3; %4 с")
-               .arg(g_planSets).arg(g_planRows).arg(g_planExactUpTo).arg(sec, 0, 'f', 1) << Qt::endl;
+    g_out << QStringLiteral("множеств %1, до %2 строк, точно до веса %3; %4 с")
+                 .arg(g_planSets).arg(g_planRows).arg(g_planExactUpTo).arg(sec, 0, 'f', 1) << Qt::endl;
     int shown = 0;
     for (auto it = spectrum.cbegin(); it != spectrum.cend() && shown < 16; ++it, ++shown)
-        out << QStringLiteral("   %1  %2%3").arg(it.key(), 3).arg(it.value(), 12)
-                   .arg(it.key() <= g_planExactUpTo ? QStringLiteral("  точно") : QStringLiteral("  (неполно)"))
-            << Qt::endl;
+        g_out << QStringLiteral("   %1  %2%3").arg(it.key(), 3).arg(it.value(), 12)
+                     .arg(it.key() <= g_planExactUpTo ? QStringLiteral("  точно") : QStringLiteral("  (неполно)"))
+              << Qt::endl;
     return 0;
 }
 
@@ -2704,11 +2704,11 @@ static int bzRun(const QString& path, int weight, const QString& device)
 
 static void expectLeon(const QString& name, bool ok, const QString& detail = QString())
 {
-    if (ok) { ++g_passed; out << "  ok       " << name << Qt::endl; }
+    if (ok) { ++g_passed; g_out << "  ok       " << name << Qt::endl; }
     else {
         ++g_failed;
-        out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
-        if (!detail.isEmpty()) out << QStringLiteral("      ") << detail << Qt::endl;
+        g_out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl;
+        if (!detail.isEmpty()) g_out << QStringLiteral("      ") << detail << Qt::endl;
     }
 }
 
@@ -2716,7 +2716,7 @@ static void expectLeon(const QString& name, bool ok, const QString& detail = QSt
 // план выбирает глубину от одной до четырёх строк.
 static void testLeonModel()
 {
-    out << Qt::endl << QStringLiteral("Случайный поиск: модель поимки") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Случайный поиск: модель поимки") << Qt::endl;
 
     const int n = 336, k = 96;
     bool inRange = true, byRows = true, byWeight = true;
@@ -2832,7 +2832,7 @@ static void testLeonModel()
 // детерминирован по затравке, так что либо проходит всегда, либо никогда.
 static void testLeonWorker()
 {
-    out << Qt::endl << QStringLiteral("Случайный поиск в расчёте") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Случайный поиск в расчёте") << Qt::endl;
 
     struct Case { QString name; QStringList rows; int weight; };
     const QVector<Case> cases = {
@@ -2844,7 +2844,7 @@ static void testLeonWorker()
     auto checkDevice = [&](const Case& c, const Spectrum& exact, ComputeDevice device) {
         const QString who = device == ComputeDevice::Cpu ? QStringLiteral("CPU") : QStringLiteral("GPU");
         if (device == ComputeDevice::Gpu && !g_gpuAvailable) {
-            out << QStringLiteral("  ПРОПУСК  ") << c.name << QStringLiteral(" GPU  (GPU недоступен)") << Qt::endl;
+            g_out << QStringLiteral("  ПРОПУСК  ") << c.name << QStringLiteral(" GPU  (GPU недоступен)") << Qt::endl;
             return;
         }
         RunConfig cfg;
@@ -2902,7 +2902,7 @@ static void testLeonWorker()
         for (ComputeDevice device : { ComputeDevice::Cpu, ComputeDevice::Gpu }) {
             const bool gpu = device == ComputeDevice::Gpu;
             if (gpu && !g_gpuAvailable) {
-                out << QStringLiteral("  ПРОПУСК  [140,66] длинный GPU  (GPU недоступен)") << Qt::endl;
+                g_out << QStringLiteral("  ПРОПУСК  [140,66] длинный GPU  (GPU недоступен)") << Qt::endl;
                 continue;
             }
             RunConfig leon;
@@ -3035,8 +3035,8 @@ static void testLeonWorker()
             const Leon::Plan cpuPlan = Leon::plan(n, k, t.weight, 1e-12, false);
             const Leon::Plan gpuPlan = Leon::plan(n, k, t.weight, 1e-12, true);
             if (cpuPlan.rows != gpuPlan.rows) {
-                out << QStringLiteral("  ПРОПУСК  %1 CPU и GPU слово в слово: разная глубина (%2 и %3)")
-                           .arg(t.name).arg(cpuPlan.rows).arg(gpuPlan.rows) << Qt::endl;
+                g_out << QStringLiteral("  ПРОПУСК  %1 CPU и GPU слово в слово: разная глубина (%2 и %3)")
+                             .arg(t.name).arg(cpuPlan.rows).arg(gpuPlan.rows) << Qt::endl;
                 continue;
             }
             RunConfig cfg;
@@ -3170,12 +3170,12 @@ static int leonRun(const QString& path, int weight, int missExponent, const QStr
     const Leon::SternProfile profile = Leon::sternProfile(cfg.matrix);
     const Leon::Plan plan = Leon::plan(n, k, weight, std::pow(10.0, -missExponent),
                                        cfg.device == ComputeDevice::Gpu, &profile, cfg.window);
-    out << QStringLiteral("[%1,%2], все слова до веса %3, пропуск 10^-%4, %8: %5 строк за попытку%9, попыток %6, слов %7")
-               .arg(n).arg(k).arg(weight).arg(missExponent)
-               .arg(plan.rows).arg(plan.trials).arg(double(plan.trials) * plan.wordsPerTrial, 0, 'g', 3)
-               .arg(cfg.device == ComputeDevice::Gpu ? QStringLiteral("GPU") : QStringLiteral("CPU"))
-               .arg(plan.window > 0 ? QStringLiteral(", окно %1").arg(plan.window) : QString()) << Qt::endl;
-    out.flush();
+    g_out << QStringLiteral("[%1,%2], все слова до веса %3, пропуск 10^-%4, %8: %5 строк за попытку%9, попыток %6, слов %7")
+                 .arg(n).arg(k).arg(weight).arg(missExponent)
+                 .arg(plan.rows).arg(plan.trials).arg(double(plan.trials) * plan.wordsPerTrial, 0, 'g', 3)
+                 .arg(cfg.device == ComputeDevice::Gpu ? QStringLiteral("GPU") : QStringLiteral("CPU"))
+                 .arg(plan.window > 0 ? QStringLiteral(", окно %1").arg(plan.window) : QString()) << Qt::endl;
+    g_out.flush();
 
     clearCheckpoints();
     const auto t = std::chrono::steady_clock::now();
@@ -3183,13 +3183,13 @@ static int leonRun(const QString& path, int weight, int missExponent, const QStr
     const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
     clearCheckpoints();
 
-    out << QStringLiteral("попыток %1 из %2, %3 с; вероятность пропуска по модели ~%4")
-               .arg(g_searchDone).arg(g_searchTotal).arg(sec, 0, 'f', 1).arg(g_searchMiss, 0, 'g', 2) << Qt::endl;
+    g_out << QStringLiteral("попыток %1 из %2, %3 с; вероятность пропуска по модели ~%4")
+                 .arg(g_searchDone).arg(g_searchTotal).arg(sec, 0, 'f', 1).arg(g_searchMiss, 0, 'g', 2) << Qt::endl;
     for (auto it = spectrum.cbegin(); it != spectrum.cend(); ++it) {
         const float unseen = it.key() < g_searchUnseen.size() ? g_searchUnseen.at(it.key()) : 0.0f;
-        out << QStringLiteral("   %1  %2%3").arg(it.key(), 3).arg(it.value(), 12)
-                   .arg(unseen >= 0.5f ? QStringLiteral("  (ещё ~%1 не найдено)").arg(qRound64(double(unseen))) : QString())
-            << Qt::endl;
+        g_out << QStringLiteral("   %1  %2%3").arg(it.key(), 3).arg(it.value(), 12)
+                     .arg(unseen >= 0.5f ? QStringLiteral("  (ещё ~%1 не найдено)").arg(qRound64(double(unseen))) : QString())
+              << Qt::endl;
     }
     return 0;
 }
@@ -3244,7 +3244,7 @@ static Spectrum productSpectrum(const QStringList& g1, const QStringList& g2,
 // порождающий многочлен из примера Макса, матрица [63,51] из его библиотеки.
 static void testBchCode()
 {
-    out << Qt::endl << QStringLiteral("БЧХ-коды") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("БЧХ-коды") << Qt::endl;
 
     // Справочные значения (восьмеричные) для представителей классов.
     struct Known { int m; int exponent; const char* octal; };
@@ -3321,7 +3321,7 @@ static void testBchCode()
 
 static void testHammingCode()
 {
-    out << Qt::endl << QStringLiteral("Коды Хэмминга") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Коды Хэмминга") << Qt::endl;
     const Hamming::Code h7  = Hamming::build(3, false, 0);
     const Hamming::Code h8  = Hamming::build(3, true, 0);
     const Hamming::Code h15 = Hamming::build(4, false, 0);
@@ -3351,7 +3351,7 @@ static void testHammingCode()
 
 static void testProductCode()
 {
-    out << Qt::endl << QStringLiteral("Коды произведения: низ спектра по компонентам") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Коды произведения: низ спектра по компонентам") << Qt::endl;
 
     struct Case { QString name; QStringList g1, g2; };
     const QVector<Case> cases = {
@@ -3379,9 +3379,9 @@ static void testProductCode()
         expectLeon(c.name + QStringLiteral(", все ранги (до %1) — весь спектр").arg(maxRank), ok,
                    problems.join(QStringLiteral("; ")));
 
-        // Ранги до R: ниже границы ранга R+1 — точно, выше — не больше точного.
-        for (int R = 1; R < maxRank; ++R) {
-            const Spectrum part = productSpectrum(c.g1, c.g2, R, quint64(n), exactUpTo);
+        // Ранги до rank: ниже границы ранга rank+1 — точно, выше — не больше точного.
+        for (int rank = 1; rank < maxRank; ++rank) {
+            const Spectrum part = productSpectrum(c.g1, c.g2, rank, quint64(n), exactUpTo);
             bool okR = true;
             QStringList probs;
             for (auto it = exact.cbegin(); it != exact.cend(); ++it) {
@@ -3389,12 +3389,12 @@ static void testProductCode()
                 if (it.key() <= exactUpTo ? got != it.value() : got > it.value()) {
                     okR = false;
                     probs << QStringLiteral("вес %1: точно %2, ранги<=%3 дают %4")
-                                 .arg(it.key()).arg(it.value()).arg(R).arg(got);
+                                 .arg(it.key()).arg(it.value()).arg(rank).arg(got);
                 }
             }
             for (auto it = part.cbegin(); it != part.cend(); ++it)
                 if (!exact.contains(it.key())) { okR = false; probs << QStringLiteral("лишний вес %1").arg(it.key()); }
-            expectLeon(c.name + QStringLiteral(", ранги до %1: точно до веса %2").arg(R).arg(exactUpTo),
+            expectLeon(c.name + QStringLiteral(", ранги до %1: точно до веса %2").arg(rank).arg(exactUpTo),
                        okR, probs.join(QStringLiteral("; ")));
         }
     }
@@ -3522,11 +3522,11 @@ static int productRun(const QString& path1, const QString& path2, int weight, in
     cfg.threadsCpu    = omp_get_num_procs();
     cfg.autoTune      = cfg.device == ComputeDevice::Gpu;
 
-    out << QStringLiteral("[%1,%2] x [%3,%4], вес %5, ранги до %6")
-               .arg(c1.matrix.first().length()).arg(c1.matrix.size())
-               .arg(c2.matrix.first().length()).arg(c2.matrix.size())
-               .arg(weight).arg(rank) << Qt::endl;
-    out.flush();
+    g_out << QStringLiteral("[%1,%2] x [%3,%4], вес %5, ранги до %6")
+                 .arg(c1.matrix.first().length()).arg(c1.matrix.size())
+                 .arg(c2.matrix.first().length()).arg(c2.matrix.size())
+                 .arg(weight).arg(rank) << Qt::endl;
+    g_out.flush();
 
     clearCheckpoints();
     const auto t = std::chrono::steady_clock::now();
@@ -3534,9 +3534,9 @@ static int productRun(const QString& path1, const QString& path2, int weight, in
     const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
     clearCheckpoints();
 
-    out << g_productText << QStringLiteral("; %1 с").arg(sec, 0, 'f', 1) << Qt::endl;
+    g_out << g_productText << QStringLiteral("; %1 с").arg(sec, 0, 'f', 1) << Qt::endl;
     for (auto it = spectrum.cbegin(); it != spectrum.cend(); ++it)
-        out << QStringLiteral("   %1  %2").arg(it.key(), 6).arg(it.value(), 16) << Qt::endl;
+        g_out << QStringLiteral("   %1  %2").arg(it.key(), 6).arg(it.value(), 16) << Qt::endl;
     return 0;
 }
 
@@ -3544,7 +3544,7 @@ static int productRun(const QString& path1, const QString& path2, int weight, in
 // побитовым, выше — БЦ не имеет права насчитать больше, чем есть.
 static void testBrouwerZimmermann()
 {
-    out << Qt::endl << QStringLiteral("Брауэр–Циммерман: низ спектра с гарантией") << Qt::endl;
+    g_out << Qt::endl << QStringLiteral("Брауэр–Циммерман: низ спектра с гарантией") << Qt::endl;
 
     for (const BzCase& c : bzCases()) {
         const Reference::Spectrum exact = Reference::bruteForce(c.rows);
@@ -3555,16 +3555,16 @@ static void testBrouwerZimmermann()
             const quint64 found = bz.spectrum.value(it.key(), 0);
             if (it.key() < bz.guaranteedBelow ? found != it.value() : found > it.value()) {
                 ok = false;
-                out << QStringLiteral("      вес %1: точно %2, БЦ %3 (граница %4)")
-                           .arg(it.key()).arg(it.value()).arg(found).arg(bz.guaranteedBelow) << Qt::endl;
+                g_out << QStringLiteral("      вес %1: точно %2, БЦ %3 (граница %4)")
+                             .arg(it.key()).arg(it.value()).arg(found).arg(bz.guaranteedBelow) << Qt::endl;
             }
         }
         for (auto it = bz.spectrum.cbegin(); it != bz.spectrum.cend(); ++it)
-            if (!exact.contains(it.key())) { ok = false; out << QStringLiteral("      лишний вес %1").arg(it.key()) << Qt::endl; }
+            if (!exact.contains(it.key())) { ok = false; g_out << QStringLiteral("      лишний вес %1").arg(it.key()) << Qt::endl; }
 
         const QString what = QStringLiteral("%1: веса < %2 точны").arg(c.name).arg(bz.guaranteedBelow);
-        if (ok) { ++g_passed; out << "  ok       " << what << Qt::endl; }
-        else    { ++g_failed; out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl; }
+        if (ok) { ++g_passed; g_out << "  ok       " << what << Qt::endl; }
+        else    { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl; }
     }
 }
 
@@ -3578,7 +3578,7 @@ int main(int argc, char* argv[])
     // Без этого русский вывод превращается в мусор: консоль по умолчанию в CP866.
     SetConsoleOutputCP(CP_UTF8);
 #endif
-    out.setCodec("UTF-8");
+    g_out.setCodec("UTF-8");
 
     // Отдельное имя приложения: чекпоинты тестов не должны попадать в ветку
     // реестра, которой пользуется сама программа.
@@ -3587,10 +3587,10 @@ int main(int argc, char* argv[])
 
     int deviceCount = 0;
     g_gpuAvailable = (cudaGetDeviceCount(&deviceCount) == cudaSuccess) && deviceCount > 0;
-    out << QStringLiteral("GPU: ")
-        << (g_gpuAvailable ? QStringLiteral("доступен")
-                           : QStringLiteral("не найден, GPU-тесты пропускаются"))
-        << Qt::endl;
+    g_out << QStringLiteral("GPU: ")
+          << (g_gpuAvailable ? QStringLiteral("доступен")
+                             : QStringLiteral("не найден, GPU-тесты пропускаются"))
+          << Qt::endl;
 
     const QStringList args = app.arguments();
 
@@ -3598,13 +3598,13 @@ int main(int argc, char* argv[])
     if (bzAt >= 0 && bzAt + 2 < args.size()) {
         const int sets = bzAt + 3 < args.size() ? args.at(bzAt + 3).toInt() : 8;
         const int rc = bzFile(args.at(bzAt + 1), args.at(bzAt + 2).toInt(), sets > 0 ? sets : 8);
-        out.flush();
+        g_out.flush();
         return rc;
     }
 
     if (args.contains(QStringLiteral("--bz"))) {
         bzReport();
-        out.flush();
+        g_out.flush();
         return 0;
     }
 
@@ -3614,7 +3614,7 @@ int main(int argc, char* argv[])
         const int rank   = productAt + 4 < args.size() ? args.at(productAt + 4).toInt() : 2;
         const QString device = productAt + 5 < args.size() ? args.at(productAt + 5).toLower() : QStringLiteral("cpu");
         const int rc = productRun(args.at(productAt + 1), args.at(productAt + 2), weight, rank > 0 ? rank : 2, device);
-        out.flush();
+        g_out.flush();
         return rc;
     }
 
@@ -3625,7 +3625,7 @@ int main(int argc, char* argv[])
         const int at = args.indexOf(QStringLiteral("--stern-bench"));
         RunConfig cfg;
         if (at + 2 >= args.size() || !loadMatrixOrCase(args.at(at + 1), cfg)) return 2;
-        const int W = args.at(at + 2).toInt();
+        const int maxWeight = args.at(at + 2).toInt();
         const int maxP = at + 3 < args.size() ? args.at(at + 3).toInt() : 2;
         int words = 0;
         const std::vector<quint64> packed = InfoSets::packRows(cfg.matrix, words);
@@ -3637,7 +3637,7 @@ int main(int argc, char* argv[])
         };
         quint64 sink = 0;
         auto visit = [&](const quint64*, int) { ++sink; };
-        out << QStringLiteral("[%1,%2], вес %3, один поток, мкс на попытку:").arg(n).arg(k).arg(W) << Qt::endl;
+        g_out << QStringLiteral("[%1,%2], вес %3, один поток, мкс на попытку:").arg(n).arg(k).arg(maxWeight) << Qt::endl;
         {
             std::vector<int> order;
             InfoSets::InfoSet set;
@@ -3646,30 +3646,30 @@ int main(int argc, char* argv[])
                 Leon::shuffledColumns(n, t, order);
                 ok += InfoSets::systematize(packed.data(), k, n, words, order, nullptr, set) ? 1 : 0;
             }, 100);
-            out << QStringLiteral("  систематизация: %1 мкс (удачных %2 из 100)").arg(us, 0, 'f', 1).arg(ok) << Qt::endl;
+            g_out << QStringLiteral("  систематизация: %1 мкс (удачных %2 из 100)").arg(us, 0, 'f', 1).arg(ok) << Qt::endl;
         }
         for (int p = 1; p <= maxP; ++p) {
-            const double us = timeIt([&](quint64 t) { Leon::trial(packed.data(), k, n, words, p, W, t, visit); }, p == 3 ? 10 : 100);
-            out << QStringLiteral("  перебор p=%1: %2 мкс (слов %3)").arg(p).arg(us, 0, 'f', 1).arg(Leon::wordsPerTrial(k, p), 0, 'g', 4) << Qt::endl;
+            const double us = timeIt([&](quint64 t) { Leon::trial(packed.data(), k, n, words, p, maxWeight, t, visit); }, p == 3 ? 10 : 100);
+            g_out << QStringLiteral("  перебор p=%1: %2 мкс (слов %3)").arg(p).arg(us, 0, 'f', 1).arg(Leon::wordsPerTrial(k, p), 0, 'g', 4) << Qt::endl;
         }
         const Leon::SternProfile profile = Leon::sternProfile(cfg.matrix);
         for (int p = 1; p <= std::min(maxP, 2); ++p)
             for (int l : { 8, 12, 16, 20 }) {
                 if (l > profile.window) continue;
-                const double us = timeIt([&](quint64 t) { Leon::trialStern(packed.data(), k, n, words, p, l, W, t, visit); }, p == 2 ? 20 : 100);
+                const double us = timeIt([&](quint64 t) { Leon::trialStern(packed.data(), k, n, words, p, l, maxWeight, t, visit); }, p == 2 ? 20 : 100);
                 const double list    = Leon::sternListSize(k / 2, p) + Leon::sternListSize(k - k / 2, p);
                 const double uniform = Leon::sternListSize(k / 2, p) * Leon::sternListSize(k - k / 2, p) / std::ldexp(1.0, l);
-                out << QStringLiteral("  окно p=%1 l=%2: %3 мкс (список %4, пар %5, у равномерных ключей %6)")
-                           .arg(p).arg(l, 2).arg(us, 8, 'f', 1).arg(list, 0, 'g', 4)
-                           .arg(profile.pairs[p][l], 0, 'g', 4).arg(uniform, 0, 'g', 4) << Qt::endl;
+                g_out << QStringLiteral("  окно p=%1 l=%2: %3 мкс (список %4, пар %5, у равномерных ключей %6)")
+                             .arg(p).arg(l, 2).arg(us, 8, 'f', 1).arg(list, 0, 'g', 4)
+                             .arg(profile.pairs[p][l], 0, 'g', 4).arg(uniform, 0, 'g', 4) << Qt::endl;
             }
-        const Leon::Plan plan = Leon::plan(n, k, W, 1e-6, false, &profile);
-        const Leon::Plan plain = Leon::plan(n, k, W, 1e-6, false, nullptr, Leon::WindowPolicy::none());
-        out << QStringLiteral("  план (пропуск 10^-6): p=%1 l=%2, попыток %3, цена %4 слов; без окна p=%5, попыток %6, цена %7 слов")
-                   .arg(plan.rows).arg(plan.window).arg(plan.trials).arg(double(plan.trials) * plan.costPerTrial, 0, 'g', 3)
-                   .arg(plain.rows).arg(plain.trials).arg(double(plain.trials) * plain.costPerTrial, 0, 'g', 3) << Qt::endl;
-        out << QStringLiteral("  (sink %1)").arg(sink) << Qt::endl;
-        out.flush();
+        const Leon::Plan plan = Leon::plan(n, k, maxWeight, 1e-6, false, &profile);
+        const Leon::Plan plain = Leon::plan(n, k, maxWeight, 1e-6, false, nullptr, Leon::WindowPolicy::none());
+        g_out << QStringLiteral("  план (пропуск 10^-6): p=%1 l=%2, попыток %3, цена %4 слов; без окна p=%5, попыток %6, цена %7 слов")
+                     .arg(plan.rows).arg(plan.window).arg(plan.trials).arg(double(plan.trials) * plan.costPerTrial, 0, 'g', 3)
+                     .arg(plain.rows).arg(plain.trials).arg(double(plain.trials) * plain.costPerTrial, 0, 'g', 3) << Qt::endl;
+        g_out << QStringLiteral("  (sink %1)").arg(sink) << Qt::endl;
+        g_out.flush();
         return 0;
     }
 
@@ -3695,24 +3695,24 @@ int main(int argc, char* argv[])
         d_count.allocate(1);
         const size_t scratchWords = leonScratchWords(k, n, words, 2, 0, 0);
         if (scratchWords > 0) d_scratch.allocate(scratchWords * size_t(trials));
-        out << QStringLiteral("[%1,%2], ярус памяти %3 (%4), попыток %5:")
-                   .arg(n).arg(k).arg(tier)
-                   .arg(tier == 0 ? QStringLiteral("глобальная") : tier == 1 ? QStringLiteral("разделяемая") : QStringLiteral("большая разделяемая"))
-                   .arg(trials) << Qt::endl;
+        g_out << QStringLiteral("[%1,%2], ярус памяти %3 (%4), попыток %5:")
+                     .arg(n).arg(k).arg(tier)
+                     .arg(tier == 0 ? QStringLiteral("глобальная") : tier == 1 ? QStringLiteral("разделяемая") : QStringLiteral("большая разделяемая"))
+                     .arg(trials) << Qt::endl;
         for (int p = 0; p <= maxP; ++p) {
-            LeonLaunch L;
-            L.matrix = d_mat.get(); L.rows = k; L.cols = n; L.wordsPerRow = words;
-            L.rowsPerTrial = p; L.maxWeight = 0; L.firstTrial = 0; L.trials = trials;
-            L.outWords = d_out.get(); L.outCount = d_count.get(); L.capacity = 1024;
-            L.scratch = d_scratch.get();
+            LeonLaunch launch;
+            launch.matrix = d_mat.get(); launch.rows = k; launch.cols = n; launch.wordsPerRow = words;
+            launch.rowsPerTrial = p; launch.maxWeight = 0; launch.firstTrial = 0; launch.trials = trials;
+            launch.outWords = d_out.get(); launch.outCount = d_count.get(); launch.capacity = 1024;
+            launch.scratch = d_scratch.get();
             d_count.fillZero();
-            launchLeonTrials(L, LEON_THREADS, nullptr);   // прогрев
+            launchLeonTrials(launch, LEON_THREADS, nullptr);   // прогрев
             CUDA_CALL(cudaDeviceSynchronize());
             const auto t0 = std::chrono::steady_clock::now();
-            launchLeonTrials(L, LEON_THREADS, nullptr);
+            launchLeonTrials(launch, LEON_THREADS, nullptr);
             CUDA_CALL(cudaDeviceSynchronize());
             const double us = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / trials * 1e6;
-            out << QStringLiteral("  p=%1: %2 мкс на попытку").arg(p).arg(us, 0, 'f', 1) << Qt::endl;
+            g_out << QStringLiteral("  p=%1: %2 мкс на попытку").arg(p).arg(us, 0, 'f', 1) << Qt::endl;
 #ifdef LEON_PROFILE
             // Такты по фазам у нити 0 блока 0 — их пишет ядро, собранное с
             // LEON_PROFILE (см. leonkernel.cu); без него в буфере пусто.
@@ -3721,17 +3721,17 @@ int main(int argc, char* argv[])
                 CUDA_CALL(cudaMemcpy(prof.data(), d_out.get(), 7 * sizeof(quint64), cudaMemcpyDeviceToHost));
                 const double cols = double(std::max<quint64>(1, prof[6]));
                 if (getenv("LEON_GAUSS") && std::string(getenv("LEON_GAUSS")) != "col")
-                    out << QStringLiteral("    тактов на группу (нить 0): ключи %1, поиск опор %2, фаза B %3, исключение %4; групп %5")
-                               .arg(prof[0] / cols, 0, 'f', 0).arg(prof[1] / cols, 0, 'f', 0).arg(prof[2] / cols, 0, 'f', 0)
-                               .arg(prof[3] / cols, 0, 'f', 0).arg(prof[6]) << Qt::endl;
+                    g_out << QStringLiteral("    тактов на группу (нить 0): ключи %1, поиск опор %2, фаза B %3, исключение %4; групп %5")
+                                   .arg(prof[0] / cols, 0, 'f', 0).arg(prof[1] / cols, 0, 'f', 0).arg(prof[2] / cols, 0, 'f', 0)
+                                   .arg(prof[3] / cols, 0, 'f', 0).arg(prof[6]) << Qt::endl;
                 else
-                out << QStringLiteral("    тактов на столбец (нить 0): поиск %1 (из них загрузки %6), барьер %2, обмен+барьер %3, исключение %4, барьер %5")
-                           .arg(prof[0] / cols, 0, 'f', 0).arg(prof[1] / cols, 0, 'f', 0).arg(prof[2] / cols, 0, 'f', 0)
-                           .arg(prof[3] / cols, 0, 'f', 0).arg(prof[4] / cols, 0, 'f', 0).arg(prof[5] / cols, 0, 'f', 0) << Qt::endl;
+                    g_out << QStringLiteral("    тактов на столбец (нить 0): поиск %1 (из них загрузки %6), барьер %2, обмен+барьер %3, исключение %4, барьер %5")
+                                   .arg(prof[0] / cols, 0, 'f', 0).arg(prof[1] / cols, 0, 'f', 0).arg(prof[2] / cols, 0, 'f', 0)
+                                   .arg(prof[3] / cols, 0, 'f', 0).arg(prof[4] / cols, 0, 'f', 0).arg(prof[5] / cols, 0, 'f', 0) << Qt::endl;
             }
 #endif
         }
-        out.flush();
+        g_out.flush();
         return 0;
     }
 
@@ -3758,10 +3758,10 @@ int main(int argc, char* argv[])
             table.addBatch(batch.data(), perBatch);
             total += std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
         }
-        out << QStringLiteral("потоков %1, пачка %2 слов: %3 мс на пачку, %4 млн слов/с, в таблице %5")
-                   .arg(omp_get_max_threads()).arg(perBatch).arg(total / batches * 1e3, 0, 'f', 2)
-                   .arg(perBatch * batches / total / 1e6, 0, 'f', 1).arg(table.size()) << Qt::endl;
-        out.flush();
+        g_out << QStringLiteral("потоков %1, пачка %2 слов: %3 мс на пачку, %4 млн слов/с, в таблице %5")
+                     .arg(omp_get_max_threads()).arg(perBatch).arg(total / batches * 1e3, 0, 'f', 2)
+                     .arg(perBatch * batches / total / 1e6, 0, 'f', 1).arg(table.size()) << Qt::endl;
+        g_out.flush();
         return 0;
     }
 
@@ -3774,20 +3774,20 @@ int main(int argc, char* argv[])
             const QStringList parts = which.mid(7).split(QLatin1Char(','));
             const int n = parts.value(0).toInt(), k = parts.value(1).toInt();
             const quint64 seed = parts.size() > 2 ? parts.at(2).toULongLong() : 1ULL;
-            if (n <= 0 || k <= 0 || k >= n) { out << QStringLiteral("random:n,k — нужно 0 < k < n") << Qt::endl; return 2; }
+            if (n <= 0 || k <= 0 || k >= n) { g_out << QStringLiteral("random:n,k — нужно 0 < k < n") << Qt::endl; return 2; }
             code = Isd::randomCode(n, k, seed);
         } else {
             RunConfig cfg;
             if (!loadMatrixOrCase(which, cfg)) return 2;
             code = Isd::fromRows(cfg.matrix);
         }
-        const int W      = args.at(isdAt + 2).toInt();
-        const int missE  = isdAt + 3 < args.size() ? args.at(isdAt + 3).toInt() : 9;
-        const int runs   = isdAt + 4 < args.size() ? args.at(isdAt + 4).toInt() : 3;
-        const int sternP = isdAt + 5 < args.size() ? args.at(isdAt + 5).toInt() : 0;
-        const int sternL = isdAt + 6 < args.size() ? args.at(isdAt + 6).toInt() : 0;
-        const int rc = Isd::compare(out, code, W, missE > 0 ? missE : 9, runs > 0 ? runs : 3, sternP, sternL);
-        out.flush();
+        const int maxWeight = args.at(isdAt + 2).toInt();
+        const int missE     = isdAt + 3 < args.size() ? args.at(isdAt + 3).toInt() : 9;
+        const int runs      = isdAt + 4 < args.size() ? args.at(isdAt + 4).toInt() : 3;
+        const int sternP    = isdAt + 5 < args.size() ? args.at(isdAt + 5).toInt() : 0;
+        const int sternL    = isdAt + 6 < args.size() ? args.at(isdAt + 6).toInt() : 0;
+        const int rc = Isd::compare(g_out, code, maxWeight, missE > 0 ? missE : 9, runs > 0 ? runs : 3, sternP, sternL);
+        g_out.flush();
         return rc;
     }
 
@@ -3796,7 +3796,7 @@ int main(int argc, char* argv[])
         const int missExp = leonAt + 3 < args.size() ? args.at(leonAt + 3).toInt() : 9;
         const QString device = leonAt + 4 < args.size() ? args.at(leonAt + 4).toLower() : QStringLiteral("cpu");
         const int rc = leonRun(args.at(leonAt + 1), args.at(leonAt + 2).toInt(), missExp > 0 ? missExp : 9, device);
-        out.flush();
+        g_out.flush();
         return rc;
     }
 
@@ -3804,20 +3804,20 @@ int main(int argc, char* argv[])
     if (bzRunAt >= 0 && bzRunAt + 2 < args.size()) {
         const QString device = bzRunAt + 3 < args.size() ? args.at(bzRunAt + 3).toLower() : QStringLiteral("gpu");
         const int rc = bzRun(args.at(bzRunAt + 1), args.at(bzRunAt + 2).toInt(), device);
-        out.flush();
+        g_out.flush();
         return rc;
     }
 
     if (args.contains(QStringLiteral("--bench"))) {
         benchmark();
-        out.flush();
+        g_out.flush();
         return 0;
     }
 
     const int sweepAt = args.indexOf(QStringLiteral("--sweep"));
     if (sweepAt >= 0 && sweepAt + 1 < args.size()) {
         const int rc = sweepLaunchParams(args.at(sweepAt + 1));
-        out.flush();
+        g_out.flush();
         return rc;
     }
 
@@ -3826,7 +3826,7 @@ int main(int argc, char* argv[])
     if (probeAt >= 0 && probeAt + 1 < args.size()) {
         const int rows = probeAt + 2 < args.size() ? args.at(probeAt + 2).toInt() : 0;
         const int rc = probeOnly(args.at(probeAt + 1), rows);
-        out.flush();
+        g_out.flush();
         return rc;
     }
 
@@ -3835,28 +3835,28 @@ int main(int argc, char* argv[])
     if (rateAt >= 0 && rateAt + 2 < args.size()) {
         const int rows = rateAt + 3 < args.size() ? args.at(rateAt + 3).toInt() : 0;
         const int rc = updateRate(args.at(rateAt + 1), args.at(rateAt + 2).toInt(), rows);
-        out.flush();
+        g_out.flush();
         return rc;
     }
 
     const int tuneAt = args.indexOf(QStringLiteral("--tune"));
     if (tuneAt >= 0 && tuneAt + 1 < args.size()) {
         const int rc = tuneOnly(args.at(tuneAt + 1));
-        out.flush();
+        g_out.flush();
         return rc;
     }
 
     const int profAt = args.indexOf(QStringLiteral("--profile"));
     if (profAt >= 0 && profAt + 1 < args.size()) {
         const int rc = runSingleForProfiling(args.at(profAt + 1));
-        out.flush();
+        g_out.flush();
         return rc;
     }
 
     const int dumpAt = args.indexOf(QStringLiteral("--dump"));
     if (dumpAt >= 0 && dumpAt + 1 < args.size()) {
         const int rc = dumpGolden(args.at(dumpAt + 1));
-        out.flush();
+        g_out.flush();
         return rc;
     }
 
@@ -3913,7 +3913,7 @@ int main(int argc, char* argv[])
     testAutoTunedCheckpoints();
     testOversizedMatrixRejected();
 
-    out << Qt::endl
-        << QStringLiteral("итого: пройдено ") << g_passed << QStringLiteral(", провалено ") << g_failed << Qt::endl;
+    g_out << Qt::endl
+          << QStringLiteral("итого: пройдено ") << g_passed << QStringLiteral(", провалено ") << g_failed << Qt::endl;
     return g_failed == 0 ? 0 : 1;
 }

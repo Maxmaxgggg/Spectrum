@@ -119,7 +119,7 @@ public:
     // Пустой путь — стандартное место приложения. Явный нужен тестам.
     explicit AutosaveStore(const QString& rootDir = QString());
 
-    QString rootPath() const { return root; }
+    QString rootPath() const { return m_root; }
 
     // <столбцов>x<строк>-<8 знаков SHA-1 от текста матрицы>
     static QString folderName(const Matrix& matrix);
@@ -158,5 +158,5 @@ private:
     QString folderPath(const Matrix& matrix) const;
     static QString fileNameFor(ComputationSettings::Algorithm algorithm);
 
-    QString root;
+    QString m_root;
 };

@@ -49,5 +49,5 @@ private:
     int  indexOf(int slot) const;
     void flush() const;
 
-    QJsonArray matrices;
+    QJsonArray m_matrices;
 };

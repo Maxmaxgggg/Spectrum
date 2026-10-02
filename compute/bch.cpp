@@ -15,7 +15,7 @@ struct Field
     int m = 0, n = 0;
     std::vector<int> exp, log;   // α^i и обратно
 
-    explicit Field(int m_) : m(m_), n((1 << m_) - 1), exp(size_t(2 * n), 0), log(size_t(n) + 1, 0)
+    explicit Field(int degree) : m(degree), n((1 << degree) - 1), exp(size_t(2 * n), 0), log(size_t(n) + 1, 0)
     {
         int x = 1;
         for (int i = 0; i < n; ++i) {
@@ -123,9 +123,9 @@ Poly fromBits(uint32_t bits)
 // Конструктивное расстояние: сколько подряд α^1, α^2, … среди корней.
 int designedDistance(const std::vector<bool>& isRoot, int n)
 {
-    int L = 0;
-    while (L + 1 < n && isRoot[size_t(L + 1)]) ++L;
-    return L + 1;
+    int run = 0;
+    while (run + 1 < n && isRoot[size_t(run + 1)]) ++run;
+    return run + 1;
 }
 
 // Строки систематической матрицы: проверочная часть строки i — x^{n−k+i}

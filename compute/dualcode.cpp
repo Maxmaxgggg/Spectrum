@@ -12,60 +12,60 @@ Matrix generatorToParity(const Matrix& gen)
 
     int m = gen.size();
     int n = gen.first().size();
-    const int W = 64;
-    int words = (n + W - 1) / W;
+    constexpr int WORD_BITS = 64;
+    int words = (n + WORD_BITS - 1) / WORD_BITS;
     QVector<QVector<uint64_t>> rows(m, QVector<uint64_t>(words, 0));
 
-    auto set_bit = [&](QVector<uint64_t>& v, int idx) {
-        v[idx / W] |= (uint64_t(1) << (idx % W));
+    auto setBit = [&](QVector<uint64_t>& v, int idx) {
+        v[idx / WORD_BITS] |= (uint64_t(1) << (idx % WORD_BITS));
         };
-    auto get_bit = [&](const QVector<uint64_t>& v, int idx)->int {
-        return (v[idx / W] >> (idx % W)) & 1u;
+    auto getBit = [&](const QVector<uint64_t>& v, int idx)->int {
+        return (v[idx / WORD_BITS] >> (idx % WORD_BITS)) & 1u;
         };
     for (int r = 0; r < m; ++r) {
         const QString& s = gen[r].trimmed();
         for (int c = 0; c < n && c < s.size(); ++c) {
             QChar ch = s.at(c);
             if (ch == QChar('1')) {
-                set_bit(rows[r], c);
+                setBit(rows[r], c);
             }
         }
     }
-    QVector<int> pivot_row(n, -1);
+    QVector<int> pivotRow(n, -1);
     int r = 0;
     for (int c = 0; c < n && r < m; ++c) {
         int sel = -1;
         for (int i = r; i < m; ++i) {
-            if (get_bit(rows[i], c)) { sel = i; break; }
+            if (getBit(rows[i], c)) { sel = i; break; }
         }
         if (sel == -1) continue;
         if (sel != r) rows.swapItemsAt(sel, r);
-        pivot_row[c] = r;
+        pivotRow[c] = r;
         for (int i = 0; i < m; ++i) {
             if (i == r) continue;
-            if (get_bit(rows[i], c)) {
+            if (getBit(rows[i], c)) {
                 for (int w = 0; w < words; ++w) rows[i][w] ^= rows[r][w];
             }
         }
         ++r;
     }
-    QVector<int> free_cols;
-    for (int c = 0; c < n; ++c) if (pivot_row[c] == -1) free_cols.append(c);
+    QVector<int> freeCols;
+    for (int c = 0; c < n; ++c) if (pivotRow[c] == -1) freeCols.append(c);
     Matrix parity;
-    parity.reserve(free_cols.size());
-    for (int fcol : free_cols) {
+    parity.reserve(freeCols.size());
+    for (int fcol : freeCols) {
         QVector<uint64_t> vec(words, 0);
-        vec[fcol / W] |= (uint64_t(1) << (fcol % W));
+        vec[fcol / WORD_BITS] |= (uint64_t(1) << (fcol % WORD_BITS));
         for (int p = 0; p < n; ++p) {
-            int prow = pivot_row[p];
+            int prow = pivotRow[p];
             if (prow == -1) continue;
-            int bit = get_bit(rows[prow], fcol);
-            if (bit) vec[p / W] |= (uint64_t(1) << (p % W));
+            int bit = getBit(rows[prow], fcol);
+            if (bit) vec[p / WORD_BITS] |= (uint64_t(1) << (p % WORD_BITS));
         }
         QString out;
         out.reserve(n);
         for (int c = 0; c < n; ++c) {
-            int b = ((vec[c / W] >> (c % W)) & 1ull) ? 1 : 0;
+            int b = ((vec[c / WORD_BITS] >> (c % WORD_BITS)) & 1ull) ? 1 : 0;
             out.append(b ? QChar('1') : QChar('0'));
         }
         parity.append(out);

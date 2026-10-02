@@ -32,5 +32,5 @@ public:
                        const QWidget* widget = nullptr) const override;
 
 private:
-    mutable QHash<int, QIcon> cache;
+    mutable QHash<int, QIcon> m_cache;
 };

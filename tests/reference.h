@@ -78,7 +78,7 @@ inline QStringList extHamming8_4()
 // Голей (24,12): 1 + 759z^8 + 2576z^12 + 759z^16 + z^24
 inline QStringList golay24_12()
 {
-    static const char* B[12] = {
+    static const char* const ROWS[12] = {
         "011111111111", "111011100010", "110111000101", "101110001011",
         "111100010110", "111000101101", "110001011011", "100010110111",
         "100101101110", "101011011100", "110110111000", "101101110001",
@@ -87,7 +87,7 @@ inline QStringList golay24_12()
     for (int i = 0; i < 12; ++i) {
         QString r(12, QLatin1Char('0'));
         r[i] = QLatin1Char('1');
-        rows << r + QLatin1String(B[i]);
+        rows << r + QLatin1String(ROWS[i]);
     }
     return rows;
 }

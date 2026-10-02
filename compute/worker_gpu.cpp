@@ -17,9 +17,9 @@ void Worker::computeSpectrumGpuGrayShort(const CodeGeometry& g)
     plan.totalOps    = 1ULL << g.numOfRows;
     plan.layerSize   = [&g](quint64) { return quint64(1) << g.numOfRows; };
     plan.chunkTarget = g.chunkSize;
-    plan.stream      = buffers->stream.get();
+    plan.stream      = m_buffers->stream.get();
     plan.run = [this, &g](quint64, const LayerSlice& s) {
-        launchSpectrumKernelGrayShort(g.blocksGpu, g.threadsGpu, buffers->stream.get(), buffers->d_spectrum.get(),
+        launchSpectrumKernelGrayShort(g.blocksGpu, g.threadsGpu, m_buffers->stream.get(), m_buffers->d_spectrum.get(),
                                       int(g.numOfCols), int(g.numOfRows), int(g.wordsPerRow),
                                       s.offset, s.size);
         return true;
@@ -34,12 +34,12 @@ void Worker::computeSpectrumGpuNoGrayShort(const CodeGeometry& g)
     ChunkPlan plan;
     plan.totalOps    = totalLayerOps(g);
     plan.lastLayer   = g.maxRows;
-    plan.layerSize   = [this, &g](quint64 r) { return binomTable(g.numOfRows, r); };
+    plan.layerSize   = [this, &g](quint64 r) { return m_binomTable(g.numOfRows, r); };
     plan.chunkTarget = g.chunkSize;
-    plan.stream      = buffers->stream.get();
+    plan.stream      = m_buffers->stream.get();
     plan.run = [this, &g](quint64 r, const LayerSlice& s) {
-        launchSpectrumKernelShort(buffers->d_spectrum.get(), buffers->d_binomTable.get(), g.blocksGpu, g.threadsGpu,
-                                  buffers->stream.get(), int(g.numOfCols), int(g.numOfRows), int(g.wordsPerRow),
+        launchSpectrumKernelShort(m_buffers->d_spectrum.get(), m_buffers->d_binomTable.get(), g.blocksGpu, g.threadsGpu,
+                                  m_buffers->stream.get(), int(g.numOfCols), int(g.numOfRows), int(g.wordsPerRow),
                                   s.offset, s.size, r, s.slot);
         return true;
     };
@@ -94,9 +94,9 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
     ChunkPlan plan;
     plan.totalOps    = totalLayerOps(g);
     plan.lastLayer   = g.maxRows;
-    plan.layerSize   = [this, &g](quint64 r) { return binomTable(g.numOfRows, r); };
+    plan.layerSize   = [this, &g](quint64 r) { return m_binomTable(g.numOfRows, r); };
     plan.chunkTarget = maxThreads * masksPerThread;
-    plan.stream      = buffers->stream.get();
+    plan.stream      = m_buffers->stream.get();
     plan.run = [&](quint64 r, const LayerSlice& slice) {
         const quint64 chunkSize = slice.size;
 
@@ -119,15 +119,15 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
         // совмещения которой с расчётом заведён второй буфер.
         for (quint64 tid = 0; tid < numStartMasks; ++tid) {
             const quint64 rank = slice.offset + tid * masksPerThread;
-            assert(rank < binomTable(numOfRows, r));
+            assert(rank < m_binomTable(numOfRows, r));
             Combinations::unrankPositions(rank, int(numOfRows), int(r),
                                           hostSlots + tid * Constants::MAX_POSITIONS,
-                                          Constants::MAX_POSITIONS, binomTable);
+                                          Constants::MAX_POSITIONS, m_binomTable);
         }
 
         CUDA_CALL(cudaMemcpyAsync(d_slots.get(), hostSlots, numStartMasks * slotBytes,
-                                  cudaMemcpyHostToDevice, buffers->stream.get()));
-        CUDA_CALL(cudaEventRecord(slotsCopied[slotsBuf].get(), buffers->stream.get()));
+                                  cudaMemcpyHostToDevice, m_buffers->stream.get()));
+        CUDA_CALL(cudaEventRecord(slotsCopied[slotsBuf].get(), m_buffers->stream.get()));
         slotsBusy[slotsBuf] = true;
         slotsBuf ^= 1;
 
@@ -139,7 +139,7 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
         #else
         uint64_t* const maskCounter = nullptr;
         #endif
-        launchSpectrumKernelLong(grid, threadsPerBlock, buffers->stream.get(), buffers->d_spectrum.get(), buffers->d_matrix.get(),
+        launchSpectrumKernelLong(grid, threadsPerBlock, m_buffers->stream.get(), m_buffers->d_spectrum.get(), m_buffers->d_matrix.get(),
                                  int(g.numOfCols), int(numOfRows), int(g.wordsPerRow), chunkSize,
                                  d_slots.get(), masksPerThread, numStartMasks, r, maskCounter,
                                  slice.slot);
@@ -165,7 +165,7 @@ void Worker::computeSpectrumGpuNoGrayLong(const CodeGeometry& g)
 // Итоговая копия спектра с видеокарты.
 void Worker::copySpectrumFromDevice(int numOfCols)
 {
-    CUDA_CALL(cudaMemcpyAsync(buffers->h_spectrum.get(), buffers->d_spectrum.get(), size_t(numOfCols + 1) * sizeof(quint64),
-                              cudaMemcpyDeviceToHost, buffers->stream.get()));
-    CUDA_CALL(cudaStreamSynchronize(buffers->stream.get()));
+    CUDA_CALL(cudaMemcpyAsync(m_buffers->h_spectrum.get(), m_buffers->d_spectrum.get(), size_t(numOfCols + 1) * sizeof(quint64),
+                              cudaMemcpyDeviceToHost, m_buffers->stream.get()));
+    CUDA_CALL(cudaStreamSynchronize(m_buffers->stream.get()));
 }

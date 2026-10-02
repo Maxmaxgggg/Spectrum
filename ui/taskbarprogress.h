@@ -31,8 +31,8 @@ public:
     void clear();
 
 private:
-    QWidget* window = nullptr;
+    QWidget* m_window = nullptr;
 
     // Не ITaskbarList3*, чтобы не тащить сюда shobjidl.h.
-    void* taskbar = nullptr;
+    void* m_taskbar = nullptr;
 };

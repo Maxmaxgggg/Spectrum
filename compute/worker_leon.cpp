@@ -32,13 +32,13 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     const int cols  = int(g.numOfCols);
     const int words = int(g.wordsPerRow);
     const int depth = int(g.maxRows);
-    const int maxWeight = settings.leonWeight;
+    const int maxWeight = m_settings.leonWeight;
 
     // Память под слова — из настроек; по умолчанию половина физической: таблица
     // растёт удвоением, и в момент роста ей нужно место под старую и новую
     // копии сразу.
-    const quint64 kTableLimitBytes = settings.leonMemoryMb > 0
-        ? quint64(settings.leonMemoryMb) << 20
+    const quint64 kTableLimitBytes = m_settings.leonMemoryMb > 0
+        ? quint64(m_settings.leonMemoryMb) << 20
         : std::max<quint64>(256ULL << 20, Leon::physicalMemoryBytes() / 2);
 
     // Ранг проверяется один раз здесь: ядро молча даёт пустую попытку, а
@@ -47,7 +47,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         std::vector<int> order;
         Leon::shuffledColumns(cols, 0, order);
         InfoSets::InfoSet set;
-        if (!InfoSets::systematize(buffers->h_matrix.get(), rows, cols, words, order, nullptr, set))
+        if (!InfoSets::systematize(m_buffers->h_matrix.get(), rows, cols, words, order, nullptr, set))
             throw std::invalid_argument(
                 "строки матрицы зависимы: стохастическому поиску нужна матрица полного ранга");
     }
@@ -64,18 +64,18 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         const double ops = double(trials) * g.leonWordsPerTrial;
         return ops >= 1.8e19 ? std::numeric_limits<quint64>::max() : quint64(ops);
     };
-    progress.begin(opsFor(target), 0, 0);
+    m_progress.begin(opsFor(target), 0, 0);
 
     quint64 launched  = 0;   // попыток начато
     quint64 collected = 0;   // попыток, чьи слова уже в таблице
 
     auto retarget = [&]() {
         const quint64 needed = Leon::trialsForAll(cols, rows, maxWeight, depth, g.leonWindow,
-                                                  settings.leonMissProbability(),
+                                                  m_settings.leonMissProbability(),
                                                   table.countByWeight());
         if (needed > target) {
             target = needed;
-            progress.setTotalOps(opsFor(target));
+            m_progress.setTotalOps(opsFor(target));
         }
     };
 
@@ -98,18 +98,18 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
 
     auto publish = [&](bool force) {
         const std::vector<quint64> found = table.countByWeight();
-        buffers->h_spectrum.fillZero();
-        buffers->h_spectrum[0] = 1;
+        m_buffers->h_spectrum.fillZero();
+        m_buffers->h_spectrum[0] = 1;
         for (size_t w = 1; w < found.size() && w < g.spectrumSize; ++w)
-            buffers->h_spectrum[w] = found[w];
+            m_buffers->h_spectrum[w] = found[w];
 
-        const ProgressTracker::Due due = progress.due();
+        const ProgressTracker::Due due = m_progress.due();
         if (due.estimate)
             reportEstimate();
         if (due.bar)
             reportProgressBar();
         if (due.spectrum || force) {
-            progress.markSpectrum();
+            m_progress.markSpectrum();
             updateSpectrum(cols);
 
             // Вероятность пропустить хотя бы одно слово: по модели, для
@@ -156,29 +156,29 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
             for (long long t = 0; t < (long long)count; ++t) {
                 auto visit = [&](const quint64* word, int weight) { table.add(word, weight); };
                 if (g.leonWindow > 0)
-                    Leon::trialStern(buffers->h_matrix.get(), rows, cols, words, depth, g.leonWindow, maxWeight,
+                    Leon::trialStern(m_buffers->h_matrix.get(), rows, cols, words, depth, g.leonWindow, maxWeight,
                                      launched + quint64(t), visit);
                 else
-                    Leon::trial(buffers->h_matrix.get(), rows, cols, words, depth, maxWeight,
+                    Leon::trial(m_buffers->h_matrix.get(), rows, cols, words, depth, maxWeight,
                                 launched + quint64(t), visit);
             }
 
             launched  += count;
             collected  = launched;
-            activeTrials = collected;
-            progress.addOps(quint64(double(count) * g.leonWordsPerTrial));
-            runState.doneOps = progress.doneOps();
+            m_activeTrials = collected;
+            m_progress.addOps(quint64(double(count) * g.leonWordsPerTrial));
+            m_runState.doneOps = m_progress.doneOps();
 
             retarget();
             checkMemory();
             publish(false);
-            if (cancelled.load())
+            if (m_cancelled.load())
                 break;
         }
         publish(true);
         m_foundWords.clear();
         m_foundWeights.clear();
-        if (keepFoundWords && !cancelled.load())
+        if (m_keepFoundWords && !m_cancelled.load())
             table.exportWords(m_foundWords, m_foundWeights);
         return;
     }
@@ -213,7 +213,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
 
     DeviceBuffer<quint64> d_mat;
     d_mat.allocate(size_t(rows) * words);
-    CUDA_CALL(cudaMemcpy(d_mat.get(), buffers->h_matrix.get(), size_t(rows) * words * sizeof(quint64),
+    CUDA_CALL(cudaMemcpy(d_mat.get(), m_buffers->h_matrix.get(), size_t(rows) * words * sizeof(quint64),
                          cudaMemcpyHostToDevice));
 
     struct Slot
@@ -355,29 +355,29 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
 
     auto launchBatch = [&](Slot& s, quint64 first, quint64 count) {
         CUDA_CALL(cudaMemsetAsync(s.d_count.get(), 0, sizeof(unsigned), s.stream.get()));
-        LeonLaunch L;
-        L.matrix       = d_mat.get();
-        L.rows         = rows;
-        L.cols         = cols;
-        L.wordsPerRow  = words;
-        L.rowsPerTrial = depth;
-        L.maxWeight    = maxWeight;
-        L.firstTrial   = first;
-        L.trials       = int(count);
-        L.outWords     = s.d_out.get();
-        L.outCount     = s.d_count.get();
-        L.capacity     = unsigned(capacity);
-        L.scratch      = s.d_scratch.get();
-        L.window       = g.leonWindow;
-        L.pairCapacity = pairCapacity;
+        LeonLaunch launch;
+        launch.matrix       = d_mat.get();
+        launch.rows         = rows;
+        launch.cols         = cols;
+        launch.wordsPerRow  = words;
+        launch.rowsPerTrial = depth;
+        launch.maxWeight    = maxWeight;
+        launch.firstTrial   = first;
+        launch.trials       = int(count);
+        launch.outWords     = s.d_out.get();
+        launch.outCount     = s.d_count.get();
+        launch.capacity     = unsigned(capacity);
+        launch.scratch      = s.d_scratch.get();
+        launch.window       = g.leonWindow;
+        launch.pairCapacity = pairCapacity;
         if (seen.capacity > 0) {
-            L.seenFp     = seen.fp.get();
-            L.seenHits   = seen.hits.get();
-            L.seenWeight = seen.weight.get();
-            L.seenCount  = seen.count.get();
-            L.seenMask   = seen.capacity - 1;
+            launch.seenFp     = seen.fp.get();
+            launch.seenHits   = seen.hits.get();
+            launch.seenWeight = seen.weight.get();
+            launch.seenCount  = seen.count.get();
+            launch.seenMask   = seen.capacity - 1;
         }
-        launchLeonTrials(L, THREADS, s.stream.get());
+        launchLeonTrials(launch, THREADS, s.stream.get());
         // Счётчик здесь не копируется. Копии всех потоков стоят в одной
         // очереди движка копирования, и четыре байта, поставленные за ядром
         // этой пачки, задержали бы за собой мегабайты соседней: та ждала бы
@@ -486,8 +486,8 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         first = launched;
         count = std::min(batchTrials, target - launched);
         launched += count;
-        progress.addOps(quint64(double(count) * g.leonWordsPerTrial));
-        runState.doneOps = progress.doneOps();
+        m_progress.addOps(quint64(double(count) * g.leonWordsPerTrial));
+        m_runState.doneOps = m_progress.doneOps();
         return true;
     };
 
@@ -499,7 +499,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
             for (Slot& s : slot)
                 if (s.pending)
                     collectOrRetry(s);
-            activeTrials = collected;
+            m_activeTrials = collected;
             retarget();
             checkMemory();
             if (deferred.empty() && launched >= target)
@@ -514,13 +514,13 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
             collectOrRetry(s);
         growSeen();
         launchBatch(s, first, count);
-        activeTrials = collected;
+        m_activeTrials = collected;
 
         retarget();
         checkMemory();
         publish(false);
         cur ^= 1;
-        if (cancelled.load())
+        if (m_cancelled.load())
             break;
     }
 
@@ -528,10 +528,10 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     // закончиться — иначе они писали бы в уже отданную память.
     for (Slot& s : slot)
         CUDA_CALL(cudaStreamSynchronize(s.stream.get()));
-    activeTrials = collected;
+    m_activeTrials = collected;
     publish(true);
     m_foundWords.clear();
     m_foundWeights.clear();
-    if (keepFoundWords && !cancelled.load())
+    if (m_keepFoundWords && !m_cancelled.load())
         table.exportWords(m_foundWords, m_foundWeights);
 }

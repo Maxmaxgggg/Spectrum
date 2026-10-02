@@ -28,7 +28,7 @@ public:
     MatrixSlotsDialog(Mode mode, const QString& matrixText, QWidget* parent = nullptr);
 
     // Режим Load: текст выбранной матрицы (пусто, если ничего не выбрано).
-    QString chosenMatrix() const { return chosen; }
+    QString chosenMatrix() const { return m_chosen; }
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -42,15 +42,15 @@ private:
     // Режим Load: имя в поле изменили — переименовать выбранную ячейку.
     void renameSelected();
 
-    Mode          mode;
-    QString       matrixText;
-    QString       chosen;
-    MatrixLibrary library;
+    Mode          m_mode;
+    QString       m_matrixText;
+    QString       m_chosen;
+    MatrixLibrary m_library;
 
-    QVector<QToolButton*> cells;
-    int                   selected = -1;
-    QLineEdit*            nameEdit  = nullptr;
-    QLabel*               sizeLabel = nullptr;
-    QPushButton*          okButton  = nullptr;
-    QPushButton*          removeButton = nullptr;
+    QVector<QToolButton*> m_cells;
+    int                   m_selected = -1;
+    QLineEdit*            m_nameEdit  = nullptr;
+    QLabel*               m_sizeLabel = nullptr;
+    QPushButton*          m_okButton  = nullptr;
+    QPushButton*          m_removeButton = nullptr;
 };

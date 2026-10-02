@@ -17,7 +17,7 @@ protected:
     // Перехват ввода с клавиатуры
     void keyPressEvent(QKeyEvent *e) override;
 private:
-    const QRegularExpression reInvalid{QStringLiteral("[^01\n]")};
+    const QRegularExpression m_reInvalid{QStringLiteral("[^01\n]")};
 };
 
 #endif // FILTERPLAINTEXTEDIT_H

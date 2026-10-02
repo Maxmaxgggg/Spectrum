@@ -16,7 +16,7 @@ constexpr int CELL_PX = 64;
 }
 
 MatrixSlotsDialog::MatrixSlotsDialog(Mode mode, const QString& matrixText, QWidget* parent)
-    : QDialog(parent), mode(mode), matrixText(matrixText)
+    : QDialog(parent), m_mode(mode), m_matrixText(matrixText)
 {
     setWindowTitle(mode == Mode::Load ? tr("Загрузить матрицу") : tr("Сохранить матрицу"));
 
@@ -24,7 +24,7 @@ MatrixSlotsDialog::MatrixSlotsDialog(Mode mode, const QString& matrixText, QWidg
 
     auto* const grid = new QGridLayout;
     grid->setSpacing(4);
-    cells.resize(MatrixLibrary::SLOTS);
+    m_cells.resize(MatrixLibrary::SLOTS);
     for (int slot = 0; slot < MatrixLibrary::SLOTS; ++slot) {
         auto* const cell = new QToolButton(this);
         cell->setFixedSize(CELL_PX, CELL_PX);
@@ -40,55 +40,55 @@ MatrixSlotsDialog::MatrixSlotsDialog(Mode mode, const QString& matrixText, QWidg
         connect(cell, &QToolButton::clicked, this, [this, slot]() { select(slot); });
         connect(cell, &QToolButton::pressed, this, [this, slot]() { select(slot); });
         grid->addWidget(cell, slot / MatrixLibrary::COLS, slot % MatrixLibrary::COLS);
-        cells[slot] = cell;
+        m_cells[slot] = cell;
     }
     layout->addLayout(grid);
 
     auto* const nameRow = new QHBoxLayout;
-    nameEdit = new QLineEdit(this);
-    nameEdit->setPlaceholderText(tr("Название"));
+    m_nameEdit = new QLineEdit(this);
+    m_nameEdit->setPlaceholderText(tr("Название"));
     // При загрузке поле тоже редактируется: так матрицу можно переименовать,
     // не пересохраняя. Применяется по Enter или уходу фокуса.
     if (mode == Mode::Load)
-        connect(nameEdit, &QLineEdit::editingFinished, this, &MatrixSlotsDialog::renameSelected);
-    sizeLabel = new QLabel(this);
-    sizeLabel->setMinimumWidth(80);
-    nameRow->addWidget(nameEdit, 1);
-    nameRow->addWidget(sizeLabel);
+        connect(m_nameEdit, &QLineEdit::editingFinished, this, &MatrixSlotsDialog::renameSelected);
+    m_sizeLabel = new QLabel(this);
+    m_sizeLabel->setMinimumWidth(80);
+    nameRow->addWidget(m_nameEdit, 1);
+    nameRow->addWidget(m_sizeLabel);
     layout->addLayout(nameRow);
 
     auto* const buttons = new QDialogButtonBox(this);
-    okButton = buttons->addButton(mode == Mode::Load ? tr("Загрузить") : tr("Сохранить"),
+    m_okButton = buttons->addButton(mode == Mode::Load ? tr("Загрузить") : tr("Сохранить"),
                                   QDialogButtonBox::AcceptRole);
     if (mode == Mode::Load) {
-        removeButton = buttons->addButton(tr("Удалить"), QDialogButtonBox::DestructiveRole);
-        connect(removeButton, &QPushButton::clicked, this, &MatrixSlotsDialog::removeSelected);
+        m_removeButton = buttons->addButton(tr("Удалить"), QDialogButtonBox::DestructiveRole);
+        connect(m_removeButton, &QPushButton::clicked, this, &MatrixSlotsDialog::removeSelected);
     }
     buttons->addButton(QDialogButtonBox::Cancel);
     connect(buttons, &QDialogButtonBox::accepted, this, &MatrixSlotsDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &MatrixSlotsDialog::reject);
     layout->addWidget(buttons);
 
-    library.load();
+    m_library.load();
     rebuild();
     // При сохранении подпись по умолчанию — размер матрицы.
     if (mode == Mode::Save)
-        nameEdit->setText(tr("Матрица %1").arg(MatrixLibrary::dimensions(matrixText)));
+        m_nameEdit->setText(tr("Матрица %1").arg(MatrixLibrary::dimensions(matrixText)));
 }
 
 void MatrixSlotsDialog::rebuild()
 {
     for (int slot = 0; slot < MatrixLibrary::SLOTS; ++slot) {
-        const MatrixLibrary::Entry entry = library.at(slot);
-        QToolButton* const cell = cells[slot];
+        const MatrixLibrary::Entry entry = m_library.at(slot);
+        QToolButton* const cell = m_cells[slot];
         cell->setText(entry.slot < 0 ? QString() : MatrixLibrary::dimensions(entry.matrix));
         cell->setToolTip(entry.name);
         // В режиме загрузки пустые ячейки не выбираются — там нечего брать.
-        cell->setEnabled(mode == Mode::Save || entry.slot >= 0);
+        cell->setEnabled(m_mode == Mode::Save || entry.slot >= 0);
     }
-    okButton->setEnabled(selected >= 0 && (mode == Mode::Save || library.has(selected)));
-    if (removeButton)
-        removeButton->setEnabled(selected >= 0 && library.has(selected));
+    m_okButton->setEnabled(m_selected >= 0 && (m_mode == Mode::Save || m_library.has(m_selected)));
+    if (m_removeButton)
+        m_removeButton->setEnabled(m_selected >= 0 && m_library.has(m_selected));
 }
 
 bool MatrixSlotsDialog::eventFilter(QObject* watched, QEvent* event)
@@ -97,7 +97,7 @@ bool MatrixSlotsDialog::eventFilter(QObject* watched, QEvent* event)
     if (event->type() == QEvent::Enter || event->type() == QEvent::Leave) {
         const QVariant slot = watched->property("slot");
         if (slot.isValid())
-            showName(event->type() == QEvent::Enter ? slot.toInt() : selected);
+            showName(event->type() == QEvent::Enter ? slot.toInt() : m_selected);
     }
     return QDialog::eventFilter(watched, event);
 }
@@ -105,19 +105,19 @@ bool MatrixSlotsDialog::eventFilter(QObject* watched, QEvent* event)
 void MatrixSlotsDialog::showName(int slot)
 {
     // Пока пользователь печатает в поле, наведение его не трогает.
-    if (nameEdit->hasFocus())
+    if (m_nameEdit->hasFocus())
         return;
-    if (mode == Mode::Save && slot == selected) {
+    if (m_mode == Mode::Save && slot == m_selected) {
         // В поле — то, что пользователь напечатал; не затирать.
         return;
     }
-    const MatrixLibrary::Entry entry = slot >= 0 ? library.at(slot) : MatrixLibrary::Entry();
-    if (mode == Mode::Load) {
-        nameEdit->setText(entry.name);
-        sizeLabel->setText(entry.slot < 0 ? QString() : MatrixLibrary::dimensions(entry.matrix));
+    const MatrixLibrary::Entry entry = slot >= 0 ? m_library.at(slot) : MatrixLibrary::Entry();
+    if (m_mode == Mode::Load) {
+        m_nameEdit->setText(entry.name);
+        m_sizeLabel->setText(entry.slot < 0 ? QString() : MatrixLibrary::dimensions(entry.matrix));
     } else {
         // Подсказка о занятой ячейке — в подписи размера, поле не трогаем.
-        sizeLabel->setText(entry.slot < 0 ? QString() : tr("занято: %1").arg(entry.name));
+        m_sizeLabel->setText(entry.slot < 0 ? QString() : tr("занято: %1").arg(entry.name));
     }
 }
 
@@ -125,51 +125,51 @@ void MatrixSlotsDialog::select(int slot)
 {
     // Щелчок по ячейке — конец правки имени прежней: применить и показать
     // имя новой.
-    if (nameEdit->hasFocus())
-        nameEdit->clearFocus();
-    selected = slot;
-    cells[slot]->setChecked(true);
-    if (mode == Mode::Load) {
+    if (m_nameEdit->hasFocus())
+        m_nameEdit->clearFocus();
+    m_selected = slot;
+    m_cells[slot]->setChecked(true);
+    if (m_mode == Mode::Load) {
         showName(slot);
     } else {
-        const MatrixLibrary::Entry entry = library.at(slot);
-        sizeLabel->setText(entry.slot < 0 ? QString() : tr("занято: %1").arg(entry.name));
+        const MatrixLibrary::Entry entry = m_library.at(slot);
+        m_sizeLabel->setText(entry.slot < 0 ? QString() : tr("занято: %1").arg(entry.name));
     }
-    okButton->setEnabled(mode == Mode::Save || library.has(slot));
-    if (removeButton)
-        removeButton->setEnabled(library.has(slot));
+    m_okButton->setEnabled(m_mode == Mode::Save || m_library.has(slot));
+    if (m_removeButton)
+        m_removeButton->setEnabled(m_library.has(slot));
 }
 
 void MatrixSlotsDialog::renameSelected()
 {
-    if (mode != Mode::Load || selected < 0)
+    if (m_mode != Mode::Load || m_selected < 0)
         return;
-    library.load();
-    const MatrixLibrary::Entry entry = library.at(selected);
-    const QString name = nameEdit->text().trimmed();
+    m_library.load();
+    const MatrixLibrary::Entry entry = m_library.at(m_selected);
+    const QString name = m_nameEdit->text().trimmed();
     if (entry.slot < 0 || name.isEmpty() || name == entry.name)
         return;
-    library.save(selected, name, entry.matrix);
-    cells[selected]->setToolTip(name);
+    m_library.save(m_selected, name, entry.matrix);
+    m_cells[m_selected]->setToolTip(name);
 }
 
 void MatrixSlotsDialog::accept()
 {
-    if (selected < 0)
+    if (m_selected < 0)
         return;
-    if (mode == Mode::Load)
+    if (m_mode == Mode::Load)
         renameSelected();
-    library.load();
-    if (mode == Mode::Load) {
-        const MatrixLibrary::Entry entry = library.at(selected);
+    m_library.load();
+    if (m_mode == Mode::Load) {
+        const MatrixLibrary::Entry entry = m_library.at(m_selected);
         if (entry.slot < 0)
             return;
-        chosen = entry.matrix;
+        m_chosen = entry.matrix;
         QDialog::accept();
         return;
     }
-    if (library.has(selected)) {
-        const MatrixLibrary::Entry old = library.at(selected);
+    if (m_library.has(m_selected)) {
+        const MatrixLibrary::Entry old = m_library.at(m_selected);
         const auto answer = QMessageBox::question(
             this, tr("Сохранить матрицу"),
             tr("В этой ячейке уже лежит «%1» %2. Заменить?").arg(old.name, MatrixLibrary::dimensions(old.matrix)),
@@ -177,25 +177,25 @@ void MatrixSlotsDialog::accept()
         if (answer != QMessageBox::Yes)
             return;
     }
-    const QString name = nameEdit->text().trimmed();
-    library.save(selected, name.isEmpty() ? tr("Матрица %1").arg(MatrixLibrary::dimensions(matrixText)) : name,
-                 matrixText);
+    const QString name = m_nameEdit->text().trimmed();
+    m_library.save(m_selected, name.isEmpty() ? tr("Матрица %1").arg(MatrixLibrary::dimensions(m_matrixText)) : name,
+                 m_matrixText);
     QDialog::accept();
 }
 
 void MatrixSlotsDialog::removeSelected()
 {
-    if (selected < 0 || !library.has(selected))
+    if (m_selected < 0 || !m_library.has(m_selected))
         return;
-    const MatrixLibrary::Entry entry = library.at(selected);
+    const MatrixLibrary::Entry entry = m_library.at(m_selected);
     const auto answer = QMessageBox::question(
         this, tr("Удалить матрицу"),
         tr("Удалить «%1» %2?").arg(entry.name, MatrixLibrary::dimensions(entry.matrix)),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (answer != QMessageBox::Yes)
         return;
-    library.load();
-    library.remove(selected);
+    m_library.load();
+    m_library.remove(m_selected);
     rebuild();
-    showName(selected);
+    showName(m_selected);
 }

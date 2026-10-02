@@ -57,8 +57,8 @@ private:
     // Название не рисуется, когда его заменяет полоса вкладок.
     bool showsTabs() const;
 
-    QDockWidget* dock  = nullptr;
-    QToolButton* floatButton = nullptr;
-    QToolButton* closeButton = nullptr;
-    QTabBar*     tabBar      = nullptr;
+    QDockWidget* m_dock  = nullptr;
+    QToolButton* m_floatButton = nullptr;
+    QToolButton* m_closeButton = nullptr;
+    QTabBar*     m_tabBar      = nullptr;
 };

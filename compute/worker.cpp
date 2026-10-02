@@ -13,7 +13,7 @@ using namespace std::chrono;
 
 Worker::Worker(QObject *parent)
     : QObject(parent)
-    , buffers(new WorkerBuffers)
+    , m_buffers(new WorkerBuffers)
 {
     // Спектр уходит в окно, а настройки приходят из него через очередь
     // событий; вызов по имени (invokeMethod) ищет тип тоже по имени.
@@ -67,7 +67,7 @@ quint64 Worker::totalCombinations(quint64 k, quint64 maxComb) const
 
     quint64 sum = 0;
     for (quint64 r = 0; r <= maxComb; ++r) {
-        const quint64 term = binomTable(k, r);
+        const quint64 term = m_binomTable(k, r);
         // Сама сумма тоже может не поместиться: при k = 66 и maxComb = 33
         // это уже больше 2^65. Такой расчёт всё равно занял бы столетия,
         // поэтому просто упираемся в потолок, а не выдаём мусор.
@@ -81,24 +81,24 @@ quint64 Worker::totalCombinations(quint64 k, quint64 maxComb) const
 // Отчёт об оценке оставшегося времени и средней скорости.
 void Worker::reportEstimate()
 {
-    if (probeMode)
+    if (m_probeMode)
         return;
-    progress.markEstimate();
-    runState.elapsedSec = progress.elapsedSec();
-    emit updateRemainingMinutes(int(progress.elapsedSec()),
-                                progress.minutesLeft(),
-                                progress.speed(),
-                                progress.doneOps(),
-                                progress.totalOps());
+    m_progress.markEstimate();
+    m_runState.elapsedSec = m_progress.elapsedSec();
+    emit updateRemainingMinutes(int(m_progress.elapsedSec()),
+                                m_progress.minutesLeft(),
+                                m_progress.speed(),
+                                m_progress.doneOps(),
+                                m_progress.totalOps());
 }
 
 // Ход одного шага расчёта произведения: общий счётчик подменяется на шаг,
 // оценка времени и полоса считаются от его начала.
 void Worker::reportStageProgress(quint64 done, quint64 total)
 {
-    progress.setTotalOps(std::max<quint64>(1, total));
-    progress.setDoneOps(done);
-    const ProgressTracker::Due due = progress.due();
+    m_progress.setTotalOps(std::max<quint64>(1, total));
+    m_progress.setDoneOps(done);
+    const ProgressTracker::Due due = m_progress.due();
     if (due.estimate)
         reportEstimate();
     if (due.bar)
@@ -107,10 +107,10 @@ void Worker::reportStageProgress(quint64 done, quint64 total)
 
 void Worker::reportProgressBar()
 {
-    if (probeMode)
+    if (m_probeMode)
         return;
-    progress.markBar();
-    emit updateInfoPBR(progress.percent());
+    m_progress.markBar();
+    emit updateInfoPBR(m_progress.percent());
 }
 
 // Чекпоинт по ходу перебора: (rOffset, chunkOffset) — первое ещё не
@@ -125,14 +125,14 @@ void Worker::reportProgressBar()
 // успехе с недосчитанным спектром.
 void Worker::saveCheckpoint(const ChunkPlan& plan, int numOfCols, quint64 rOffset, quint64 chunkOffset)
 {
-    progress.markCheckpoint();
+    m_progress.markCheckpoint();
     if (plan.stream) {
         CUDA_CALL(cudaStreamSynchronize(plan.stream));
-        CUDA_CALL(cudaMemcpy(buffers->h_spectrum.get(), buffers->d_spectrum.get(), size_t(numOfCols + 1) * sizeof(quint64),
+        CUDA_CALL(cudaMemcpy(m_buffers->h_spectrum.get(), m_buffers->d_spectrum.get(), size_t(numOfCols + 1) * sizeof(quint64),
                              cudaMemcpyDeviceToHost));
     }
-    runState.rOffset     = rOffset;
-    runState.chunkOffset = chunkOffset;
+    m_runState.rOffset     = rOffset;
+    m_runState.chunkOffset = chunkOffset;
     makeCheckpoint(numOfCols);
     stopIfOpsLimitReached();
 }
@@ -148,15 +148,15 @@ void Worker::saveCheckpoint(const ChunkPlan& plan, int numOfCols, quint64 rOffse
 // ещё запускал лишний чанк.
 void Worker::runChunks(const CodeGeometry& g, const ChunkPlan& plan)
 {
-    progress.begin(plan.totalOps, runState.doneOps, runState.elapsedSec);
+    m_progress.begin(plan.totalOps, m_runState.doneOps, m_runState.elapsedSec);
     // При продолжении с чекпоинта полоса сразу показывает пройденное.
-    if (!probeMode)
-        emit updateInfoPBR(progress.percent());
+    if (!m_probeMode)
+        emit updateInfoPBR(m_progress.percent());
 
     const int cols = int(g.numOfCols);
     // У кода Грея слой один: rOffset там не используется (а проба потолка
     // обновления, наоборот, ставит его на последний слой).
-    const quint64 firstLayer = plan.layered ? runState.rOffset : 0;
+    const quint64 firstLayer = plan.layered ? m_runState.rOffset : 0;
     const quint64 lastLayer  = plan.layered ? plan.lastLayer : 0;
 
     for (quint64 r = firstLayer; r <= lastLayer; ++r) {
@@ -164,7 +164,7 @@ void Worker::runChunks(const CodeGeometry& g, const ChunkPlan& plan)
         // границу множества, поэтому бывает короче обычного.
         const quint64 perSet = plan.layerSize(r);
         const quint64 total  = perSet * quint64(g.setCount);
-        quint64 offset = (r == firstLayer) ? runState.chunkOffset : 0;
+        quint64 offset = (r == firstLayer) ? m_runState.chunkOffset : 0;
 
         while (offset < total) {
             if (!waitWhilePaused())
@@ -173,30 +173,30 @@ void Worker::runChunks(const CodeGeometry& g, const ChunkPlan& plan)
             if (!plan.run(r, slice))
                 return;
             offset += slice.size;
-            progress.addOps(slice.size);
-            runState.doneOps = progress.doneOps();
+            m_progress.addOps(slice.size);
+            m_runState.doneOps = m_progress.doneOps();
 
-            const ProgressTracker::Due due = progress.due();
+            const ProgressTracker::Due due = m_progress.due();
             if (due.estimate)
                 reportEstimate();
             if (plan.stream) {
                 // Снимок едет с видеокарты через кольцо. Метка двигается, только
                 // когда копия реально встала в очередь: иначе при занятом кольце
                 // следующая попытка откладывалась бы на целый интервал.
-                if (due.spectrum && buffers->spectrumRing.enqueue(buffers->d_spectrum.get(), plan.stream))
-                    progress.markSpectrum();
-                if (const quint64* snapshot = buffers->spectrumRing.takeReady())
+                if (due.spectrum && m_buffers->spectrumRing.enqueue(m_buffers->d_spectrum.get(), plan.stream))
+                    m_progress.markSpectrum();
+                if (const quint64* snapshot = m_buffers->spectrumRing.takeReady())
                     updateSpectrumFrom(snapshot, cols);
             }
             else if (due.spectrum) {
-                progress.markSpectrum();
+                m_progress.markSpectrum();
                 updateSpectrum(cols);
             }
             if (due.bar)
                 reportProgressBar();
             if (due.checkpoint)
                 saveCheckpoint(plan, cols, r, offset);
-            if (cancelled.load())
+            if (m_cancelled.load())
                 return;
         }
     }
@@ -206,7 +206,7 @@ void Worker::setLiveIntervals(int spectrumMs, int checkpointSeconds)
 {
     if (spectrumMs <= 0 || checkpointSeconds <= 0)
         return;
-    progress.setIntervals(std::chrono::milliseconds{ spectrumMs },
+    m_progress.setIntervals(std::chrono::milliseconds{ spectrumMs },
                           std::chrono::seconds{ checkpointSeconds });
 }
 
@@ -214,23 +214,23 @@ void Worker::setLiveIntervals(int spectrumMs, int checkpointSeconds)
 // возобновление начнётся ровно с той точки, которую записал чекпоинт.
 void Worker::stopIfOpsLimitReached()
 {
-    if (stopAfterOps > 0 && progress.doneOps() >= stopAfterOps)
-        cancelled.store(1);
+    if (m_stopAfterOps > 0 && m_progress.doneOps() >= m_stopAfterOps)
+        m_cancelled.store(1);
 }
 
 // Возвращает false, если расчёт отменили (в том числе во время паузы).
 bool Worker::waitWhilePaused()
 {
-    while (paused.load() != 0) {
-        if (cancelled.load()) return false;
+    while (m_paused.load() != 0) {
+        if (m_cancelled.load()) return false;
         QThread::msleep(50);
     }
-    return !cancelled.load();
+    return !m_cancelled.load();
 }
 
 void Worker::updateSpectrum(int numOfCols)
 {
-    updateSpectrumFrom(buffers->h_spectrum.get(), numOfCols);
+    updateSpectrumFrom(m_buffers->h_spectrum.get(), numOfCols);
 }
 
 void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
@@ -239,14 +239,14 @@ void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
         return;
     // Проба меряет, как часто спектр успевает уйти, а не показывает его.
     // Считать надо здесь: через это место проходят все пути, включая CPU.
-    if (probeMode) {
-        ++probeSends;
+    if (m_probeMode) {
+        ++m_probeSends;
         return;
     }
 
     // Веса за пределом заказа не показываются вовсе: спектр остаётся той же
     // длины, но там нули.
-    const int shownUpTo = displayUpToWeight >= 0 ? std::min(numOfCols, displayUpToWeight) : numOfCols;
+    const int shownUpTo = m_displayUpToWeight >= 0 ? std::min(numOfCols, m_displayUpToWeight) : numOfCols;
     SpectrumCounts shown;
     shown.counts.resize(numOfCols + 1);
     for (int w = 0; w <= shownUpTo; ++w)
@@ -256,8 +256,8 @@ void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
 
 void Worker::publishSpectrum(const SpectrumCounts& shown)
 {
-    if (probeMode) {
-        ++probeSends;
+    if (m_probeMode) {
+        ++m_probeSends;
         return;
     }
     if (!shown.isEmpty())
@@ -266,56 +266,56 @@ void Worker::publishSpectrum(const SpectrumCounts& shown)
 
 void Worker::makeCheckpoint(int numOfCols, bool finished)
 {
-    runState.spectrum.resize(numOfCols + 1);
+    m_runState.spectrum.resize(numOfCols + 1);
     for (int i = 0; i < numOfCols + 1; i++)
-        runState.spectrum[i] = buffers->h_spectrum[i];
+        m_runState.spectrum[i] = m_buffers->h_spectrum[i];
 
     AutosaveRecord record;
-    record.algorithm = settings.algorithmType;
-    record.enumType  = settings.enumType;
-    record.maxRows   = settings.maxRows;
+    record.algorithm = m_settings.algorithmType;
+    record.enumType  = m_settings.enumType;
+    record.maxRows   = m_settings.maxRows;
     record.finished  = finished;
     // У Брауэра–Циммермана глубина перебора выведена из веса, а продолжать
     // расчёт можно только по тем же множествам — они уходят в запись.
-    if (settings.algorithmType == ComputationSettings::BrouwerZimmermann) {
-        record.maxRows  = activeMaxRows;
-        record.bzWeight = settings.bzWeight;
-        record.infoSets = activeInfoSets;
+    if (m_settings.algorithmType == ComputationSettings::BrouwerZimmermann) {
+        record.maxRows  = m_activeMaxRows;
+        record.bzWeight = m_settings.bzWeight;
+        record.infoSets = m_activeInfoSets;
     }
-    if (settings.algorithmType == ComputationSettings::RandomInfoSets) {
-        record.maxRows          = activeMaxRows;
-        record.leonWeight       = settings.leonWeight;
-        record.leonMissExponent = settings.leonMissExponent;
-        record.leonTrials       = activeTrials;
+    if (m_settings.algorithmType == ComputationSettings::RandomInfoSets) {
+        record.maxRows          = m_activeMaxRows;
+        record.leonWeight       = m_settings.leonWeight;
+        record.leonMissExponent = m_settings.leonMissExponent;
+        record.leonTrials       = m_activeTrials;
     }
-    if (settings.algorithmType == ComputationSettings::ProductCode) {
-        record.productWeight    = settings.productWeight;
-        record.productRank      = settings.productRank;
-        record.productRows1     = settings.matrix.size();
-        record.productExactUpTo = productExactUpTo;
-        record.productMissExponent = productMissExponent;
+    if (m_settings.algorithmType == ComputationSettings::ProductCode) {
+        record.productWeight    = m_settings.productWeight;
+        record.productRank      = m_settings.productRank;
+        record.productRows1     = m_settings.matrix.size();
+        record.productExactUpTo = m_productExactUpTo;
+        record.productMissExponent = m_productMissExponent;
     }
     record.savedAt   = QDateTime::currentDateTime();
-    record.state     = runState;
+    record.state     = m_runState;
 
     // Ключ — матрица и алгоритм. Сама матрица в запись не попадает: она лежит
     // одним файлом на папку, иначе на коде (1000,997) каждое сохранение тащило
     // бы с собой мегабайт нулей и единиц.
-    autosave.save(autosaveKeyMatrix(), record);
+    m_autosave.save(autosaveKeyMatrix(), record);
     emit showSaveLBL();
 }
 
 void Worker::setAutosaveRoot(const QString& dir)
 {
-    autosaveRootDir = dir;
-    autosave = AutosaveStore(dir);
+    m_autosaveRootDir = dir;
+    m_autosave = AutosaveStore(dir);
 }
 
 QStringList Worker::autosaveKeyMatrix() const
 {
-    if (settings.algorithmType == ComputationSettings::ProductCode)
-        return settings.matrix + settings.matrix2;
-    return settings.matrix;
+    if (m_settings.algorithmType == ComputationSettings::ProductCode)
+        return m_settings.matrix + m_settings.matrix2;
+    return m_settings.matrix;
 }
 // Точка входа расчёта. Ловит всё, что может бросить вычислитель: раньше
 // ошибка CUDA звала abort() и приложение молча исчезало, а переполнение в
@@ -341,9 +341,9 @@ void Worker::computeSpectrum()
 
 void Worker::measureUpdateRate()
 {
-    probeMode  = true;
-    probeSends = 0;
-    cancelled.store(0);
+    m_probeMode  = true;
+    m_probeSends = 0;
+    m_cancelled.store(0);
 
     const auto startedAt = steady_clock::now();
     double seconds = 0.0;
@@ -351,7 +351,7 @@ void Worker::measureUpdateRate()
     try {
         CodeGeometry g = describeTask();
         initializeRunState(LoadMode::Reset);
-        runState.spectrum.resize(int(g.spectrumSize));
+        m_runState.spectrum.resize(int(g.spectrumSize));
 
         // Замер идёт на самом глубоком слое. Слои по числу складываемых строк
         // перебираются по возрастанию, первые из них крошечные, и чанки в них
@@ -359,9 +359,9 @@ void Worker::measureUpdateRate()
         // которой на деле не будет уже через минуту. У кода Грея слоёв нет, там
         // rOffset ни на что не влияет.
         if (g.maxRows > 0)
-            runState.rOffset = g.maxRows;
+            m_runState.rOffset = g.maxRows;
 
-        omp_set_num_threads(settings.compDevSet.threadsCpu);
+        omp_set_num_threads(m_settings.compDevSet.threadsCpu);
         prepareBuffers(g);
         // Подбор сетки нужен и здесь: он выбирает сетку покрупнее, а от неё
         // напрямую зависит длина чанка и, значит, потолок. Замер без подбора
@@ -370,9 +370,9 @@ void Worker::measureUpdateRate()
 
         // Просить спектр как можно чаще, сохранений не делать: проба не имеет
         // права трогать состояние расчёта.
-        progress.setIntervals(std::chrono::milliseconds{ 0 },
+        m_progress.setIntervals(std::chrono::milliseconds{ 0 },
                               std::chrono::hours{ 24 });
-        progress.setOpsCheckpoint(0);
+        m_progress.setOpsCheckpoint(0);
 
         emit updateRateProbeStarted();
         dispatchComputation(g);
@@ -386,13 +386,13 @@ void Worker::measureUpdateRate()
                                .arg(QString::fromUtf8(e.what())));
     }
 
-    const quint64 sends = probeSends;
-    probeMode  = false;
-    probeSends = 0;
+    const quint64 sends = m_probeSends;
+    m_probeMode  = false;
+    m_probeSends = 0;
     releaseResources();
     // Состояние расчёта после пробы — чужое: она стартовала с последнего слоя.
     initializeRunState(LoadMode::Reset);
-    cancelled.store(0);
+    m_cancelled.store(0);
 
     emit updateRateMeasured(seconds > 0.0 ? double(sends) / seconds : 0.0);
 }
@@ -402,10 +402,10 @@ CodeGeometry Worker::describeTask() const
 {
     CodeGeometry g;
 
-    g.matrix = settings.matrix;
+    g.matrix = m_settings.matrix;
     // Для дуального кода перебор идёт по проверочной матрице, а не по той,
     // что ввёл пользователь.
-    if (settings.algorithmType == ComputationSettings::DualCode)
+    if (m_settings.algorithmType == ComputationSettings::DualCode)
         g.matrix = generatorToParity(g.matrix);
 
     g.numOfRows    = quint64(g.matrix.length());
@@ -413,23 +413,23 @@ CodeGeometry Worker::describeTask() const
     g.wordsPerRow  = (g.numOfCols + 63) / 64;
     g.matrixWords  = g.numOfRows * g.wordsPerRow;
     g.spectrumSize = g.numOfCols + 1;
-    g.maxRows      = quint64(settings.maxRows);
+    g.maxRows      = quint64(m_settings.maxRows);
 
-    g.blocksGpu  = settings.compDevSet.blocksGpu;
-    g.threadsGpu = settings.compDevSet.threadsGpu;
-    g.useGpu     = settings.compDev == ComputationSettings::ComputeDevice::Gpu;
+    g.blocksGpu  = m_settings.compDevSet.blocksGpu;
+    g.threadsGpu = m_settings.compDevSet.threadsGpu;
+    g.useGpu     = m_settings.compDev == ComputationSettings::ComputeDevice::Gpu;
     g.isLongCode = g.numOfRows > Constants::MAX_SHORT_CODE_LENGTH;
 
-    if (settings.algorithmType == ComputationSettings::BrouwerZimmermann)
+    if (m_settings.algorithmType == ComputationSettings::BrouwerZimmermann)
         planInfoSets(g);
 
-    if (settings.algorithmType == ComputationSettings::ProductCode) {
+    if (m_settings.algorithmType == ComputationSettings::ProductCode) {
         // Самого произведения в памяти нет — только его размеры, под спектр.
-        if (settings.matrix2.isEmpty())
+        if (m_settings.matrix2.isEmpty())
             throw std::invalid_argument("код-произведение: не задана вторая компонента");
-        const quint64 n1 = quint64(settings.matrix.first().length());
-        const quint64 n2 = quint64(settings.matrix2.first().length());
-        g.numOfRows    = quint64(settings.matrix.size()) * quint64(settings.matrix2.size());
+        const quint64 n1 = quint64(m_settings.matrix.first().length());
+        const quint64 n2 = quint64(m_settings.matrix2.first().length());
+        g.numOfRows    = quint64(m_settings.matrix.size()) * quint64(m_settings.matrix2.size());
         g.numOfCols    = n1 * n2;
         g.wordsPerRow  = (g.numOfCols + 63) / 64;
         g.matrixWords  = 0;
@@ -438,7 +438,7 @@ CodeGeometry Worker::describeTask() const
         g.isLongCode   = true;
     }
 
-    if (settings.algorithmType == ComputationSettings::RandomInfoSets) {
+    if (m_settings.algorithmType == ComputationSettings::RandomInfoSets) {
         // На видеокарте короткая матрица живёт в разделяемой памяти блока,
         // длинная — в глобальной; ядро умеет строки до MAX_BLOCKWORDS слов.
         if (g.useGpu && leonSharedBytes(int(g.numOfRows), int(g.numOfCols), int(g.wordsPerRow)) == 0)
@@ -446,12 +446,12 @@ CodeGeometry Worker::describeTask() const
                 "стохастический поиск на видеокарте: строка длиннее, чем умеет ядро — выберите CPU");
         // Профиль ключей окна — по самой матрице, и только если окно
         // на этом устройстве вообще допустимо.
-        const bool windowAllowed = g.useGpu ? windowPolicy.gpu : windowPolicy.cpu;
+        const bool windowAllowed = g.useGpu ? m_windowPolicy.gpu : m_windowPolicy.cpu;
         const Leon::SternProfile profile = windowAllowed ? Leon::sternProfile(g.matrix)
                                                          : Leon::SternProfile();
         const Leon::Plan plan = Leon::plan(int(g.numOfCols), int(g.numOfRows),
-                                           settings.leonWeight, settings.leonMissProbability(),
-                                           g.useGpu, &profile, windowPolicy);
+                                           m_settings.leonWeight, m_settings.leonMissProbability(),
+                                           g.useGpu, &profile, m_windowPolicy);
         g.maxRows           = quint64(plan.rows);
         g.leonWindow        = plan.window;
         g.leonPairs         = plan.window > 0 ? profile.pairs[plan.rows][plan.window] : 0.0;
@@ -479,8 +479,8 @@ void Worker::planInfoSets(CodeGeometry& g) const
     const int maxSets = std::min(Constants::MAX_INFO_SETS, fit);
 
     std::vector<InfoSets::InfoSet> sets;
-    if (!resumedInfoSets.isEmpty()) {
-        if (!InfoSets::rebuild(packed.data(), rows, cols, words, resumedInfoSets, sets))
+    if (!m_resumedInfoSets.isEmpty()) {
+        if (!InfoSets::rebuild(packed.data(), rows, cols, words, m_resumedInfoSets, sets))
             throw std::invalid_argument(
                 "множества из сохранения не подходят к матрице");
     }
@@ -492,7 +492,7 @@ void Worker::planInfoSets(CodeGeometry& g) const
         std::vector<int> overlaps;
         for (const InfoSets::InfoSet& set : sets)
             overlaps.push_back(set.overlap);
-        sets.resize(size_t(InfoSets::setsForWeight(overlaps, settings.bzWeight, rows, cols)));
+        sets.resize(size_t(InfoSets::setsForWeight(overlaps, m_settings.bzWeight, rows, cols)));
     }
     if (int(sets.size()) > maxSets)
         throw std::invalid_argument("множеств больше, чем помещается в память видеокарты");
@@ -509,7 +509,7 @@ void Worker::planInfoSets(CodeGeometry& g) const
         g.setColumns.append(QVector<int>(set.columns.begin(), set.columns.end()));
     }
     g.matrixWords     = quint64(g.setRows.size());
-    g.maxRows         = quint64(InfoSets::rowsForWeight(g.setOverlaps, settings.bzWeight, rows, cols));
+    g.maxRows         = quint64(InfoSets::rowsForWeight(g.setOverlaps, m_settings.bzWeight, rows, cols));
     g.guaranteedBelow = InfoSets::guaranteedBelow(g.setOverlaps, int(g.maxRows), rows, cols);
 }
 
@@ -520,18 +520,18 @@ void Worker::prepareBuffers(const CodeGeometry& g)
         /* ДОПИСАТЬ КОПИРОВАНИЕ МАТРИЦЫ В ПАМЯТЬ ДЛЯ КОРОТКИХ КОДОВ */
         if (!g.isLongCode)
             throw std::invalid_argument("матрица слишком большая для короткого кода");
-        buffers->d_matrix.allocate(g.matrixWords);
+        m_buffers->d_matrix.allocate(g.matrixWords);
     }
 
     // calloc внутри, поэтому матрица уже обнулена
-    buffers->h_matrix.allocate(g.matrixWords, HostBuffer<quint64>::Kind::Paged);
+    m_buffers->h_matrix.allocate(g.matrixWords, HostBuffer<quint64>::Kind::Paged);
     if (!g.setRows.empty()) {
         // Брауэр–Циммерман: матрицы множеств уже упакованы планом.
-        std::copy(g.setRows.begin(), g.setRows.end(), buffers->h_matrix.get());
+        std::copy(g.setRows.begin(), g.setRows.end(), m_buffers->h_matrix.get());
     }
     else {
         for (quint64 i = 0; i < g.numOfRows; ++i) {
-            quint64* rowData = buffers->h_matrix.get() + i * g.wordsPerRow;
+            quint64* rowData = m_buffers->h_matrix.get() + i * g.wordsPerRow;
             const QString& row = g.matrix[int(i)];
             for (quint64 j = 0; j < g.numOfCols; ++j)
                 if (row.at(int(j)) == QLatin1Char('1'))
@@ -540,8 +540,8 @@ void Worker::prepareBuffers(const CodeGeometry& g)
     }
 
     // Перебору по слоям нужна таблица биноминальных коэффициентов
-    if (settings.layered()) {
-        binomTable = g.isLongCode
+    if (m_settings.layered()) {
+        m_binomTable = g.isLongCode
             // Для длинных кодов строим только часть таблицы
             ? BinomTable(g.numOfRows, g.maxRows)
             // Для коротких — всю. Не оптимально, но работает.
@@ -551,75 +551,75 @@ void Worker::prepareBuffers(const CodeGeometry& g)
     // Спектр на хосте. Для GPU нужна pinned-память — иначе не работает
     // асинхронное копирование; для CPU обычная, cudaMallocHost без видеокарты
     // недоступен.
-    buffers->h_spectrum.allocate(g.spectrumSize, g.useGpu ? HostBuffer<quint64>::Kind::Pinned
+    m_buffers->h_spectrum.allocate(g.spectrumSize, g.useGpu ? HostBuffer<quint64>::Kind::Pinned
                                                  : HostBuffer<quint64>::Kind::Paged);
     // Кольцо снимков нужно только видеокарте: на CPU спектр и так лежит в
     // h_spectrum, копировать его неоткуда.
     if (g.useGpu)
-        buffers->spectrumRing.allocate(g.spectrumSize);
+        m_buffers->spectrumRing.allocate(g.spectrumSize);
     else
-        buffers->spectrumRing.reset();
-    if (resumeSpectrum) {
+        m_buffers->spectrumRing.reset();
+    if (m_resumeSpectrum) {
         // Продолжаем с чекпоинта — переносим накопленный спектр
         for (quint64 i = 0; i < g.spectrumSize; ++i)
-            buffers->h_spectrum[i] = runState.spectrum.at(int(i));
+            m_buffers->h_spectrum[i] = m_runState.spectrum.at(int(i));
     } else {
-        buffers->h_spectrum.fillZero();
+        m_buffers->h_spectrum.fillZero();
     }
 
     if (!g.useGpu)
         return;
 
     if (g.matrixInGlobalMem)
-        CUDA_CALL(cudaMemcpy(buffers->d_matrix.get(), buffers->h_matrix.get(),
+        CUDA_CALL(cudaMemcpy(m_buffers->d_matrix.get(), m_buffers->h_matrix.get(),
                              g.matrixWords * Constants::WORD_SIZE, cudaMemcpyHostToDevice));
     else
-        CUDA_CALL(copyMatrixToConstant(buffers->h_matrix.get(), g.matrixWords));
+        CUDA_CALL(copyMatrixToConstant(m_buffers->h_matrix.get(), g.matrixWords));
     if (g.setCount > 1)
         CUDA_CALL(copyMasksToConstant(g.setMasks.data(), g.setCount, int(g.wordsPerRow)));
 
-    buffers->d_spectrum.allocate(g.spectrumSize);
-    if (resumeSpectrum)
-        CUDA_CALL(cudaMemcpy(buffers->d_spectrum.get(), buffers->h_spectrum.get(),
+    m_buffers->d_spectrum.allocate(g.spectrumSize);
+    if (m_resumeSpectrum)
+        CUDA_CALL(cudaMemcpy(m_buffers->d_spectrum.get(), m_buffers->h_spectrum.get(),
                              g.spectrumSize * sizeof(quint64), cudaMemcpyHostToDevice));
     else
-        buffers->d_spectrum.fillZero();
+        m_buffers->d_spectrum.fillZero();
 
-    buffers->stream.create();
+    m_buffers->stream.create();
 
     // Ядро коротких кодов читает таблицу как binomTable[n * 64 + k]. BinomTable
     // хранит её плоско ровно с таким шагом, поэтому копируем как есть, без
     // промежуточного «уплощения».
-    if (settings.layered() && !g.isLongCode) {
-        Q_ASSERT(binomTable.stride() == Constants::MAX_SHORT_CODE_LENGTH + 1);
-        buffers->d_binomTable.allocate(Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES);
-        CUDA_CALL(cudaMemcpy(buffers->d_binomTable.get(), binomTable.data(),
-                             binomTable.bytes(), cudaMemcpyHostToDevice));
+    if (m_settings.layered() && !g.isLongCode) {
+        Q_ASSERT(m_binomTable.stride() == Constants::MAX_SHORT_CODE_LENGTH + 1);
+        m_buffers->d_binomTable.allocate(Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES);
+        CUDA_CALL(cudaMemcpy(m_buffers->d_binomTable.get(), m_binomTable.data(),
+                             m_binomTable.bytes(), cudaMemcpyHostToDevice));
     }
 }
 
 // Выбор вычислительной функции: алгоритм, устройство, длина кода.
 void Worker::tuneGrid(CodeGeometry& g)
 {
-    if (!settings.autoTuneGrid || !g.useGpu)
+    if (!m_settings.autoTuneGrid || !g.useGpu)
         return;
     // У случайного поиска своё ядро и своя сетка — блок на попытку; подбор
     // здесь мерил бы чужое ядро, да ещё по пустой таблице биномов.
-    if (settings.algorithmType == ComputationSettings::RandomInfoSets)
+    if (m_settings.algorithmType == ComputationSettings::RandomInfoSets)
         return;
 
     GridTuneTask task;
     task.numOfCols   = int(g.numOfCols);
     task.numOfRows   = int(g.numOfRows);
     task.wordsPerRow = int(g.wordsPerRow);
-    task.binomTable  = buffers->d_binomTable.get();
+    task.binomTable  = m_buffers->d_binomTable.get();
     task.chunkSize   = g.chunkSize;
-    task.minWorthSeconds = tuneThresholdSec;
+    task.minWorthSeconds = m_tuneThresholdSec;
     task.userGrid    = { g.blocksGpu, g.threadsGpu };
-    task.verbose     = tuneVerbose;
+    task.verbose     = m_tuneVerbose;
     task.slot.setCount = g.setCount;
 
-    const bool gray = !settings.layered();
+    const bool gray = !m_settings.layered();
     task.kernel = g.isLongCode ? GridTuneTask::Kernel::XorLong
                 : gray         ? GridTuneTask::Kernel::GrayShort
                                : GridTuneTask::Kernel::XorShort;
@@ -642,7 +642,7 @@ void Worker::tuneGrid(CodeGeometry& g)
         // время, а стоимость маски зависит от числа складываемых строк.
         quint64 bestCount = 0;
         for (quint64 r = 0; r <= g.maxRows && r <= g.numOfRows; ++r) {
-            const quint64 count = binomTable(g.numOfRows, r);
+            const quint64 count = m_binomTable(g.numOfRows, r);
             if (count > bestCount) {
                 bestCount      = count;
                 task.numOfOnes = r;
@@ -688,7 +688,7 @@ void Worker::tuneGrid(CodeGeometry& g)
         for (long long i = 0; i < (long long)slotCount; ++i) {
             Combinations::unrankPositions(layerRank + quint64(i) * task.measureMasksPerThread,
                                           rows, ones, host + i * Constants::MAX_POSITIONS,
-                                          Constants::MAX_POSITIONS, binomTable);
+                                          Constants::MAX_POSITIONS, m_binomTable);
         }
 
         CUDA_CALL(cudaMemcpy(d_tuneSlots.get(), host,
@@ -697,10 +697,10 @@ void Worker::tuneGrid(CodeGeometry& g)
 
         task.startPositions   = d_tuneSlots.get();
         task.filledStartMasks = slotCount;
-        task.matrixGlobal     = g.matrixInGlobalMem ? buffers->d_matrix.get() : nullptr;
+        task.matrixGlobal     = g.matrixInGlobalMem ? m_buffers->d_matrix.get() : nullptr;
     }
 
-    const LaunchGrid grid = tuneLaunchGrid(task, buffers->stream.get());
+    const LaunchGrid grid = tuneLaunchGrid(task, m_buffers->stream.get());
     if (!grid.isValid())
         return;   // подбор отказался — остаёмся на настройках
 
@@ -714,8 +714,8 @@ void Worker::tuneGrid(CodeGeometry& g)
 void Worker::dispatchComputation(const CodeGeometry& g)
 {
     // Дуальный код считается по проверочной матрице тем же кодом Грея
-    const bool gray = !settings.layered()
-                   && settings.algorithmType != ComputationSettings::RandomInfoSets;
+    const bool gray = !m_settings.layered()
+                   && m_settings.algorithmType != ComputationSettings::RandomInfoSets;
 
     // Код Грея перебирает 2^k масок в одном 64-битном слове, поэтому длиннее
     // 63 строк не бывает. Раньше это проверял только диалог настроек, а прямой
@@ -724,7 +724,7 @@ void Worker::dispatchComputation(const CodeGeometry& g)
         throw std::invalid_argument(
             "код Грея неприменим: больше 63 строк не помещается в маску");
 
-    if (settings.algorithmType == ComputationSettings::RandomInfoSets)
+    if (m_settings.algorithmType == ComputationSettings::RandomInfoSets)
         computeSpectrumLeon(g);
     else if (gray)
         g.useGpu ? computeSpectrumGpuGrayShort(g)
@@ -740,7 +740,7 @@ void Worker::dispatchComputation(const CodeGeometry& g)
 // Забирает итоговый спектр, рассылает сигналы и освобождает ресурсы.
 void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point startedAt)
 {
-    if (cancelled.load()) {
+    if (m_cancelled.load()) {
         initializeRunState(LoadMode::Reset);
         emit finished(Constants::ERROR_OCCURRED);
         emit updateInfoPBR(0);
@@ -751,9 +751,9 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
 
     // Случайный поиск копит спектр на хосте, d_spectrum у него пустой —
     // забирать оттуда нечего, это затёрло бы найденное нулями.
-    if (g.useGpu && settings.algorithmType != ComputationSettings::RandomInfoSets) {
+    if (g.useGpu && m_settings.algorithmType != ComputationSettings::RandomInfoSets) {
         CUDA_CALL(cudaDeviceSynchronize());
-        CUDA_CALL(cudaMemcpy(buffers->h_spectrum.get(), buffers->d_spectrum.get(),
+        CUDA_CALL(cudaMemcpy(m_buffers->h_spectrum.get(), m_buffers->d_spectrum.get(),
                              g.spectrumSize * sizeof(quint64), cudaMemcpyDeviceToHost));
     }
 
@@ -762,23 +762,23 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
     // это ровно начало расчёта до большего maxRows. Состояние помечается как
     // «всё до maxRows пройдено», и следующий запуск продолжит со следующего
     // слоя, а не с нуля.
-    if (settings.layered()) {
-        runState.rOffset     = g.maxRows + 1;
-        runState.chunkOffset = 0;
+    if (m_settings.layered()) {
+        m_runState.rOffset     = g.maxRows + 1;
+        m_runState.chunkOffset = 0;
     }
-    else if (settings.algorithmType == ComputationSettings::RandomInfoSets
-             || settings.algorithmType == ComputationSettings::ProductCode) {
+    else if (m_settings.algorithmType == ComputationSettings::RandomInfoSets
+             || m_settings.algorithmType == ComputationSettings::ProductCode) {
         // Такая запись не продолжается — хранится только итог.
-        runState.rOffset     = 0;
-        runState.chunkOffset = 0;
+        m_runState.rOffset     = 0;
+        m_runState.chunkOffset = 0;
     }
     else {
         // У кода Грея слоёв нет: пройденным считается весь диапазон масок.
-        runState.rOffset     = 0;
-        runState.chunkOffset = 1ULL << g.numOfRows;
+        m_runState.rOffset     = 0;
+        m_runState.chunkOffset = 1ULL << g.numOfRows;
     }
-    runState.doneOps    = progress.doneOps();
-    runState.elapsedSec = duration_cast<seconds>(steady_clock::now() - startedAt).count();
+    m_runState.doneOps    = m_progress.doneOps();
+    m_runState.elapsedSec = duration_cast<seconds>(steady_clock::now() - startedAt).count();
 
     // Пишется до преобразования Мак-Вильямс: в записи должен лежать сырой
     // спектр перебираемой матрицы, с него и продолжают.
@@ -787,15 +787,15 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
     // Дуальный расчёт даёт спектр проверочной матрицы — исходный получается
     // из него преобразованием Мак-Вильямс. Считается один раз: из него и
     // итог, и то, что видит пользователь.
-    const bool dual = settings.algorithmType == ComputationSettings::Algorithm::DualCode;
+    const bool dual = m_settings.algorithmType == ComputationSettings::Algorithm::DualCode;
     const std::vector<mpz_class> original = dual
-        ? macWilliams(runState.spectrum.constData(), int(g.numOfCols), int(g.numOfRows))
+        ? macWilliams(m_runState.spectrum.constData(), int(g.numOfCols), int(g.numOfRows))
         : std::vector<mpz_class>();
 
     // Итог — на случай, если этот расчёт вложенный (компонента произведения).
-    m_finalSpectrum  = dual ? saturatedCounts(original) : runState.spectrum;
+    m_finalSpectrum  = dual ? saturatedCounts(original) : m_runState.spectrum;
     m_finalExactUpTo = g.guaranteedBelow > 0 ? g.guaranteedBelow - 1
-                     : settings.algorithmType == ComputationSettings::ProductCode ? productExactUpTo
+                     : m_settings.algorithmType == ComputationSettings::ProductCode ? m_productExactUpTo
                      : int(g.numOfCols);
 
     initializeRunState(LoadMode::Reset);
@@ -821,34 +821,34 @@ void Worker::computeSpectrumImpl()
 
     // Что записывать в автосохранение и что показать пользователю: глубину
     // перебора и множества он не задавал, они выведены из веса и матрицы.
-    activeInfoSets = g.setColumns;
-    activeMaxRows  = int(g.maxRows);
-    activeTrials   = 0;
-    displayUpToWeight = settings.algorithmType == ComputationSettings::BrouwerZimmermann
-                          ? settings.bzWeight : -1;
+    m_activeInfoSets = g.setColumns;
+    m_activeMaxRows  = int(g.maxRows);
+    m_activeTrials   = 0;
+    m_displayUpToWeight = m_settings.algorithmType == ComputationSettings::BrouwerZimmermann
+                          ? m_settings.bzWeight : -1;
     if (g.guaranteedBelow > 0)
         emit planReady(g.setCount, int(g.maxRows), g.guaranteedBelow - 1);
 
     // Спектр мог прийти из чекпоинта — тогда размер уже верный
-    if (quint64(runState.spectrum.size()) != g.spectrumSize)
-        runState.spectrum.resize(int(g.spectrumSize));
+    if (quint64(m_runState.spectrum.size()) != g.spectrumSize)
+        m_runState.spectrum.resize(int(g.spectrumSize));
 
-    omp_set_num_threads(settings.compDevSet.threadsCpu);
+    omp_set_num_threads(m_settings.compDevSet.threadsCpu);
 
     // Частоты обновления из настроек. Сам отсчёт запускает вычислительная
     // функция: только она знает общее число операций.
-    progress.setIntervals(
-        std::chrono::milliseconds{ settings.timeIntSet.updateSpectrumInterval },
-        std::chrono::seconds{ settings.timeIntSet.saveSpectrumInterval });
-    progress.setOpsCheckpoint(checkpointEveryOps);
+    m_progress.setIntervals(
+        std::chrono::milliseconds{ m_settings.timeIntSet.updateSpectrumInterval },
+        std::chrono::seconds{ m_settings.timeIntSet.saveSpectrumInterval });
+    m_progress.setOpsCheckpoint(m_checkpointEveryOps);
 
-    const auto startedAt = steady_clock::now() - std::chrono::seconds(runState.elapsedSec);
+    const auto startedAt = steady_clock::now() - std::chrono::seconds(m_runState.elapsedSec);
 
     // Код произведения не перебирает собственную матрицу: ни буферов, ни
     // сетки ему не нужно, только спектр на хосте.
-    if (settings.algorithmType == ComputationSettings::ProductCode) {
-        buffers->h_spectrum.allocate(g.spectrumSize, HostBuffer<quint64>::Kind::Paged);
-        buffers->h_spectrum.fillZero();
+    if (m_settings.algorithmType == ComputationSettings::ProductCode) {
+        m_buffers->h_spectrum.allocate(g.spectrumSize, HostBuffer<quint64>::Kind::Paged);
+        m_buffers->h_spectrum.fillZero();
         computeSpectrumProduct(g);
         finishComputation(g, startedAt);
         return;
@@ -869,94 +869,94 @@ void Worker::computeSpectrumImpl()
 // пропущенный здесь вызов не приводит к утечке: их освободит деструктор.
 void Worker::releaseResources()
 {
-    buffers->h_spectrum.reset();
-    buffers->h_matrix.reset();
-    binomTable = BinomTable();
+    m_buffers->h_spectrum.reset();
+    m_buffers->h_matrix.reset();
+    m_binomTable = BinomTable();
 
-    buffers->d_spectrum.reset();
-    buffers->d_matrix.reset();
-    buffers->d_binomTable.reset();
+    m_buffers->d_spectrum.reset();
+    m_buffers->d_matrix.reset();
+    m_buffers->d_binomTable.reset();
 
-    buffers->stream.reset();
+    m_buffers->stream.reset();
 }
 
 
 void Worker::pause()
 {
-    paused.store(1);
-    if (Worker* sub = activeSub.load())
+    m_paused.store(1);
+    if (Worker* sub = m_activeSub.load())
         sub->pause();
 }
 
 void Worker::resume()
 {
-    paused.store(0);
-    if (Worker* sub = activeSub.load())
+    m_paused.store(0);
+    if (Worker* sub = m_activeSub.load())
         sub->resume();
 }
 
 void Worker::cancel()
 {
-    cancelled.store(1);
-    if (Worker* sub = activeSub.load())
+    m_cancelled.store(1);
+    if (Worker* sub = m_activeSub.load())
         sub->cancel();
 }
 void Worker::uncancel()
 {
-    cancelled.store(0);
+    m_cancelled.store(0);
 }
 
 bool Worker::isCancelled()
 {
-    return (bool)cancelled.load();
+    return (bool)m_cancelled.load();
 }
 
 
 void Worker::setGridTuningThreshold(double seconds)
 {
-    tuneThresholdSec = seconds;
+    m_tuneThresholdSec = seconds;
 }
 
 void Worker::setGridTuningVerbose(bool on)
 {
-    tuneVerbose = on;
+    m_tuneVerbose = on;
 }
 
 void Worker::setCheckpointOpsPolicy(quint64 everyOps, quint64 stopAfter)
 {
-    checkpointEveryOps = everyOps;
-    stopAfterOps       = stopAfter;
+    m_checkpointEveryOps = everyOps;
+    m_stopAfterOps       = stopAfter;
 }
 
 void Worker::setSettings(const ComputationSettings& newSettings) {
-    settings = newSettings;
+    m_settings = newSettings;
 }
 
 void Worker::initializeRunState(LoadMode lm)
 {
     // Если сбрасываем состояние
     if ( lm == LoadMode::Reset ) {
-        runState.rOffset = 0;
-        runState.chunkOffset = 0;
-        runState.elapsedSec = 0;
-        runState.doneOps = 0;
-        runState.spectrum.clear();
-        resumeSpectrum = false;
-        resumedInfoSets.clear();
+        m_runState.rOffset = 0;
+        m_runState.chunkOffset = 0;
+        m_runState.elapsedSec = 0;
+        m_runState.doneOps = 0;
+        m_runState.spectrum.clear();
+        m_resumeSpectrum = false;
+        m_resumedInfoSets.clear();
         return;
     }
     else {
         AutosaveRecord record;
-        if (!autosave.load(settings.matrix, settings.algorithmType, record)
-            || !canResume(record, settings)) {
+        if (!m_autosave.load(m_settings.matrix, m_settings.algorithmType, record)
+            || !canResume(record, m_settings)) {
             initializeRunState(LoadMode::Reset);
             return;
         }
 
-        runState = record.state;
+        m_runState = record.state;
         // Продолжать Брауэра–Циммермана можно только по множествам записи
-        resumedInfoSets = record.infoSets;
+        m_resumedInfoSets = record.infoSets;
         // Накопленный спектр перенесётся в буферы расчёта (prepareBuffers)
-        resumeSpectrum = true;
+        m_resumeSpectrum = true;
     }
 }

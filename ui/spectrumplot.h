@@ -40,7 +40,7 @@ public:
     void setMaxBars(int maxBars);
 
     // Показанные значения: окно сохраняет их между запусками.
-    const QVector<double>& values() const { return yValues; }
+    const QVector<double>& values() const { return m_yValues; }
 
 private:
     // Перестраивает подписи оси X, если сменился шаг между ними.
@@ -51,38 +51,38 @@ private:
     // Подписи, диапазоны осей и перерисовка. Данные не трогает.
     void redrawGeometry();
 
-    QCustomPlot* plot            = nullptr;
-    QCPBars*     bars            = nullptr;
-    QCPItemText* overflowMessage = nullptr;
+    QCustomPlot* m_plot            = nullptr;
+    QCPBars*     m_bars            = nullptr;
+    QCPItemText* m_overflowMessage = nullptr;
 
-    // Спектр как он есть: вес i, значение yValues[i].
-    QVector<double> xValues;
-    QVector<double> yValues;
+    // Спектр как он есть: вес i, значение m_yValues[i].
+    QVector<double> m_xValues;
+    QVector<double> m_yValues;
 
     // Что реально нарисовано. При группировке короче исходного: одна точка на
     // корзину весов, значение — сумма по корзине.
-    QVector<double> barX;
-    QVector<double> barY;
-    double          barWidth = 1.0;
-    double          barMax   = 0.0;
+    QVector<double> m_barX;
+    QVector<double> m_barY;
+    double          m_barWidth = 1.0;
+    double          m_barMax   = 0.0;
 
-    int maxBars = 0;
+    int m_maxBars = 0;
 
     // Спектр пришёл, пока панель графика была закрыта: точки в столбцы не
     // залиты, ждём показа. Заливать впустую незачем — на длинном расчёте
     // спектр обновляется раз в секунду часами.
-    bool pendingData = false;
+    bool m_pendingData = false;
 
-    QSharedPointer<QCPAxisTicker> ticker;
-    int tickStep = -1;
+    QSharedPointer<QCPAxisTicker> m_ticker;
+    int m_tickStep = -1;
 
     // Разбор последнего спектра. Хранится, чтобы refresh() не пересчитывал
     // его заново по тем же самым числам.
-    qint64 firstNonZero = -1;
-    qint64 lastNonZero  = -1;
-    double maxValue     = 0.0;   // максимум по исходному спектру
+    qint64 m_firstNonZero = -1;
+    qint64 m_lastNonZero  = -1;
+    double m_maxValue     = 0.0;   // максимум по исходному спектру
     // Компоненты не поместились в float: рисовать нечего, показываем текст.
-    bool   hasNonFinite = false;
+    bool   m_hasNonFinite = false;
 
-    QColor barColor;
+    QColor m_barColor;
 };

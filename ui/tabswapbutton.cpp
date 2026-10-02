@@ -16,16 +16,16 @@ constexpr int REACH = 28;
 }
 
 TabSwapButton::TabSwapButton(QTabBar* bar, const QString& tip)
-    : QObject(bar), bar(bar), button(new QToolButton(bar))
+    : QObject(bar), m_bar(bar), m_button(new QToolButton(bar))
 {
-    button->setAutoRaise(true);
-    button->setFocusPolicy(Qt::NoFocus);
-    button->setToolTip(tip);
-    button->setCursor(Qt::PointingHandCursor);
+    m_button->setAutoRaise(true);
+    m_button->setFocusPolicy(Qt::NoFocus);
+    m_button->setToolTip(tip);
+    m_button->setCursor(Qt::PointingHandCursor);
     // «Switch» из Segoe Fluent Icons: две стрелки навстречу.
-    button->setIcon(FluentIcons::icon(bar, "E8AB"));
-    button->hide();
-    connect(button, &QToolButton::clicked, this, &TabSwapButton::clicked);
+    m_button->setIcon(FluentIcons::icon(bar, "E8AB"));
+    m_button->hide();
+    connect(m_button, &QToolButton::clicked, this, &TabSwapButton::clicked);
 
     bar->setAttribute(Qt::WA_Hover, true);
     bar->installEventFilter(this);
@@ -35,30 +35,30 @@ TabSwapButton::TabSwapButton(QTabBar* bar, const QString& tip)
 // Ставит кнопку на стык первой и второй вкладки.
 void TabSwapButton::place()
 {
-    if (bar->count() < 2)
+    if (m_bar->count() < 2)
         return;
-    const QRect left = bar->tabRect(0);
+    const QRect left = m_bar->tabRect(0);
     const int   seam = left.right() + 1;
-    const int   size = qMax(16, bar->height() - 2);
-    button->setIconSize(QSize(size * 2 / 3, size * 2 / 3));
-    button->resize(size, size);
-    button->move(seam - size / 2, (bar->height() - size) / 2);
-    button->raise();
+    const int   size = qMax(16, m_bar->height() - 2);
+    m_button->setIconSize(QSize(size * 2 / 3, size * 2 / 3));
+    m_button->resize(size, size);
+    m_button->move(seam - size / 2, (m_bar->height() - size) / 2);
+    m_button->raise();
 }
 
 void TabSwapButton::showIfNear(const QPoint& pos)
 {
-    if (bar->count() < 2) {
-        button->hide();
+    if (m_bar->count() < 2) {
+        m_button->hide();
         return;
     }
-    const QRect zone = button->geometry().adjusted(-REACH, -REACH, REACH, REACH);
-    button->setVisible(zone.contains(pos));
+    const QRect zone = m_button->geometry().adjusted(-REACH, -REACH, REACH, REACH);
+    m_button->setVisible(zone.contains(pos));
 }
 
 bool TabSwapButton::eventFilter(QObject* watched, QEvent* event)
 {
-    if (watched == bar) {
+    if (watched == m_bar) {
         switch (event->type()) {
             case QEvent::Resize:
             case QEvent::LayoutRequest:
@@ -75,8 +75,8 @@ bool TabSwapButton::eventFilter(QObject* watched, QEvent* event)
                 break;
             case QEvent::HoverLeave:
             case QEvent::Leave:
-                if (!button->underMouse())
-                    button->hide();
+                if (!m_button->underMouse())
+                    m_button->hide();
                 break;
             default:
                 break;

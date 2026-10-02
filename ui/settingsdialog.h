@@ -57,7 +57,7 @@ private:
     // Описание конфигурации, от которой зависит потолок обновления: код,
     // вычислитель, алгоритм, сетка. Сменилось — замер больше не годится.
     QString updateRateKey() const;
-    // Переносит настройки из полей диалога в settings, ничего не сохраняя.
+    // Переносит настройки из полей диалога в m_settings, ничего не сохраняя.
     void collectSettings();
     void applyDeviceLimits();
     // Показывает поля вычислителя, подходящие текущему устройству.
@@ -78,39 +78,39 @@ private:
 
 
     // До первой матрицы считаем код коротким: полный перебор доступен.
-    Length codeLength     = Length::Short;
-    Length dualCodeLength = Length::Short;
-    Ui::SettingsDialog *ui;
-    QButtonGroup* codeKindBGP;
-    QButtonGroup* enumeratorBGP;
-    QButtonGroup* algorithmBGP;
-    QButtonGroup* computeDeviceBGP;
+    Length m_codeLength     = Length::Short;
+    Length m_dualCodeLength = Length::Short;
+    Ui::SettingsDialog *m_ui;
+    QButtonGroup* m_codeKindBGP;
+    QButtonGroup* m_enumeratorBGP;
+    QButtonGroup* m_algorithmBGP;
+    QButtonGroup* m_computeDeviceBGP;
 
     // Последний выбор в каждой из двух пар алгоритмов: при переключении
     // «полный/частичный» показывается та пара, что подходит, и в ней —
     // то, что пользователь выбирал раньше.
-    ComputationSettings::Algorithm fullAlgorithm    = ComputationSettings::GrayCode;
-    ComputationSettings::Algorithm partialAlgorithm = ComputationSettings::BrouwerZimmermann;
+    ComputationSettings::Algorithm m_fullAlgorithm    = ComputationSettings::GrayCode;
+    ComputationSettings::Algorithm m_partialAlgorithm = ComputationSettings::BrouwerZimmermann;
 
     // Тип перебора, выбранный для произвольного кода: у произведения группа
     // блокируется на «частичном», и выбор надо помнить отдельно.
-    ComputationSettings::EnumerationType singleEnumType =
+    ComputationSettings::EnumerationType m_singleEnumType =
         ComputationSettings::EnumerationType::Full;
 
     // Замеренный потолок обновления и конфигурация, на которой он получен.
     // Ноль — замера нет.
-    double  measuredRate = 0.0;
-    QString measuredFor;
+    double  m_measuredRate = 0.0;
+    QString m_measuredFor;
 
     // Размер кода: от него зависит потолок, а самой матрицы диалог не видит.
-    int matrixRows = 0;
-    int matrixCols = 0;
+    int m_matrixRows = 0;
+    int m_matrixCols = 0;
 
     // Поле веса перезаписывается программно при смене алгоритма; в это время
     // его сигнал не должен трогать запомненные веса.
-    bool updatingControls = false;
+    bool m_updatingControls = false;
 
-    ComputationSettings settings;
+    ComputationSettings m_settings;
 };
 
 #endif // SETTINGSDIALOG_H

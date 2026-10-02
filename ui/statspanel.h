@@ -38,19 +38,19 @@ public:
 private:
     QLabel* addRow(class QFormLayout* form, const QString& caption);
 
-    QLabel* stateValue     = nullptr;
-    QLabel* deviceValue    = nullptr;
-    QLabel* algorithmValue = nullptr;
+    QLabel* m_stateValue     = nullptr;
+    QLabel* m_deviceValue    = nullptr;
+    QLabel* m_algorithmValue = nullptr;
 
-    QLabel* elapsedValue   = nullptr;
-    QLabel* remainingValue = nullptr;
-    QLabel* finishValue    = nullptr;
+    QLabel* m_elapsedValue   = nullptr;
+    QLabel* m_remainingValue = nullptr;
+    QLabel* m_finishValue    = nullptr;
 
-    QLabel* speedValue     = nullptr;
-    QLabel* doneValue      = nullptr;
+    QLabel* m_speedValue     = nullptr;
+    QLabel* m_doneValue      = nullptr;
 
     // Сетка приходит отдельным сигналом, позже описания задачи, и её надо
     // помнить, чтобы дописать к строке устройства.
-    QString grid;
-    QString deviceText;
+    QString m_grid;
+    QString m_deviceText;
 };

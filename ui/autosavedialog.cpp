@@ -37,51 +37,51 @@ constexpr int ALGORITHM_ROLE = Qt::UserRole + 1;
 
 AutosaveDialog::AutosaveDialog(AutosaveStore* store, QWidget* parent)
     : QDialog(parent)
-    , store(store)
+    , m_store(store)
 {
     setWindowTitle(tr("Сохранения"));
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
     resize(760, 380);
 
-    tree = new QTreeWidget(this);
-    tree->setColumnCount(5);
-    tree->setHeaderLabels({ tr("Код"), tr("Алгоритм"), tr("Состояние"),
+    m_tree = new QTreeWidget(this);
+    m_tree->setColumnCount(5);
+    m_tree->setHeaderLabels({ tr("Код"), tr("Алгоритм"), tr("Состояние"),
                             tr("Сохранено"), tr("Размер") });
-    tree->setRootIsDecorated(false);
-    tree->setAlternatingRowColors(true);
-    tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    tree->setSortingEnabled(true);
-    tree->sortByColumn(3, Qt::DescendingOrder);
+    m_tree->setRootIsDecorated(false);
+    m_tree->setAlternatingRowColors(true);
+    m_tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_tree->setSortingEnabled(true);
+    m_tree->sortByColumn(3, Qt::DescendingOrder);
 
-    summary = new QLabel(this);
+    m_summary = new QLabel(this);
 
-    loadBtn      = new QPushButton(tr("Загрузить матрицу"), this);
-    removeBtn    = new QPushButton(tr("Удалить"), this);
-    removeAllBtn = new QPushButton(tr("Удалить всё"), this);
+    m_loadBtn      = new QPushButton(tr("Загрузить матрицу"), this);
+    m_removeBtn    = new QPushButton(tr("Удалить"), this);
+    m_removeAllBtn = new QPushButton(tr("Удалить всё"), this);
     QPushButton* const folderBtn = new QPushButton(tr("Открыть папку"), this);
     QPushButton* const closeBtn  = new QPushButton(tr("Закрыть"), this);
 
-    loadBtn->setToolTip(tr("Вернуть матрицу этой записи в редактор,\n"
+    m_loadBtn->setToolTip(tr("Вернуть матрицу этой записи в редактор,\n"
                            "чтобы продолжить расчёт с неё."));
 
     QHBoxLayout* const buttons = new QHBoxLayout;
-    buttons->addWidget(loadBtn);
-    buttons->addWidget(removeBtn);
-    buttons->addWidget(removeAllBtn);
+    buttons->addWidget(m_loadBtn);
+    buttons->addWidget(m_removeBtn);
+    buttons->addWidget(m_removeAllBtn);
     buttons->addStretch();
     buttons->addWidget(folderBtn);
     buttons->addWidget(closeBtn);
 
     QVBoxLayout* const layout = new QVBoxLayout(this);
-    layout->addWidget(tree);
-    layout->addWidget(summary);
+    layout->addWidget(m_tree);
+    layout->addWidget(m_summary);
     layout->addLayout(buttons);
 
-    connect(tree, &QTreeWidget::itemSelectionChanged, this, &AutosaveDialog::updateButtons);
-    connect(tree, &QTreeWidget::itemDoubleClicked, this, &AutosaveDialog::loadMatrixOfSelected);
-    connect(loadBtn,      &QPushButton::clicked, this, &AutosaveDialog::loadMatrixOfSelected);
-    connect(removeBtn,    &QPushButton::clicked, this, &AutosaveDialog::removeSelected);
-    connect(removeAllBtn, &QPushButton::clicked, this, &AutosaveDialog::removeAll);
+    connect(m_tree, &QTreeWidget::itemSelectionChanged, this, &AutosaveDialog::updateButtons);
+    connect(m_tree, &QTreeWidget::itemDoubleClicked, this, &AutosaveDialog::loadMatrixOfSelected);
+    connect(m_loadBtn,      &QPushButton::clicked, this, &AutosaveDialog::loadMatrixOfSelected);
+    connect(m_removeBtn,    &QPushButton::clicked, this, &AutosaveDialog::removeSelected);
+    connect(m_removeAllBtn, &QPushButton::clicked, this, &AutosaveDialog::removeAll);
     connect(folderBtn,    &QPushButton::clicked, this, &AutosaveDialog::openFolder);
     connect(closeBtn,     &QPushButton::clicked, this, &QDialog::accept);
 
@@ -137,15 +137,15 @@ QString AutosaveDialog::describeProgress(const AutosaveEntry& entry)
 
 void AutosaveDialog::refresh()
 {
-    tree->clear();
+    m_tree->clear();
 
-    const QVector<AutosaveEntry> entries = store->list();
+    const QVector<AutosaveEntry> entries = m_store->list();
     qint64 bytes = 0;
 
     for (const AutosaveEntry& entry : entries) {
         bytes += entry.bytes;
 
-        QTreeWidgetItem* const item = new QTreeWidgetItem(tree);
+        QTreeWidgetItem* const item = new QTreeWidgetItem(m_tree);
         item->setText(0, tr("(%1,%2)").arg(entry.cols).arg(entry.rows));
         item->setText(1, describeAlgorithm(entry.record));
         item->setText(2, describeProgress(entry));
@@ -161,18 +161,18 @@ void AutosaveDialog::refresh()
         item->setData(3, Qt::UserRole + 2, entry.record.savedAt);
     }
 
-    for (int i = 0; i < tree->columnCount(); ++i)
-        tree->resizeColumnToContents(i);
+    for (int i = 0; i < m_tree->columnCount(); ++i)
+        m_tree->resizeColumnToContents(i);
 
     // Размер папки на диске больше суммы записей: там же лежат матрицы.
     qint64 onDisk = 0;
-    QDirIterator it(store->rootPath(), QDir::Files, QDirIterator::Subdirectories);
+    QDirIterator it(m_store->rootPath(), QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         it.next();
         onDisk += it.fileInfo().size();
     }
 
-    summary->setText(entries.isEmpty()
+    m_summary->setText(entries.isEmpty()
         ? tr("Сохранений нет.")
         : tr("Записей: %1, на диске %2 (вместе с матрицами).")
               .arg(entries.size()).arg(formatBytes(onDisk)));
@@ -182,17 +182,17 @@ void AutosaveDialog::refresh()
 
 void AutosaveDialog::updateButtons()
 {
-    const bool any      = tree->topLevelItemCount() > 0;
-    const bool selected = !tree->selectedItems().isEmpty();
+    const bool any      = m_tree->topLevelItemCount() > 0;
+    const bool selected = !m_tree->selectedItems().isEmpty();
 
-    removeBtn->setEnabled(selected);
-    loadBtn->setEnabled(tree->selectedItems().size() == 1);
-    removeAllBtn->setEnabled(any);
+    m_removeBtn->setEnabled(selected);
+    m_loadBtn->setEnabled(m_tree->selectedItems().size() == 1);
+    m_removeAllBtn->setEnabled(any);
 }
 
 void AutosaveDialog::removeSelected()
 {
-    const QList<QTreeWidgetItem*> selected = tree->selectedItems();
+    const QList<QTreeWidgetItem*> selected = m_tree->selectedItems();
     if (selected.isEmpty())
         return;
 
@@ -206,7 +206,7 @@ void AutosaveDialog::removeSelected()
         const QString folder = item->data(0, FOLDER_ROLE).toString();
         const auto algorithm = static_cast<ComputationSettings::Algorithm>(
             item->data(0, ALGORITHM_ROLE).toInt());
-        store->removeRecord(folder, algorithm);
+        m_store->removeRecord(folder, algorithm);
     }
     refresh();
 }
@@ -219,17 +219,17 @@ void AutosaveDialog::removeAll()
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
         return;
 
-    store->removeAll();
+    m_store->removeAll();
     refresh();
 }
 
 void AutosaveDialog::loadMatrixOfSelected()
 {
-    const QList<QTreeWidgetItem*> selected = tree->selectedItems();
+    const QList<QTreeWidgetItem*> selected = m_tree->selectedItems();
     if (selected.size() != 1)
         return;
 
-    const Matrix matrix = store->matrixOf(selected.first()->data(0, FOLDER_ROLE).toString());
+    const Matrix matrix = m_store->matrixOf(selected.first()->data(0, FOLDER_ROLE).toString());
     if (matrix.isEmpty()) {
         QMessageBox::warning(this, tr("Ошибка"), tr("Не удалось прочитать матрицу записи"));
         return;
@@ -247,7 +247,7 @@ AutosaveRecord AutosaveDialog::entryOf(QTreeWidgetItem* item) const
     const auto algorithm = static_cast<ComputationSettings::Algorithm>(
         item->data(0, ALGORITHM_ROLE).toInt());
 
-    for (const AutosaveEntry& entry : store->list())
+    for (const AutosaveEntry& entry : m_store->list())
         if (entry.folder == folder && entry.record.algorithm == algorithm)
             return entry.record;
 
@@ -256,6 +256,6 @@ AutosaveRecord AutosaveDialog::entryOf(QTreeWidgetItem* item) const
 
 void AutosaveDialog::openFolder()
 {
-    QDir().mkpath(store->rootPath());
-    QDesktopServices::openUrl(QUrl::fromLocalFile(store->rootPath()));
+    QDir().mkpath(m_store->rootPath());
+    QDesktopServices::openUrl(QUrl::fromLocalFile(m_store->rootPath()));
 }

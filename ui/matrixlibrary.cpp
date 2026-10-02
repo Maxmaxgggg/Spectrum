@@ -15,7 +15,7 @@ inline QString keySlot() { return QStringLiteral("slot"); }
 
 void MatrixLibrary::load()
 {
-    matrices = QJsonArray();
+    m_matrices = QJsonArray();
 
     QSettings settings;
     const QByteArray data = settings.value(SettingsKeys::MATRICES_JSON).toByteArray();
@@ -48,7 +48,7 @@ void MatrixLibrary::load()
             object.insert(keySlot(), slot);
             migrated = true;
         }
-        matrices.append(object);
+        m_matrices.append(object);
     }
     if (migrated)
         flush();
@@ -58,19 +58,19 @@ void MatrixLibrary::flush() const
 {
     QSettings settings;
     settings.setValue(SettingsKeys::MATRICES_JSON,
-                      QJsonDocument(matrices).toJson(QJsonDocument::Compact));
+                      QJsonDocument(m_matrices).toJson(QJsonDocument::Compact));
     settings.sync();
 }
 
 bool MatrixLibrary::isEmpty() const
 {
-    return matrices.isEmpty();
+    return m_matrices.isEmpty();
 }
 
 int MatrixLibrary::indexOf(int slot) const
 {
-    for (int i = 0; i < matrices.size(); ++i)
-        if (matrices.at(i).isObject() && matrices.at(i).toObject().value(keySlot()).toInt(-1) == slot)
+    for (int i = 0; i < m_matrices.size(); ++i)
+        if (m_matrices.at(i).isObject() && m_matrices.at(i).toObject().value(keySlot()).toInt(-1) == slot)
             return i;
     return -1;
 }
@@ -86,7 +86,7 @@ MatrixLibrary::Entry MatrixLibrary::at(int slot) const
     const int idx = indexOf(slot);
     if (idx < 0)
         return entry;
-    const QJsonObject object = matrices.at(idx).toObject();
+    const QJsonObject object = m_matrices.at(idx).toObject();
     entry.slot   = slot;
     entry.name   = object.value(keyName()).toString();
     entry.matrix = object.value(keyBody()).toString();
@@ -112,9 +112,9 @@ void MatrixLibrary::save(int slot, const QString& name, const QString& matrixTex
 
     const int idx = indexOf(slot);
     if (idx >= 0)
-        matrices.replace(idx, object);
+        m_matrices.replace(idx, object);
     else
-        matrices.append(object);
+        m_matrices.append(object);
     flush();
 }
 
@@ -123,7 +123,7 @@ bool MatrixLibrary::remove(int slot)
     const int idx = indexOf(slot);
     if (idx < 0)
         return false;
-    matrices.removeAt(idx);
+    m_matrices.removeAt(idx);
     flush();
     return true;
 }

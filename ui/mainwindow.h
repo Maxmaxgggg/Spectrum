@@ -70,59 +70,59 @@ private slots:
     bool hasCheckpoint() const;
 private:
 
-    Ui::MainWindow *ui;
+    Ui::MainWindow *m_ui;
     // Настройки расчёта: из диалога, вместе с матрицами из редакторов.
-    ComputationSettings settings;
-    QDockWidget    *matrixDock       = nullptr;
+    ComputationSettings m_settings;
+    QDockWidget    *m_matrixDock       = nullptr;
     // Обе матрицы — страницами одной панели; вкладки живут в заголовке
     // панели, в одной строке с её кнопками. У произвольного кода страница
     // одна и вкладок не видно; у кода произведения — две, «Матрица 1» и
     // «Матрица 2», и на стыке вкладок кнопка «поменять местами».
-    class QTabBar*             matrixTabBar = nullptr;
-    class QStackedWidget*      matrixPages  = nullptr;
-    class FilterPlainTextEdit* matrix2PTE   = nullptr;
+    class QTabBar*             m_matrixTabBar = nullptr;
+    class QStackedWidget*      m_matrixPages  = nullptr;
+    class FilterPlainTextEdit* m_matrix2PTE   = nullptr;
     // Показать или спрятать вторую вкладку по алгоритму.
     void updateMatrixTabs();
     // Заголовок панели и вкладок: имя и размер.
     void updateMatrixTitles();
-    QDockWidget    *spectrumDock     = nullptr;
-    QDockWidget    *plotDock         = nullptr;
-    QDockWidget    *statsDock        = nullptr;
-    class StatsPanel *statsPanel     = nullptr;
+    QDockWidget    *m_spectrumDock     = nullptr;
+    QDockWidget    *m_plotDock         = nullptr;
+    QDockWidget    *m_statsDock        = nullptr;
+    class StatsPanel *m_statsPanel     = nullptr;
     // Снимок раскладки сразу после сборки — по нему работает «Раскладка по
     // умолчанию». Собирать её заново расстановкой доков ненадёжно: Qt не
     // обещает, что повторное добавление даст те же пропорции.
-    QByteArray      defaultLayout;
+    QByteArray      m_defaultLayout;
 
     // Перерисовка графика откладывается: при перетаскивании панели события
     // изменения размера идут десятками в секунду, и рисовать на каждое —
     // это и есть подлагивание. Ждём, пока размер перестанет меняться.
-    QTimer*         plotRefreshTimer = nullptr;
-    Worker         *workerPtr        = nullptr;
-    QThread        *workerThreadPtr  = nullptr;
-    SettingsDialog *settingsDialog   = nullptr;
-    MatrixMenu     *matrixMenu       = nullptr;
+    QTimer*         m_plotRefreshTimer = nullptr;
+    Worker         *m_workerPtr        = nullptr;
+    QThread        *m_workerThreadPtr  = nullptr;
+    SettingsDialog *m_settingsDialog   = nullptr;
+    MatrixMenu     *m_matrixMenu       = nullptr;
 
     // Автосохранения расчёта на диске.
-    AutosaveStore   autosave;
-    QGraphicsOpacityEffect* saveLBLOpacityEffect;
+    AutosaveStore   m_autosave;
+    QGraphicsOpacityEffect* m_saveLBLOpacityEffect;
     // состояние выполнения: Idle / Running / Paused
     // Loaded — из диалога поднято автосохранение: спектр и прогресс уже на
     // экране, кнопка предлагает продолжить, и спрашивать при запуске второй
     // раз незачем.
     enum class RunState { Idle, Running, Paused, Loaded };
-    RunState runState = RunState::Idle;
+    RunState m_runState = RunState::Idle;
 
     // Запись, поднятая во время расчёта: применить её можно только после того,
     // как воркер остановится, иначе он затрёт её своими обновлениями.
-    bool           pendingAutosave = false;
-    Matrix         pendingMatrix;
-    AutosaveRecord pendingRecord;
+    bool           m_pendingAutosave = false;
+    Matrix         m_pendingMatrix;
+    AutosaveRecord m_pendingRecord;
 
     // График спектра. Создаётся в конструкторе, когда виджет из .ui готов.
-    std::unique_ptr<SpectrumPlot> spectrumPlot;
+    std::unique_ptr<SpectrumPlot> m_spectrumPlot;
 
-    int remainingMinutes = -1;
+    int m_remainingMinutes = -1;
     // Строка о подобранной сетке. Пустая, если подбор не проводился.
 
 
@@ -138,7 +138,7 @@ private:
     // добавить состояние, как подпись и значок разъезжались.
     void updateExecuteButton();
 
-    // Текст спектра — строками «вес - число слов» по lastSpectrum.
+    // Текст спектра — строками «вес - число слов» по m_lastSpectrum.
     void showSpectrumText();
 
     // Три панели живут в доках: любую можно вытащить в отдельное окно и
@@ -147,13 +147,13 @@ private:
     void resetLayout();
 
     // Последний показанный спектр — его же и сохраняем между запусками.
-    SpectrumCounts lastSpectrum;
+    SpectrumCounts m_lastSpectrum;
     // До какого веса показанный спектр точен. -1 — весь спектр на равных
     // (обычный перебор); иначе строки тяжелее помечаются как неполные.
 
     // Случайный поиск: сколько слов каждого веса, по оценке, ещё не найдено.
     // Пусто — пометок нет.
-    SpectrumFloat unseenByWeight;
+    SpectrumFloat m_unseenByWeight;
 
     void showAutosaveDialog();
     void applyAutosave(const Matrix& matrix, const AutosaveRecord& record);
@@ -161,7 +161,7 @@ private:
     // что во время расчёта её приходится откладывать до остановки воркера.
     void applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& record);
     // Пока матрица подставляется из записи, правкой её считать нельзя.
-    bool applyingAutosave = false;
+    bool m_applyingAutosave = false;
     void setMatrixMenu();
     void setToolTips();
     void connectSettingsDialog();
@@ -171,7 +171,7 @@ private:
 
     // Прогресс на кнопке приложения в панели задач. Создаётся в конструкторе
     // после сборки окна: индикатору нужен готовый нативный дескриптор.
-    std::unique_ptr<TaskbarProgress> taskbar;
+    std::unique_ptr<TaskbarProgress> m_taskbar;
 };
 
 #endif // WIDGET_H

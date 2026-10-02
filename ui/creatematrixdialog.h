@@ -30,8 +30,8 @@ public:
     explicit CreateMatrixDialog(QWidget* parent = nullptr);
 
     // Матрица, построенная по нажатию «Создать»; пусто, если отменили.
-    QString matrixText() const { return result; }
-    QString matrixName() const { return resultName; }
+    QString matrixText() const { return m_result; }
+    QString matrixName() const { return m_resultName; }
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -50,37 +50,37 @@ private:
     Bch::Code current() const;
     void accept() override;
 
-    QTabWidget*   tabs       = nullptr;
-    QPushButton*  createButton = nullptr;
-    int           bchTab     = -1;
-    int           hammingTab = -1;
-    int           parityTab  = -1;
+    QTabWidget*   m_tabs       = nullptr;
+    QPushButton*  m_createButton = nullptr;
+    int           m_bchTab     = -1;
+    int           m_hammingTab = -1;
+    int           m_parityTab  = -1;
 
     // Вкладка БЧХ.
-    QTableWidget* table      = nullptr;
-    QLabel*       codeLabel  = nullptr;
-    QCheckBox*    extendBox  = nullptr;
-    QSpinBox*     shortenBox = nullptr;
+    QTableWidget* m_table      = nullptr;
+    QLabel*       m_codeLabel  = nullptr;
+    QCheckBox*    m_extendBox  = nullptr;
+    QSpinBox*     m_shortenBox = nullptr;
 
     // Вкладка Хэмминга.
-    QSpinBox*     hammingR       = nullptr;
-    QLabel*       hammingLabel   = nullptr;
-    QCheckBox*    hammingExtend  = nullptr;
-    QSpinBox*     hammingShorten = nullptr;
+    QSpinBox*     m_hammingR       = nullptr;
+    QLabel*       m_hammingLabel   = nullptr;
+    QCheckBox*    m_hammingExtend  = nullptr;
+    QSpinBox*     m_hammingShorten = nullptr;
     void showHamming();
 
     // Вкладка чётности.
-    QSpinBox*     parityK     = nullptr;
-    QLabel*       parityLabel = nullptr;
+    QSpinBox*     m_parityK     = nullptr;
+    QLabel*       m_parityLabel = nullptr;
 
     // Строки таблицы — представители всех полей, объединённые; в ячейке
     // (строка, m) — сколько классов поля m взято до этой строки включительно,
     // 0 — у поля m такого представителя нет.
-    QVector<int>          rowExponents;
-    QVector<QVector<int>> repsUpTo;   // [column][row]
+    QVector<int>          m_rowExponents;
+    QVector<QVector<int>> m_repsUpTo;   // [column][row]
 
-    int selectedM    = 0;
-    int selectedReps = 0;
-    QString result;
-    QString resultName;
+    int m_selectedM    = 0;
+    int m_selectedReps = 0;
+    QString m_result;
+    QString m_resultName;
 };

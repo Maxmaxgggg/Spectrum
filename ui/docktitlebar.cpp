@@ -11,7 +11,7 @@
 #include <QToolButton>
 
 DockTitleBar::DockTitleBar(QDockWidget* owner)
-    : QWidget(owner), dock(owner)
+    : QWidget(owner), m_dock(owner)
 {
     const int margin = style()->pixelMetric(QStyle::PM_DockWidgetTitleBarButtonMargin, nullptr, this);
 
@@ -30,30 +30,30 @@ DockTitleBar::DockTitleBar(QDockWidget* owner)
         return button;
     };
 
-    floatButton = makeButton(QStyle::SP_TitleBarNormalButton, tr("В отдельное окно"));
-    closeButton = makeButton(QStyle::SP_TitleBarCloseButton,  tr("Закрыть панель"));
+    m_floatButton = makeButton(QStyle::SP_TitleBarNormalButton, tr("В отдельное окно"));
+    m_closeButton = makeButton(QStyle::SP_TitleBarCloseButton,  tr("Закрыть панель"));
 
-    connect(floatButton, &QToolButton::clicked, this,
-            [this]() { dock->setFloating(!dock->isFloating()); });
-    connect(closeButton, &QToolButton::clicked, dock, &QDockWidget::close);
+    connect(m_floatButton, &QToolButton::clicked, this,
+            [this]() { m_dock->setFloating(!m_dock->isFloating()); });
+    connect(m_closeButton, &QToolButton::clicked, m_dock, &QDockWidget::close);
 
-    connect(dock, &QDockWidget::featuresChanged, this, [this]() { updateButtons(); });
-    connect(dock, &QDockWidget::windowTitleChanged, this, [this](const QString&) { update(); });
-    connect(dock, &QDockWidget::topLevelChanged, this, [this](bool floating) {
-        floatButton->setToolTip(floating ? tr("Вернуть на место") : tr("В отдельное окно"));
+    connect(m_dock, &QDockWidget::featuresChanged, this, [this]() { updateButtons(); });
+    connect(m_dock, &QDockWidget::windowTitleChanged, this, [this](const QString&) { update(); });
+    connect(m_dock, &QDockWidget::topLevelChanged, this, [this](bool floating) {
+        m_floatButton->setToolTip(floating ? tr("Вернуть на место") : tr("В отдельное окно"));
         update();
     });
     // Сложили с другой панелью или разложили — название то появляется на
     // вкладке, то нет; перерисовать.
-    connect(dock, &QDockWidget::dockLocationChanged, this, [this](Qt::DockWidgetArea) { update(); });
-    connect(dock, &QDockWidget::visibilityChanged,   this, [this](bool) { update(); });
+    connect(m_dock, &QDockWidget::dockLocationChanged, this, [this](Qt::DockWidgetArea) { update(); });
+    connect(m_dock, &QDockWidget::visibilityChanged,   this, [this](bool) { update(); });
 
     updateButtons();
 }
 
 void DockTitleBar::setTabBar(QTabBar* bar)
 {
-    tabBar = bar;
+    m_tabBar = bar;
     bar->setParent(this);
     // Только сами вкладки: подложку и рамку рисует заголовок.
     bar->setDocumentMode(true);
@@ -69,12 +69,12 @@ void DockTitleBar::setTabBar(QTabBar* bar)
 
 bool DockTitleBar::showsTabs() const
 {
-    return tabBar && !tabBar->isHidden();
+    return m_tabBar && !m_tabBar->isHidden();
 }
 
 bool DockTitleBar::eventFilter(QObject* watched, QEvent* event)
 {
-    if (watched == tabBar
+    if (watched == m_tabBar
         && (event->type() == QEvent::Show || event->type() == QEvent::Hide
             || event->type() == QEvent::Resize)) {
         updateGeometry();
@@ -96,18 +96,18 @@ int DockTitleBar::buttonExtent() const
 
 void DockTitleBar::updateButtons()
 {
-    const QDockWidget::DockWidgetFeatures features = dock->features();
+    const QDockWidget::DockWidgetFeatures features = m_dock->features();
     const int extent = buttonExtent();
 
-    for (QToolButton* button : { floatButton, closeButton }) {
+    for (QToolButton* button : { m_floatButton, m_closeButton }) {
         // Значок занимает две трети кнопки, остальное — поле, по которому под
         // курсором видно рамку.
         button->setIconSize(QSize(extent * 2 / 3, extent * 2 / 3));
         button->setFixedSize(extent, extent);
     }
 
-    floatButton->setVisible(features & QDockWidget::DockWidgetFloatable);
-    closeButton->setVisible(features & QDockWidget::DockWidgetClosable);
+    m_floatButton->setVisible(features & QDockWidget::DockWidgetFloatable);
+    m_closeButton->setVisible(features & QDockWidget::DockWidgetClosable);
 
     updateGeometry();
     update();
@@ -118,7 +118,7 @@ void DockTitleBar::initStyleOption(QStyleOptionDockWidget* option) const
     option->initFrom(this);
     option->rect = rect();
 
-    const QDockWidget::DockWidgetFeatures features = dock->features();
+    const QDockWidget::DockWidgetFeatures features = m_dock->features();
     option->closable  = features & QDockWidget::DockWidgetClosable;
     option->floatable = features & QDockWidget::DockWidgetFloatable;
     option->movable   = features & QDockWidget::DockWidgetMovable;
@@ -129,7 +129,7 @@ void DockTitleBar::initStyleOption(QStyleOptionDockWidget* option) const
     // Стиль рисует название по всей отданной ему ширине и на длинном заезжает
     // под кнопки. Место под них считаем сами и обрезаем название по нему.
     int reserved = 0;
-    for (const QToolButton* button : { floatButton, closeButton }) {
+    for (const QToolButton* button : { m_floatButton, m_closeButton }) {
         if (button->isVisible())
             reserved += button->width();
     }
@@ -137,18 +137,18 @@ void DockTitleBar::initStyleOption(QStyleOptionDockWidget* option) const
 
     option->title = tabified() || showsTabs()
                         ? QString()
-                        : fontMetrics().elidedText(dock->windowTitle(), Qt::ElideRight,
+                        : fontMetrics().elidedText(m_dock->windowTitle(), Qt::ElideRight,
                                                    qMax(0, width() - reserved));
 }
 
 bool DockTitleBar::tabified() const
 {
-    const auto* window = qobject_cast<const QMainWindow*>(dock->parentWidget());
-    if (!window || dock->isFloating())
+    const auto* window = qobject_cast<const QMainWindow*>(m_dock->parentWidget());
+    if (!window || m_dock->isFloating())
         return false;
     // Спрятанный сосед по группе в списке остаётся, а вкладок при нём нет —
     // считаем только видимых.
-    const QList<QDockWidget*> neighbours = window->tabifiedDockWidgets(dock);
+    const QList<QDockWidget*> neighbours = window->tabifiedDockWidgets(m_dock);
     for (const QDockWidget* other : neighbours)
         if (other->isVisible())
             return true;
@@ -169,10 +169,10 @@ QSize DockTitleBar::sizeHint() const
 {
     const int margin = style()->pixelMetric(QStyle::PM_DockWidgetTitleBarButtonMargin, nullptr, this);
     int content = fontMetrics().height();
-    int text    = fontMetrics().horizontalAdvance(dock->windowTitle());
+    int text    = fontMetrics().horizontalAdvance(m_dock->windowTitle());
     if (showsTabs()) {
-        content = qMax(content, tabBar->sizeHint().height());
-        text    = tabBar->sizeHint().width();
+        content = qMax(content, m_tabBar->sizeHint().height());
+        text    = m_tabBar->sizeHint().width();
     }
     const int height = qMax(buttonExtent(), content) + 2 * margin;
 

@@ -125,7 +125,7 @@ public:
 
     // Случайный поиск может отдать не только счёт, но и сами слова — коду
     // произведения нужны они. По умолчанию слова после расчёта не хранятся.
-    void setKeepFoundWords(bool keep) { keepFoundWords = keep; }
+    void setKeepFoundWords(bool keep) { m_keepFoundWords = keep; }
     const std::vector<quint64>& foundWords()   const { return m_foundWords; }
     const std::vector<int>&     foundWeights() const { return m_foundWeights; }
 
@@ -139,11 +139,11 @@ public:
     // Где плану стохастического поиска можно брать окно Штерна–Дюмера
     // (см. Leon::WindowPolicy). Тесты выключают его, чтобы сравнивать CPU и
     // GPU слово в слово.
-    void setWindowPolicy(Leon::WindowPolicy policy) { windowPolicy = policy; }
+    void setWindowPolicy(Leon::WindowPolicy policy) { m_windowPolicy = policy; }
     // До какой размерности компоненту произведения перебирать целиком, а не
     // вложенным расчётом. Тесты занижают порог, чтобы гонять вложенный
     // расчёт на маленьких кодах.
-    void setProductBruteForceMaxK(int k) { productBruteForceMaxK = k; }
+    void setProductBruteForceMaxK(int k) { m_productBruteForceMaxK = k; }
 
 public slots:
     void computeSpectrum( );
@@ -286,66 +286,66 @@ private:
     bool    waitWhilePaused();
 
 
-    std::atomic<int> paused    { 0 };
-    std::atomic<int> cancelled { 0 };
+    std::atomic<int> m_paused    { 0 };
+    std::atomic<int> m_cancelled { 0 };
 
-    ComputationSettings         settings;
-    RunState                    runState;
-    ProgressTracker             progress;
+    ComputationSettings         m_settings;
+    RunState                    m_runState;
+    ProgressTracker             m_progress;
 
     // Множества из поднятого сохранения: продолжать расчёт можно только по
     // ним. Пусто — искать заново.
-    QVector<QVector<int>>       resumedInfoSets;
+    QVector<QVector<int>>       m_resumedInfoSets;
     // Множества и глубина идущего расчёта — для записи в автосохранение.
-    QVector<QVector<int>>       activeInfoSets;
-    int                         activeMaxRows = 0;
+    QVector<QVector<int>>       m_activeInfoSets;
+    int                         m_activeMaxRows = 0;
     // Сделано попыток случайного поиска — тоже в запись.
-    quint64                     activeTrials  = 0;
+    quint64                     m_activeTrials  = 0;
     // Код произведения: до какого веса спектр точен — в запись.
-    int                         productExactUpTo = -1;
+    int                         m_productExactUpTo = -1;
     // Брауэр–Циммерман: спектр показывается только до заказанного веса.
     // Слои перебора цепляют и более тяжёлые слова, но не все — эти счётчики
     // остаются в состоянии (они нужны при досчёте), а на экран не идут.
     // -1 — показывать всё.
-    int                         displayUpToWeight = -1;
+    int                         m_displayUpToWeight = -1;
 
     // Итог последнего расчёта — для вложенного использования: код
     // произведения считает компоненты вложенным Worker и забирает отсюда.
     QVector<quint64>            m_finalSpectrum;
     int                         m_finalExactUpTo = -1;
     // Вложенный расчёт, которому надо передать отмену и паузу.
-    std::atomic<Worker*>        activeSub { nullptr };
-    QString                     autosaveRootDir;
-    bool                        keepFoundWords = false;
+    std::atomic<Worker*>        m_activeSub { nullptr };
+    QString                     m_autosaveRootDir;
+    bool                        m_keepFoundWords = false;
     std::vector<quint64>        m_foundWords;
     std::vector<int>            m_foundWeights;
     // Код произведения: степень пропуска, если компоненты собраны случайным
     // поиском; ноль — всё сертифицировано.
-    int                         productMissExponent = 0;
+    int                         m_productMissExponent = 0;
 
     // Продолжение с чекпоинта: накопленный спектр переносится в буферы
     // расчёта (prepareBuffers), а не обнуляется.
-    bool                        resumeSpectrum = false;
+    bool                        m_resumeSpectrum = false;
     // 0 — обычный режим; см. setCheckpointOpsPolicy
-    quint64                     stopAfterOps   = 0;
-    quint64                     checkpointEveryOps = 0;
+    quint64                     m_stopAfterOps   = 0;
+    quint64                     m_checkpointEveryOps = 0;
     // См. setGridTuningThreshold
-    double                      tuneThresholdSec   = 10.0;
-    bool                        tuneVerbose        = false;
-    Leon::WindowPolicy          windowPolicy;
-    int                         productBruteForceMaxK = Product::BRUTE_FORCE_MAX_K;
+    double                      m_tuneThresholdSec   = 10.0;
+    bool                        m_tuneVerbose        = false;
+    Leon::WindowPolicy          m_windowPolicy;
+    int                         m_productBruteForceMaxK = Product::BRUTE_FORCE_MAX_K;
 
     // Память расчёта на хосте и на видеокарте, поток ядер и кольцо снимков
     // (worker_p.h). Владеющая: освобождается вместе с объектом, каким бы
     // путём ни завершился расчёт — успехом, отменой или исключением.
-    std::unique_ptr<WorkerBuffers> buffers;
+    std::unique_ptr<WorkerBuffers> m_buffers;
 
     // Идёт замер потолка: спектры не отправляются, а считаются, и ход расчёта
     // в интерфейс не идёт — прогрессбар не должен дёргаться от пробы.
-    bool                 probeMode  = false;
-    quint64              probeSends = 0;
-    BinomTable           binomTable;
-    AutosaveStore        autosave;
+    bool                 m_probeMode  = false;
+    quint64              m_probeSends = 0;
+    BinomTable           m_binomTable;
+    AutosaveStore        m_autosave;
 
     // Тело расчёта. Отделено от computeSpectrum(), чтобы та могла обернуть
     // его в try/catch и превратить исключение в сигнал об ошибке.

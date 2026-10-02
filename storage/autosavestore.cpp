@@ -163,10 +163,10 @@ double totalOperations(const AutosaveRecord& record, int rows)
 // ---------------------------------------------------------------- хранилище
 
 AutosaveStore::AutosaveStore(const QString& rootDir)
-    : root(rootDir)
+    : m_root(rootDir)
 {
-    if (root.isEmpty()) {
-        root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+    if (m_root.isEmpty()) {
+        m_root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
              + QLatin1String("/autosave");
     }
 }
@@ -187,7 +187,7 @@ QString AutosaveStore::folderName(const Matrix& matrix)
 
 QString AutosaveStore::folderPath(const Matrix& matrix) const
 {
-    return root + QLatin1Char('/') + folderName(matrix);
+    return m_root + QLatin1Char('/') + folderName(matrix);
 }
 
 QString AutosaveStore::fileNameFor(ComputationSettings::Algorithm algorithm)
@@ -272,7 +272,7 @@ bool AutosaveStore::removeRecord(const QString& folder,
                          || folder.contains(QLatin1Char('\\')))
         return false;   // только имя папки, без путей наружу
 
-    const QString dir = root + QLatin1Char('/') + folder;
+    const QString dir = m_root + QLatin1Char('/') + folder;
     if (!QFile::remove(dir + QLatin1Char('/') + fileNameFor(algorithm)))
         return false;
 
@@ -288,17 +288,17 @@ bool AutosaveStore::removeFolder(const QString& folder)
 {
     if (folder.isEmpty() || folder.contains(QLatin1Char('/')) || folder.contains(QLatin1Char('\\')))
         return false;   // только имя папки, без путей наружу
-    return QDir(root + QLatin1Char('/') + folder).removeRecursively();
+    return QDir(m_root + QLatin1Char('/') + folder).removeRecursively();
 }
 
 void AutosaveStore::removeAll()
 {
-    QDir(root).removeRecursively();
+    QDir(m_root).removeRecursively();
 }
 
 Matrix AutosaveStore::matrixOf(const QString& folder) const
 {
-    QFile file(root + QLatin1Char('/') + folder + QLatin1Char('/') + MATRIX_FILE);
+    QFile file(m_root + QLatin1Char('/') + folder + QLatin1Char('/') + MATRIX_FILE);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
         return Matrix();
 
@@ -311,7 +311,7 @@ QVector<AutosaveEntry> AutosaveStore::list() const
 {
     QVector<AutosaveEntry> entries;
 
-    QDir dir(root);
+    QDir dir(m_root);
     const QStringList folders = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QString& folder : folders) {
         QDir sub(dir.filePath(folder));
@@ -370,7 +370,7 @@ void AutosaveStore::applyRetention(int maxRecords, int maxAgeDays)
         if (!tooMany && !tooOld)
             continue;
 
-        QDir sub(root + QLatin1Char('/') + entry.folder);
+        QDir sub(m_root + QLatin1Char('/') + entry.folder);
         sub.remove(fileNameFor(entry.record.algorithm));
         if (sub.entryList(QStringList() << QStringLiteral("*.json"), QDir::Files).isEmpty())
             sub.removeRecursively();

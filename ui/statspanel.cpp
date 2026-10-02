@@ -44,23 +44,23 @@ StatsPanel::StatsPanel(QWidget* parent)
         form->addRow(line);
     };
 
-    stateValue     = addRow(form, tr("Состояние:"));
+    m_stateValue     = addRow(form, tr("Состояние:"));
     separator();
-    deviceValue    = addRow(form, tr("Устройство:"));
-    algorithmValue = addRow(form, tr("Алгоритм:"));
+    m_deviceValue    = addRow(form, tr("Устройство:"));
+    m_algorithmValue = addRow(form, tr("Алгоритм:"));
     // Показатель степени в вероятности пропуска — надстрочным индексом.
-    algorithmValue->setTextFormat(Qt::RichText);
+    m_algorithmValue->setTextFormat(Qt::RichText);
     separator();
-    elapsedValue   = addRow(form, tr("Прошло:"));
-    remainingValue = addRow(form, tr("Осталось:"));
-    finishValue    = addRow(form, tr("Закончится:"));
+    m_elapsedValue   = addRow(form, tr("Прошло:"));
+    m_remainingValue = addRow(form, tr("Осталось:"));
+    m_finishValue    = addRow(form, tr("Закончится:"));
     separator();
-    speedValue     = addRow(form, tr("Скорость:"));
-    doneValue      = addRow(form, tr("Перебрано:"));
+    m_speedValue     = addRow(form, tr("Скорость:"));
+    m_doneValue      = addRow(form, tr("Перебрано:"));
 
     clearProgress();
-    deviceValue->setText(DASH);
-    algorithmValue->setText(DASH);
+    m_deviceValue->setText(DASH);
+    m_algorithmValue->setText(DASH);
 }
 
 QLabel* StatsPanel::addRow(QFormLayout* form, const QString& caption)
@@ -76,19 +76,19 @@ QLabel* StatsPanel::addRow(QFormLayout* form, const QString& caption)
 
 void StatsPanel::showTask(const ComputationSettings& settings)
 {
-    grid.clear();
+    m_grid.clear();
 
     if (settings.compDev == ComputationSettings::Gpu) {
         // У случайного поиска своя сетка: блок на попытку, 256 нитей.
-        deviceText = settings.algorithmType == ComputationSettings::RandomInfoSets
+        m_deviceText = settings.algorithmType == ComputationSettings::RandomInfoSets
                          ? tr("GPU, блок на попытку")
                          : tr("GPU, сетка %1 x %2")
                                .arg(settings.compDevSet.blocksGpu)
                                .arg(settings.compDevSet.threadsGpu);
     } else {
-        deviceText = tr("CPU, потоков: %1").arg(settings.compDevSet.threadsCpu);
+        m_deviceText = tr("CPU, потоков: %1").arg(settings.compDevSet.threadsCpu);
     }
-    deviceValue->setText(deviceText);
+    m_deviceValue->setText(m_deviceText);
 
     QString enumeration = settings.enumType == ComputationSettings::Full
                               ? tr("полный перебор")
@@ -103,21 +103,21 @@ void StatsPanel::showTask(const ComputationSettings& settings)
                           ? tr("компоненты весом до %1").arg(settings.productWeight)
                           : tr("до границы Толхёйзена");
     }
-    algorithmValue->setText(algorithmName(settings.algorithmType)
+    m_algorithmValue->setText(algorithmName(settings.algorithmType)
                             + QStringLiteral(", ") + enumeration);
 }
 
 void StatsPanel::showGrid(int blocks, int threads)
 {
-    grid = tr("GPU, сетка %1 x %2 (подобрана)").arg(blocks).arg(threads);
-    deviceValue->setText(grid);
+    m_grid = tr("GPU, сетка %1 x %2 (подобрана)").arg(blocks).arg(threads);
+    m_deviceValue->setText(m_grid);
 }
 
 void StatsPanel::showProgress(int elapsedSec, int minutesLeft, double speed,
                               quint64 doneOps, quint64 totalOps)
 {
-    elapsedValue->setText(Format::duration(elapsedSec));
-    remainingValue->setText(Format::remainingTime(minutesLeft));
+    m_elapsedValue->setText(Format::duration(elapsedSec));
+    m_remainingValue->setText(Format::remainingTime(minutesLeft));
 
     // Время окончания полезнее остатка, когда расчёт на часы: сразу видно,
     // ждать ли его сегодня. За горизонтом оценки показывать нечего — она
@@ -126,23 +126,23 @@ void StatsPanel::showProgress(int elapsedSec, int minutesLeft, double speed,
     if (minutesLeft > 0 && minutesLeft < MINUTES_IN_YEAR) {
         const QDateTime finish = QDateTime::currentDateTime().addSecs(qint64(minutesLeft) * 60);
         const bool today = finish.date() == QDate::currentDate();
-        finishValue->setText(today ? finish.toString(QStringLiteral("HH:mm"))
+        m_finishValue->setText(today ? finish.toString(QStringLiteral("HH:mm"))
                                    : finish.toString(QStringLiteral("d MMMM, HH:mm")));
     } else {
-        finishValue->setText(DASH);
+        m_finishValue->setText(DASH);
     }
 
-    speedValue->setText(Format::speed(speed));
-    doneValue->setText(tr("%1 из %2").arg(Format::count(doneOps), Format::count(totalOps)));
+    m_speedValue->setText(Format::speed(speed));
+    m_doneValue->setText(tr("%1 из %2").arg(Format::count(doneOps), Format::count(totalOps)));
 }
 
 void StatsPanel::showState(const QString& text)
 {
-    stateValue->setText(text.isEmpty() ? DASH : text);
+    m_stateValue->setText(text.isEmpty() ? DASH : text);
 }
 
 void StatsPanel::clearProgress()
 {
-    for (QLabel* value : { elapsedValue, remainingValue, finishValue, speedValue, doneValue })
+    for (QLabel* value : { m_elapsedValue, m_remainingValue, m_finishValue, m_speedValue, m_doneValue })
         value->setText(DASH);
 }

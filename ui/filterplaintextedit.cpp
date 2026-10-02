@@ -14,7 +14,7 @@ void FilterPlainTextEdit::insertFromMimeData(const QMimeData *source)
 {
     // Вставляем только 0, 1 и символ новой строки
     QString text = source->text();
-    text.remove(reInvalid);
+    text.remove(m_reInvalid);
     QPlainTextEdit::insertPlainText(text);
 }
 

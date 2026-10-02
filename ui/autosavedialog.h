@@ -42,11 +42,11 @@ private:
     static QString describeAlgorithm(const AutosaveRecord& record);
     AutosaveRecord entryOf(QTreeWidgetItem* item) const;
 
-    AutosaveStore* store = nullptr;
+    AutosaveStore* m_store = nullptr;
 
-    QTreeWidget* tree        = nullptr;
-    QLabel*      summary     = nullptr;
-    QPushButton* removeBtn   = nullptr;
-    QPushButton* removeAllBtn = nullptr;
-    QPushButton* loadBtn     = nullptr;
+    QTreeWidget* m_tree        = nullptr;
+    QLabel*      m_summary     = nullptr;
+    QPushButton* m_removeBtn   = nullptr;
+    QPushButton* m_removeAllBtn = nullptr;
+    QPushButton* m_loadBtn     = nullptr;
 };

@@ -33,10 +33,10 @@ private:
     void save();
     void create();
 
-    QAction* loadAction   = nullptr;
-    QAction* saveAction   = nullptr;
-    QAction* createAction = nullptr;
-    QWidget* dialogParent = nullptr;
+    QAction* m_loadAction   = nullptr;
+    QAction* m_saveAction   = nullptr;
+    QAction* m_createAction = nullptr;
+    QWidget* m_dialogParent = nullptr;
 
-    std::function<QString()> matrixSource;
+    std::function<QString()> m_matrixSource;
 };

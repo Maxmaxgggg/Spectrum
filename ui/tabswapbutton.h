@@ -28,6 +28,6 @@ private:
     void place();
     void showIfNear(const QPoint& pos);
 
-    QTabBar*     bar;
-    QToolButton* button;
+    QTabBar*     m_bar;
+    QToolButton* m_button;
 };
