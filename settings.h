@@ -130,49 +130,12 @@ struct ComputationSettings
         int updateSpectrumInterval = EverySecond;
     } timeIntSet;
 
+    // Копирование и перемещение — умолчательные, поле в поле. Самописный
+    // конструктор копирования пропускал matrix и matrix2: копия выходила без
+    // матриц, а fromJson держался только на NRVO. Новое поле в умолчательном
+    // копировании тоже не потеряется.
     ComputationSettings() noexcept = default;
 
-    // Конструктор копирования
-    ComputationSettings(const ComputationSettings& other) noexcept
-        : algorithmType(other.algorithmType)
-        , enumType(other.enumType)
-        , maxRows(other.maxRows)
-        , bzWeight(other.bzWeight)
-        , leonWeight(other.leonWeight)
-        , leonMissExponent(other.leonMissExponent)
-        , leonMemoryMb(other.leonMemoryMb)
-        , productWeight(other.productWeight)
-        , productRank(other.productRank)
-        , productAlgorithm(other.productAlgorithm)
-        , compDev(other.compDev)
-        , autoTuneGrid(other.autoTuneGrid)
-        , maxPlotBars(other.maxPlotBars)
-        , compDevSet(other.compDevSet)
-        , timeIntSet(other.timeIntSet) { }
-
-    // Рекомендуется также явно определить оператор присваивания
-    ComputationSettings& operator=(const ComputationSettings& other) noexcept
-    {
-        if (this == &other) return *this;
-        matrix = other.matrix;
-        matrix2 = other.matrix2;
-        algorithmType = other.algorithmType;
-        enumType = other.enumType;
-        maxRows = other.maxRows;
-        bzWeight = other.bzWeight;
-        leonWeight = other.leonWeight;
-        leonMissExponent = other.leonMissExponent;
-        leonMemoryMb = other.leonMemoryMb;
-        productWeight = other.productWeight;
-        productRank = other.productRank;
-        productAlgorithm = other.productAlgorithm;
-        compDev = other.compDev;
-        autoTuneGrid = other.autoTuneGrid;
-        maxPlotBars = other.maxPlotBars;
-        compDevSet = other.compDevSet;
-        timeIntSet = other.timeIntSet;
-        return *this;
-    }
     bool operator==(const ComputationSettings& other) const
     {
         // Не сравниваем между собой настройки времени

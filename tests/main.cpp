@@ -937,6 +937,34 @@ static void expectStore(const QString& name, bool condition)
     else           { ++g_failed; out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl; }
 }
 
+// Копия настроек обязана нести обе матрицы. Самописный конструктор
+// копирования их пропускал. Работало это только потому, что fromJson
+// возвращает настройки через NRVO: без него конструктор копирования отдал бы
+// Worker настройки без матрицы.
+static void testSettingsCopy()
+{
+    out << Qt::endl << QStringLiteral("Настройки: копирование") << Qt::endl;
+
+    ComputationSettings s;
+    s.matrix        = QStringList{ QStringLiteral("1011"), QStringLiteral("0110") };
+    s.matrix2       = QStringList{ QStringLiteral("111") };
+    s.algorithmType = Algorithm::ProductCode;
+    s.leonMemoryMb  = 512;
+
+    const ComputationSettings copied(s);
+    ComputationSettings assigned;
+    assigned = s;
+    const ComputationSettings viaJson = ComputationSettings::fromJson(s.toJson());
+
+    auto same = [&s](const ComputationSettings& x) {
+        return x.matrix == s.matrix && x.matrix2 == s.matrix2
+            && x.algorithmType == s.algorithmType && x.leonMemoryMb == s.leonMemoryMb;
+    };
+    expectStore(QStringLiteral("конструктор копирования переносит матрицы"), same(copied));
+    expectStore(QStringLiteral("присваивание переносит матрицы"), same(assigned));
+    expectStore(QStringLiteral("toJson -> fromJson переносит матрицы"), same(viaJson));
+}
+
 static void testAutosaveStore()
 {
     out << Qt::endl << QStringLiteral("Хранилище автосохранений") << Qt::endl;
@@ -3774,6 +3802,7 @@ int main(int argc, char* argv[])
     testHammingCode();
     testProductCode();
 
+    testSettingsCopy();
     testAutosaveStore();
     testCanResume();
     testExtendMaxRows();
