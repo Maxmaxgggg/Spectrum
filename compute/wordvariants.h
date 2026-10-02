@@ -16,8 +16,8 @@
 // Ближайший сверху заготовленный размер; ноль — строка длиннее любого.
 inline int paddedWordCount(int words)
 {
-    static const int sizes[] = { 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32 };
-    for (int candidate : sizes)
+    static const int SIZES[] = { 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32 };
+    for (int candidate : SIZES)
         if (candidate >= words) return candidate;
     return 0;
 }

@@ -58,8 +58,8 @@ QString Format::remainingTime(int minutesTotal)
     // Дальше года оценка ничего не значит. Она построена на средней скорости
     // с начала расчёта, а «8765 дн 23 ч» — это двадцать четыре года, поданные
     // с точностью до часа: видимость знания там, где его нет.
-    constexpr int minutesInYear = 365 * 24 * 60;
-    if (minutesTotal >= minutesInYear)
+    constexpr int MINUTES_IN_YEAR = 365 * 24 * 60;
+    if (minutesTotal >= MINUTES_IN_YEAR)
         return QObject::tr("Больше года");
 
     const int days    = minutesTotal / (60 * 24);
@@ -108,7 +108,7 @@ QString Format::powerOfTen(int exponent, bool richText)
             .arg(exponent < 0 ? QString(QChar(0x2212)) : QString())   // настоящий минус
             .arg(qAbs(exponent));
 
-    static const QChar digits[] = {
+    static const QChar DIGITS[] = {
         QChar(0x2070), QChar(0x00B9), QChar(0x00B2), QChar(0x00B3), QChar(0x2074),
         QChar(0x2075), QChar(0x2076), QChar(0x2077), QChar(0x2078), QChar(0x2079),
     };
@@ -119,6 +119,6 @@ QString Format::powerOfTen(int exponent, bool richText)
     }
     const QString plain = QString::number(exponent);
     for (const QChar c : plain)
-        power += digits[c.digitValue()];
+        power += DIGITS[c.digitValue()];
     return QStringLiteral("10") + power;
 }

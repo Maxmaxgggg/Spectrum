@@ -66,11 +66,11 @@ struct ComputationSettings
     // Тип перебора (Полный, Частичный)
     enum EnumerationType { Full = 0, Partial = 1 };
     // Тип вычислителя (ЦП, ГП)
-    enum ComputeDevice { CPU = 0, GPU = 1 };
+    enum ComputeDevice { Cpu = 0, Gpu = 1 };
 
     Algorithm       algorithmType = SimpleXor;
     EnumerationType enumType = Full;
-    ComputeDevice   compDev = CPU;
+    ComputeDevice   compDev = Cpu;
     // Максимальное число перебираемых строк
     int             maxRows = 0;
     // Брауэр–Циммерман: до какого веса спектр нужен точно. Число строк
@@ -111,7 +111,7 @@ struct ComputationSettings
     bool            autoTuneGrid = false;
 
     // Настройки вычислителя
-    struct computeDeviceSettings {
+    struct DeviceSettings {
         // Число потоков ЦП
         int threadsCpu = 1;
         // Число блоков ГП
@@ -124,7 +124,7 @@ struct ComputationSettings
     // ключ автосохранения не входит — это только вид.
     int             maxPlotBars = 160;
 
-    struct timeIntervalSettings {
+    struct IntervalSettings {
         // Частота сохранения спектра в реестр
         int saveSpectrumInterval = TenSeconds;
         // Частота обновления спектра на экране, миллисекунды

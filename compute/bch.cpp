@@ -8,7 +8,7 @@ namespace Bch {
 namespace {
 
 // Восьмеричные примитивные многочлены из таблицы, m = 2..11.
-const uint32_t kPrimitive[MAX_M + 1] = { 0, 0, 07, 013, 023, 045, 0103, 0211, 0435, 01021, 02011, 04005 };
+const uint32_t PRIMITIVE_POLYNOMIALS[MAX_M + 1] = { 0, 0, 07, 013, 023, 045, 0103, 0211, 0435, 01021, 02011, 04005 };
 
 struct Field
 {
@@ -23,7 +23,7 @@ struct Field
             log[size_t(x)] = i;
             x <<= 1;
             if (x >> m & 1)
-                x ^= int(kPrimitive[m]);
+                x ^= int(PRIMITIVE_POLYNOMIALS[m]);
         }
         for (int i = n; i < 2 * n; ++i)
             exp[size_t(i)] = exp[size_t(i - n)];
@@ -196,7 +196,7 @@ Code make(int m, int reps, bool extend, int shorten, bool withRows)
 
 uint32_t primitivePolynomial(int m)
 {
-    return (m >= MIN_M && m <= MAX_M) ? kPrimitive[m] : 0;
+    return (m >= MIN_M && m <= MAX_M) ? PRIMITIVE_POLYNOMIALS[m] : 0;
 }
 
 std::vector<MinimalPolynomial> minimalPolynomials(int m)

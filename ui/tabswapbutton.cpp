@@ -11,7 +11,7 @@
 namespace {
 
 // В какой близости от стыка вкладок кнопка показывается, пикселей.
-constexpr int kReach = 28;
+constexpr int REACH = 28;
 
 }
 
@@ -52,7 +52,7 @@ void TabSwapButton::showIfNear(const QPoint& pos)
         button->hide();
         return;
     }
-    const QRect zone = button->geometry().adjusted(-kReach, -kReach, kReach, kReach);
+    const QRect zone = button->geometry().adjusted(-REACH, -REACH, REACH, REACH);
     button->setVisible(zone.contains(pos));
 }
 

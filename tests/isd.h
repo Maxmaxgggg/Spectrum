@@ -333,7 +333,7 @@ inline double probStern(int n, int k, int w, int p, int l)
     return sum;
 }
 
-inline double probLB(int n, int k, int w, int p)
+inline double probLeeBrickell(int n, int k, int w, int p)
 {
     return Leon::catchProbability(n, k, w, p);
 }
@@ -414,7 +414,7 @@ inline Outcome runVariant(const Code& code, const Variant& v, int W, double miss
     const auto t0 = std::chrono::steady_clock::now();
 
     auto prob = [&](int w) {
-        return v.stern ? probStern(code.n, code.k, w, v.p, v.l) : probLB(code.n, code.k, w, v.p);
+        return v.stern ? probStern(code.n, code.k, w, v.p, v.l) : probLeeBrickell(code.n, code.k, w, v.p);
     };
     auto visit = [&](const quint64* word, int weight) {
         if (table.add(word, weight) && reference && reference->contains(word))
@@ -501,7 +501,7 @@ inline int compare(QTextStream& out, const Code& code, int W, int missExp, int r
 
     for (const Variant& v : variants) {
         auto prob = [&](int w) {
-            return v.stern ? probStern(n, k, w, v.p, v.l) : probLB(n, k, w, v.p);
+            return v.stern ? probStern(n, k, w, v.p, v.l) : probLeeBrickell(n, k, w, v.p);
         };
         const double PW    = prob(W);
         const double need  = trialsForAll(byWeight, miss, prob);

@@ -185,9 +185,9 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
 
     // ------------------------------------------------------------- GPU
     // Блок на попытку (LEON_THREADS нитей); сетка из настроек тут ни при чём.
-    constexpr int     kThreads     = LEON_THREADS;
-    constexpr quint64 kBatchMax    = 8192;         // попыток на запуск, потолок
-    constexpr quint64 kCapacityMax = 8ULL << 20;   // слов в буфере, потолок
+    constexpr int     THREADS      = LEON_THREADS;
+    constexpr quint64 BATCH_MAX    = 8192;         // попыток на запуск, потолок
+    constexpr quint64 CAPACITY_MAX = 8ULL << 20;   // слов в буфере, потолок
     quint64           capacity     = 1ULL << 20;
 
     // Матрица, не влезшая в разделяемую память, и хеш-таблица окна у каждого
@@ -199,7 +199,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
     const unsigned pairCapacity = g.leonWindow > 0
         ? unsigned(std::min(64.0e6, std::max(4096.0, 4.0 * g.leonPairs))) : 0u;
     const size_t scratchWords = leonScratchWords(rows, cols, words, depth, g.leonWindow, pairCapacity);
-    quint64      blocksMax    = kBatchMax;
+    quint64      blocksMax    = BATCH_MAX;
     if (scratchWords > 0) {
         quint64 budget = 128ULL << 20;
         if (g.leonWindow > 0) {
@@ -207,7 +207,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
             CUDA_CALL(cudaMemGetInfo(&freeBytes, &totalBytes));
             budget = std::min<quint64>(1024ULL << 20, quint64(freeBytes) / 4);
         }
-        blocksMax = std::max<quint64>(1, std::min<quint64>(kBatchMax,
+        blocksMax = std::max<quint64>(1, std::min<quint64>(BATCH_MAX,
                         budget / (scratchWords * sizeof(quint64))));
     }
 
@@ -377,7 +377,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
             L.seenCount  = seen.count.get();
             L.seenMask   = seen.capacity - 1;
         }
-        launchLeonTrials(L, kThreads, s.stream.get());
+        launchLeonTrials(L, THREADS, s.stream.get());
         // Счётчик здесь не копируется. Копии всех потоков стоят в одной
         // очереди движка копирования, и четыре байта, поставленные за ядром
         // этой пачки, задержали бы за собой мегабайты соседней: та ждала бы
@@ -434,8 +434,8 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         // Счётчик ядра считает все находки, и за пределами буфера тоже, —
         // плотность по нему честная.
         adaptBatch(need, s.count);
-        if (need <= kCapacityMax && capacity < kCapacityMax) {
-            capacity = std::min(kCapacityMax, std::max(capacity * 2, need + need / 4 + 1024));
+        if (need <= CAPACITY_MAX && capacity < CAPACITY_MAX) {
+            capacity = std::min(CAPACITY_MAX, std::max(capacity * 2, need + need / 4 + 1024));
             return;
         }
         if (s.count <= 1) {

@@ -27,7 +27,7 @@ Worker::ComponentPlan Worker::planComponent(const QStringList& rows, int weightU
     // Product::bruteForce сам, до planComponent дело не доходит.
     if (wantWords) {
         const Leon::Plan p = Leon::plan(n, k, limit, settings.leonMissProbability(),
-                                       settings.compDev == ComputationSettings::ComputeDevice::GPU);
+                                       settings.compDev == ComputationSettings::ComputeDevice::Gpu);
         return ComponentPlan{ ComputationSettings::RandomInfoSets, double(p.trials) * p.costPerTrial,
                               tr("стохастический поиск до веса %1, в-ть пропуска 10^-%2")
                                   .arg(limit).arg(settings.leonMissExponent) };
@@ -202,7 +202,7 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     const int limit1 = int(std::min<quint64>(target / quint64(c2.d), quint64(n1)));
     const int limit2 = int(std::min<quint64>(target / quint64(c1.d), quint64(n2)));
     QStringList notes;
-    constexpr quint64 kWorkLimit = 20ULL << 30;
+    constexpr quint64 WORK_LIMIT = 20ULL << 30;
     // Спектры до предела — без списков слов: их даёт дешёвый путь (полный
     // перебор, дуальный, БЦ). Списки нужны только рангам выше первого, а
     // стоят они дорого (миллионы слов в памяти) — сначала по спектру
@@ -216,11 +216,11 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     if (ranksFeasible) {
         const double work1 = Product::estimatedProfileWork(c1, 2, limit1);
         const double work2 = Product::estimatedProfileWork(c2, 2, limit2);
-        if (work1 > double(kWorkLimit) || work2 > double(kWorkLimit)) {
+        if (work1 > double(WORK_LIMIT) || work2 > double(WORK_LIMIT)) {
             ranksFeasible = false;
             notes << tr("ранг 2 и выше не считался: наборов слишком много (≈%1 проверок у компоненты %2, предел %3)")
                          .arg(QString::number(std::max(work1, work2), 'g', 2))
-                         .arg(work1 > work2 ? 1 : 2).arg(QString::number(double(kWorkLimit), 'g', 2));
+                         .arg(work1 > work2 ? 1 : 2).arg(QString::number(double(WORK_LIMIT), 'g', 2));
         }
     }
     if (ranksFeasible) {
@@ -266,10 +266,10 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
         if (r > 2) {
             const double work1 = Product::estimatedProfileWork(c1, r, limit1);
             const double work2 = Product::estimatedProfileWork(c2, r, limit2);
-            if (work1 > double(kWorkLimit) || work2 > double(kWorkLimit)) {
+            if (work1 > double(WORK_LIMIT) || work2 > double(WORK_LIMIT)) {
                 notes << tr("ранг %1 и выше не считался: наборов слишком много (≈%2 проверок у компоненты %3, предел %4)")
                              .arg(r).arg(QString::number(std::max(work1, work2), 'g', 2))
-                             .arg(work1 > work2 ? 1 : 2).arg(QString::number(double(kWorkLimit), 'g', 2));
+                             .arg(work1 > work2 ? 1 : 2).arg(QString::number(double(WORK_LIMIT), 'g', 2));
                 break;
             }
         }
@@ -278,13 +278,13 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
         emit productPlan(tr("ранг %1: наборы компоненты 1 (%2 слов веса до %3)…")
                              .arg(r).arg(QString::number(words1)).arg(limit1), -1);
         progress.begin(std::max<quint64>(1, words1), 0, 0);
-        const bool ok1 = Product::profiles(c1, r, limit1, kWorkLimit, p1, false, cancelledPoll, onProgress);
+        const bool ok1 = Product::profiles(c1, r, limit1, WORK_LIMIT, p1, false, cancelledPoll, onProgress);
 
         const quint64 words2 = lightWords(c2, limit2);
         emit productPlan(tr("ранг %1: наборы компоненты 2 (%2 слов веса до %3)…")
                              .arg(r).arg(QString::number(words2)).arg(limit2), -1);
         progress.begin(std::max<quint64>(1, words2), 0, 0);
-        const bool ok2 = ok1 && Product::profiles(c2, r, limit2, kWorkLimit, p2, true, cancelledPoll, onProgress);
+        const bool ok2 = ok1 && Product::profiles(c2, r, limit2, WORK_LIMIT, p2, true, cancelledPoll, onProgress);
         if (cancelled.load())
             throw std::runtime_error("расчёт отменён");
         if (!ok1 || !ok2) {

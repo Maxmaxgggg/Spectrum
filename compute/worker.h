@@ -333,7 +333,7 @@ private:
     double                      tuneThresholdSec   = 10.0;
     bool                        tuneVerbose        = false;
     Leon::WindowPolicy          windowPolicy;
-    int                         productBruteForceMaxK = Product::kBruteForceMaxK;
+    int                         productBruteForceMaxK = Product::BRUTE_FORCE_MAX_K;
 
     // Память расчёта на хосте и на видеокарте, поток ядер и кольцо снимков
     // (worker_p.h). Владеющая: освобождается вместе с объектом, каким бы

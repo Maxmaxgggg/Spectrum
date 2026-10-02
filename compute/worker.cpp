@@ -329,13 +329,13 @@ void Worker::computeSpectrum()
     catch (const CudaError& e) {
         releaseResources();
         emit errorOccurred(e.message());
-        emit finished(Constants::ERROR_OCCURED);
+        emit finished(Constants::ERROR_OCCURRED);
     }
     catch (const std::exception& e) {
         releaseResources();
         emit errorOccurred(QStringLiteral("Ошибка расчёта: %1")
                                .arg(QString::fromUtf8(e.what())));
-        emit finished(Constants::ERROR_OCCURED);
+        emit finished(Constants::ERROR_OCCURRED);
     }
 }
 
@@ -417,7 +417,7 @@ CodeGeometry Worker::describeTask() const
 
     g.blocksGpu  = settings.compDevSet.blocksGpu;
     g.threadsGpu = settings.compDevSet.threadsGpu;
-    g.useGpu     = settings.compDev == ComputationSettings::ComputeDevice::GPU;
+    g.useGpu     = settings.compDev == ComputationSettings::ComputeDevice::Gpu;
     g.isLongCode = g.numOfRows > Constants::MAX_SHORT_CODE_LENGTH;
 
     if (settings.algorithmType == ComputationSettings::BrouwerZimmermann)
@@ -742,7 +742,7 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
 {
     if (cancelled.load()) {
         initializeRunState(LoadMode::Reset);
-        emit finished(Constants::ERROR_OCCURED);
+        emit finished(Constants::ERROR_OCCURRED);
         emit updateInfoPBR(0);
         updateSpectrum(int(g.numOfCols));
         releaseResources();

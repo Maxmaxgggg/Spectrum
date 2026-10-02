@@ -111,7 +111,7 @@ struct RunConfig
 {
     QStringList matrix;
     Algorithm   algorithm  = Algorithm::SimpleXor;
-    ComputeDevice device   = ComputeDevice::CPU;
+    ComputeDevice device   = ComputeDevice::Cpu;
     int         maxRows    = 0;      // 0 => все строки
     int         threadsCpu = 4;
     int         blocksGpu  = 64;
@@ -130,7 +130,7 @@ struct RunConfig
     // Чем считать большие компоненты; по умолчанию — случайным поиском.
     Algorithm   productAlgorithm = Algorithm::RandomInfoSets;
     // До какой размерности компоненту произведения перебирать целиком.
-    int         productBruteForceMaxK = Product::kBruteForceMaxK;
+    int         productBruteForceMaxK = Product::BRUTE_FORCE_MAX_K;
     // Где стохастическому поиску можно брать окно Штерна–Дюмера.
     Leon::WindowPolicy window;
 };
@@ -165,9 +165,7 @@ static ComputationSettings makeSettings(const RunConfig& cfg)
 // в AppData пользователя, и топтать его тестами нельзя.
 static QString autosaveRoot()
 {
-    static const QString dir =
-        QDir::tempPath() + QStringLiteral("/SpectrumTests-autosave");
-    return dir;
+    return QDir::tempPath() + QStringLiteral("/SpectrumTests-autosave");
 }
 
 static AutosaveStore testStore()
@@ -283,7 +281,7 @@ static qint64 savedDoneOps()
 
 static void check(const QString& name, const RunConfig& cfg, const Spectrum& expected)
 {
-    if (cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+    if (cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
         out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return;
     }
@@ -342,14 +340,14 @@ static void testShortCode(const QString& label, const QStringList& matrix,
 
     RunConfig cfg; cfg.matrix = matrix;
 
-    cfg.algorithm = Algorithm::SimpleXor; cfg.device = ComputeDevice::CPU;
+    cfg.algorithm = Algorithm::SimpleXor; cfg.device = ComputeDevice::Cpu;
     check("CPU  XOR  (короткий)", cfg, brute);
-    cfg.device = ComputeDevice::GPU;
+    cfg.device = ComputeDevice::Gpu;
     check("GPU  XOR  (короткий)", cfg, brute);
 
-    cfg.algorithm = Algorithm::GrayCode;  cfg.device = ComputeDevice::CPU;
+    cfg.algorithm = Algorithm::GrayCode;  cfg.device = ComputeDevice::Cpu;
     check("CPU  Грей (короткий)", cfg, brute);
-    cfg.device = ComputeDevice::GPU;
+    cfg.device = ComputeDevice::Gpu;
     check("GPU  Грей (короткий)", cfg, brute);
 }
 
@@ -364,13 +362,13 @@ static void testShortCodeAgainstBruteForce(const QString& label, const QStringLi
     const Spectrum brute = Reference::bruteForce(matrix);
 
     RunConfig cfg; cfg.matrix = matrix;
-    cfg.algorithm = Algorithm::SimpleXor; cfg.device = ComputeDevice::CPU;
+    cfg.algorithm = Algorithm::SimpleXor; cfg.device = ComputeDevice::Cpu;
     check("CPU  XOR ", cfg, brute);
-    cfg.device = ComputeDevice::GPU;
+    cfg.device = ComputeDevice::Gpu;
     check("GPU  XOR ", cfg, brute);
-    cfg.algorithm = Algorithm::GrayCode;  cfg.device = ComputeDevice::CPU;
+    cfg.algorithm = Algorithm::GrayCode;  cfg.device = ComputeDevice::Cpu;
     check("CPU  Грей", cfg, brute);
-    cfg.device = ComputeDevice::GPU;
+    cfg.device = ComputeDevice::Gpu;
     check("GPU  Грей", cfg, brute);
 }
 
@@ -387,9 +385,9 @@ static void testLongCode(int n, int maxRows)
     cfg.algorithm = Algorithm::SimpleXor;
     cfg.maxRows   = maxRows;
 
-    cfg.device = ComputeDevice::CPU;
+    cfg.device = ComputeDevice::Cpu;
     check("CPU  XOR  (длинный)", cfg, expected);
-    cfg.device = ComputeDevice::GPU;
+    cfg.device = ComputeDevice::Gpu;
     check("GPU  XOR  (длинный)", cfg, expected);
 }
 
@@ -422,9 +420,9 @@ static void testPartialShort(const QStringList& matrix, int maxRows)
     cfg.algorithm = Algorithm::SimpleXor;
     cfg.maxRows   = maxRows;
 
-    cfg.device = ComputeDevice::CPU;
+    cfg.device = ComputeDevice::Cpu;
     check("CPU  XOR  частичный", cfg, expected);
-    cfg.device = ComputeDevice::GPU;
+    cfg.device = ComputeDevice::Gpu;
     check("GPU  XOR  частичный", cfg, expected);
 }
 
@@ -447,9 +445,9 @@ static void testDualCode(const QString& label, const QStringList& matrix)
     cfg.matrix    = matrix;
     cfg.algorithm = Algorithm::DualCode;
 
-    cfg.device = ComputeDevice::CPU;
+    cfg.device = ComputeDevice::Cpu;
     check("CPU  дуальный", cfg, brute);
-    cfg.device = ComputeDevice::GPU;
+    cfg.device = ComputeDevice::Gpu;
     check("GPU  дуальный", cfg, brute);
 }
 
@@ -554,8 +552,8 @@ static void checkResume(const QString& name, const RunConfig& cfg,
                         const RunConfig& resumeCfg,
                         quint64 checkpointEveryOps, quint64 stopAfterOps)
 {
-    const bool needsGpu = cfg.device == ComputeDevice::GPU
-                       || resumeCfg.device == ComputeDevice::GPU;
+    const bool needsGpu = cfg.device == ComputeDevice::Gpu
+                       || resumeCfg.device == ComputeDevice::Gpu;
     if (needsGpu && !g_gpuAvailable) {
         out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return;
@@ -640,10 +638,10 @@ static void testCheckpoints()
     golay.matrix = Reference::golay24_12();
 
     golay.algorithm = Algorithm::SimpleXor;
-    for (ComputeDevice dev : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+    for (ComputeDevice dev : { ComputeDevice::Cpu, ComputeDevice::Gpu }) {
         golay.device = dev;
         const QString who = QStringLiteral("%1 XOR Голей")
-                                .arg(dev == ComputeDevice::CPU ? QStringLiteral("CPU")
+                                .arg(dev == ComputeDevice::Cpu ? QStringLiteral("CPU")
                                                                : QStringLiteral("GPU"));
         // Прерывание около 10 %, 50 % и 90 % пройденного.
         checkResume(who + QStringLiteral(", обрыв ~10%"), golay, golay, 400,  400);
@@ -659,10 +657,10 @@ static void testCheckpoints()
     RunConfig gray;
     gray.matrix    = Reference::identity(22);
     gray.algorithm = Algorithm::GrayCode;
-    for (ComputeDevice dev : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+    for (ComputeDevice dev : { ComputeDevice::Cpu, ComputeDevice::Gpu }) {
         gray.device = dev;
         const QString who = QStringLiteral("%1 Грей I(22)")
-                                .arg(dev == ComputeDevice::CPU ? QStringLiteral("CPU")
+                                .arg(dev == ComputeDevice::Cpu ? QStringLiteral("CPU")
                                                                : QStringLiteral("GPU"));
         checkResume(who + QStringLiteral(", обрыв ~25%"), gray, gray, 1000000, 1000000);
         checkResume(who + QStringLiteral(", обрыв ~50%"), gray, gray, 2000000, 2000000);
@@ -676,10 +674,10 @@ static void testCheckpoints()
     layer.algorithm = Algorithm::SimpleXor;
     // C(12,0)+C(12,1)+C(12,2) = 1+12+66 = 79 — конец слоя r=2.
     for (quint64 boundary : { 13ULL, 79ULL, 299ULL }) {
-        layer.device = ComputeDevice::CPU;
+        layer.device = ComputeDevice::Cpu;
         checkResume(QStringLiteral("CPU XOR, обрыв на границе слоя (%1)").arg(boundary),
                     layer, layer, boundary, boundary);
-        layer.device = ComputeDevice::GPU;
+        layer.device = ComputeDevice::Gpu;
         checkResume(QStringLiteral("GPU XOR, обрыв на границе слоя (%1)").arg(boundary),
                     layer, layer, boundary, boundary);
     }
@@ -687,9 +685,9 @@ static void testCheckpoints()
     // Длинный код. При maxRows=3 всего 57 тыс. масок — это один чанк, обрывать
     // нечего. maxRows=5 даёт 13 млн, и чанков становится несколько. GPU-чанк
     // равен блоки*нити*4096, поэтому разбиение здесь намеренно мелкое.
-    RunConfig lng = longConfig(ComputeDevice::CPU);
+    RunConfig lng = longConfig(ComputeDevice::Cpu);
     checkResume(QStringLiteral("CPU XOR длинный, обрыв"), lng, lng, 3000000, 3000000);
-    lng = longConfig(ComputeDevice::GPU);
+    lng = longConfig(ComputeDevice::Gpu);
     checkResume(QStringLiteral("GPU XOR длинный, обрыв"), lng, lng, 3000000, 3000000);
 
     // Длинный путь на видеокарте проверяется отдельно и подробнее.
@@ -700,7 +698,7 @@ static void testCheckpoints()
     // посчитанное, а не поставленное в очередь: saveGpuCheckpoint для этого
     // сначала дожидается потока. Если бы не дожидался, сохранённый спектр
     // отставал бы от chunkOffset, и возобновление потеряло бы часть слов.
-    const RunConfig lgpu = longConfig(ComputeDevice::GPU);
+    const RunConfig lgpu = longConfig(ComputeDevice::Gpu);
     for (quint64 stop : { 1500000ULL, 4000000ULL, 7000000ULL, 11000000ULL }) {
         checkResume(QStringLiteral("GPU длинный, обрыв на %1").arg(stop),
                     lgpu, lgpu, stop, stop);
@@ -732,7 +730,7 @@ static void testCheckpoints()
 // сколько масок пройдено по её смещению.
 static void checkCancelMidChunk(const QString& name, const RunConfig& cfg)
 {
-    if (cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+    if (cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
         out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return;
     }
@@ -790,8 +788,8 @@ static void testCancelMidChunk()
 {
     out << Qt::endl << QStringLiteral("Отмена посреди чанка: чекпоинт сходится со спектром") << Qt::endl;
 
-    for (ComputeDevice dev : { ComputeDevice::CPU, ComputeDevice::GPU }) {
-        const QString who = dev == ComputeDevice::CPU ? QStringLiteral("CPU") : QStringLiteral("GPU");
+    for (ComputeDevice dev : { ComputeDevice::Cpu, ComputeDevice::Gpu }) {
+        const QString who = dev == ComputeDevice::Cpu ? QStringLiteral("CPU") : QStringLiteral("GPU");
 
         // Код Грея: I(22) — четыре чанка по 2^20 масок.
         RunConfig gray;
@@ -833,31 +831,31 @@ static void testCheckpointPortability()
     checkResume(QStringLiteral("CPU 8 потоков -> CPU 1 поток"), from, other, 1000, 1000);
 
     // Другое разбиение на GPU.
-    from = base;              from.device = ComputeDevice::GPU;
+    from = base;              from.device = ComputeDevice::Gpu;
     from.blocksGpu = 64;      from.threadsGpu = 256;
-    other = base;             other.device = ComputeDevice::GPU;
+    other = base;             other.device = ComputeDevice::Gpu;
     other.blocksGpu = 8;      other.threadsGpu = 64;
     checkResume(QStringLiteral("GPU 64x256 -> GPU 8x64"), from, other, 1000, 1000);
 
     // Смена устройства в обе стороны.
-    from = base;  from.device  = ComputeDevice::CPU;
-    other = base; other.device = ComputeDevice::GPU;
+    from = base;  from.device  = ComputeDevice::Cpu;
+    other = base; other.device = ComputeDevice::Gpu;
     checkResume(QStringLiteral("CPU -> GPU"), from, other, 1000, 1000);
 
-    from = base;  from.device  = ComputeDevice::GPU;
-    other = base; other.device = ComputeDevice::CPU;
+    from = base;  from.device  = ComputeDevice::Gpu;
+    other = base; other.device = ComputeDevice::Cpu;
     checkResume(QStringLiteral("GPU -> CPU"), from, other, 1000, 1000);
 
     // То же самое на коде Грея — на матрице, которая режется на чанки.
     from = RunConfig();  from.matrix = Reference::identity(22);
-    from.algorithm = Algorithm::GrayCode; from.device = ComputeDevice::CPU;
-    other = from;        other.device = ComputeDevice::GPU;
+    from.algorithm = Algorithm::GrayCode; from.device = ComputeDevice::Cpu;
+    other = from;        other.device = ComputeDevice::Gpu;
     checkResume(QStringLiteral("Грей: CPU -> GPU"), from, other, 2000000, 2000000);
     checkResume(QStringLiteral("Грей: GPU -> CPU"), other, from, 2000000, 2000000);
 
     // Длинный код: смена устройства в обе стороны.
-    const RunConfig lngCpu = longConfig(ComputeDevice::CPU);
-    const RunConfig lngGpu = longConfig(ComputeDevice::GPU);
+    const RunConfig lngCpu = longConfig(ComputeDevice::Cpu);
+    const RunConfig lngGpu = longConfig(ComputeDevice::Gpu);
     checkResume(QStringLiteral("длинный: CPU -> GPU"), lngCpu, lngGpu, 3000000, 3000000);
     checkResume(QStringLiteral("длинный: GPU -> CPU"), lngGpu, lngCpu, 3000000, 3000000);
 }
@@ -929,7 +927,7 @@ static void testAutoTunedGrid()
     out << Qt::endl << QStringLiteral("Автоподбор сетки") << Qt::endl;
 
     RunConfig cfg;
-    cfg.device = ComputeDevice::GPU;
+    cfg.device = ComputeDevice::Gpu;
 
     // Узкий код: по замерам --sweep именно здесь у сетки оставался почти
     // двукратный запас.
@@ -962,7 +960,7 @@ static void testAutoTunedGrid()
     // Сверка с аналитикой, а не только «сам с собой»: единичная матрица
     // на 20 строках даёт биномиальные коэффициенты.
     RunConfig ident;
-    ident.device    = ComputeDevice::GPU;
+    ident.device    = ComputeDevice::Gpu;
     ident.matrix    = Reference::identity(20);
     ident.algorithm = Algorithm::SimpleXor;
     ident.autoTune  = true;
@@ -971,7 +969,7 @@ static void testAutoTunedGrid()
 
     // Длинный путь. Там сетка задаёт ещё и размер чанка, то есть разбиение
     // расчёта — тем важнее убедиться, что спектр от неё не зависит.
-    checkTuned(QStringLiteral("длинный код (k=70)"), longConfig(ComputeDevice::GPU));
+    checkTuned(QStringLiteral("длинный код (k=70)"), longConfig(ComputeDevice::Gpu));
 
     if (!g_gpuAvailable)
         return;
@@ -980,7 +978,7 @@ static void testAutoTunedGrid()
     RunConfig cpu;
     cpu.matrix    = Reference::golay24_12();
     cpu.algorithm = Algorithm::SimpleXor;
-    cpu.device    = ComputeDevice::CPU;
+    cpu.device    = ComputeDevice::Cpu;
     const QPair<int, int> cpuGrid = tunedGridFor(cpu);
     if (cpuGrid.first == 0) {
         ++g_passed;
@@ -1000,7 +998,7 @@ static void testAutoTunedCheckpoints()
     RunConfig base;
     base.matrix    = Reference::golay24_12();
     base.algorithm = Algorithm::SimpleXor;
-    base.device    = ComputeDevice::GPU;
+    base.device    = ComputeDevice::Gpu;
 
     RunConfig tuned = base;  tuned.autoTune = true;
     RunConfig plain = base;  plain.autoTune = false;
@@ -1016,7 +1014,7 @@ static void testAutoTunedCheckpoints()
     lngPlain.matrix     = Reference::identity(70);
     lngPlain.algorithm  = Algorithm::SimpleXor;
     lngPlain.maxRows    = 7;
-    lngPlain.device     = ComputeDevice::GPU;
+    lngPlain.device     = ComputeDevice::Gpu;
     lngPlain.threadsCpu = 4;
     RunConfig lngTuned = lngPlain;  lngTuned.autoTune = true;
 
@@ -1031,7 +1029,7 @@ static void testAutoTunedCheckpoints()
     RunConfig gray;
     gray.matrix    = Reference::identity(22);
     gray.algorithm = Algorithm::GrayCode;
-    gray.device    = ComputeDevice::GPU;
+    gray.device    = ComputeDevice::Gpu;
     RunConfig grayTuned = gray;  grayTuned.autoTune = true;
     checkResume(QStringLiteral("Грей: подбор -> подбор"), grayTuned, grayTuned, 2000000, 2000000);
     checkResume(QStringLiteral("Грей: подбор -> без подбора"), grayTuned, gray, 2000000, 2000000);
@@ -1271,7 +1269,7 @@ static void testCanResume()
 // расчётом до n + 1. Ради этого запись и не удаляется после успеха.
 static void checkExtend(const QString& name, RunConfig cfg, int from, int to)
 {
-    if (cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+    if (cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
         out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return;
     }
@@ -1317,18 +1315,18 @@ static void testExtendMaxRows()
     RunConfig cfg;
     cfg.matrix     = Reference::identity(20);
     cfg.algorithm  = Algorithm::SimpleXor;
-    cfg.device     = ComputeDevice::CPU;
+    cfg.device     = ComputeDevice::Cpu;
     cfg.threadsCpu = 4;
     checkExtend(QStringLiteral("CPU I(20): 5 строк, потом 7"), cfg, 5, 7);
 
-    cfg.device = ComputeDevice::GPU;
+    cfg.device = ComputeDevice::Gpu;
     checkExtend(QStringLiteral("GPU I(20): 5 строк, потом 7"), cfg, 5, 7);
 
     // Длинный путь: там своё разбиение на чанки и свои слои.
     RunConfig lng;
     lng.matrix     = Reference::identity(70);
     lng.algorithm  = Algorithm::SimpleXor;
-    lng.device     = ComputeDevice::GPU;
+    lng.device     = ComputeDevice::Gpu;
     lng.threadsCpu = 4;
     checkExtend(QStringLiteral("GPU I(70): 3 строки, потом 4"), lng, 3, 4);
 }
@@ -1421,7 +1419,7 @@ static void testOversizedMatrixRejected()
     cfg.matrix    = QStringList{ QString(tooWide, QLatin1Char('1')),
                                  QString(tooWide, QLatin1Char('0')) };
     cfg.algorithm = Algorithm::GrayCode;
-    cfg.device    = ComputeDevice::GPU;
+    cfg.device    = ComputeDevice::Gpu;
 
     Worker worker;
     worker.setAutosaveRoot(autosaveRoot());
@@ -1446,7 +1444,7 @@ static void testOversizedMatrixRejected()
     // Код Грея перебирает 2^k масок в 64-битном слове: больше 63 строк для него
     // недопустимо. Проверялось только в диалоге настроек, а прямой вызов давал
     // сдвиг на 64 и больше.
-    for (ComputeDevice dev : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+    for (ComputeDevice dev : { ComputeDevice::Cpu, ComputeDevice::Gpu }) {
         RunConfig gray;
         gray.matrix    = Reference::identity(70);
         gray.algorithm = Algorithm::GrayCode;
@@ -1459,7 +1457,7 @@ static void testOversizedMatrixRejected()
         w.initializeRunState(LoadMode::Reset);
         w.computeSpectrum();
 
-        const QString dn = dev == ComputeDevice::CPU ? QStringLiteral("CPU")
+        const QString dn = dev == ComputeDevice::Cpu ? QStringLiteral("CPU")
                                                      : QStringLiteral("GPU");
         if (err) {
             ++g_passed;
@@ -1482,7 +1480,7 @@ static int runSingleForProfiling(const QString& which)
     RunConfig cfg;
     cfg.algorithm = Algorithm::SimpleXor;
     cfg.maxRows   = 8;
-    cfg.device    = ComputeDevice::GPU;
+    cfg.device    = ComputeDevice::Gpu;
 
     if (which == QStringLiteral("ident")) {
         // Вырожденный случай: строка i единичной матрицы это e_i, поэтому вес
@@ -1588,8 +1586,8 @@ static int dumpGolden(const QString& path)
     // Процессорные прогоны берутся меньшего объёма: на CPU перебор идёт на
     // порядок медленнее, а покрытие путей от размера не зависит — важно, чтобы
     // задача резалась на несколько слоёв и несколько чанков.
-    for (ComputeDevice d : { ComputeDevice::CPU, ComputeDevice::GPU }) {
-        const bool cpu = (d == ComputeDevice::CPU);
+    for (ComputeDevice d : { ComputeDevice::Cpu, ComputeDevice::Gpu }) {
+        const bool cpu = (d == ComputeDevice::Cpu);
         const QString dn = cpu ? QStringLiteral("CPU") : QStringLiteral("GPU");
 
         // Короткий путь, простой XOR — то, что меняется.
@@ -1606,19 +1604,19 @@ static int dumpGolden(const QString& path)
     }
 
     // Объёмные прогоны только на видеокарте: на процессоре это часы.
-    add("GPU XOR rnd(45,80) r<=9",  m45, Algorithm::SimpleXor,  9, ComputeDevice::GPU);
-    add("GPU XOR rnd(50,100) r<=10", m50, Algorithm::SimpleXor, 10, ComputeDevice::GPU);
-    add("GPU XOR rnd(52,120) r<=11", m52, Algorithm::SimpleXor, 11, ComputeDevice::GPU);
+    add("GPU XOR rnd(45,80) r<=9",  m45, Algorithm::SimpleXor,  9, ComputeDevice::Gpu);
+    add("GPU XOR rnd(50,100) r<=10", m50, Algorithm::SimpleXor, 10, ComputeDevice::Gpu);
+    add("GPU XOR rnd(52,120) r<=11", m52, Algorithm::SimpleXor, 11, ComputeDevice::Gpu);
     // Другое разбиение: результат обязан не зависеть от числа блоков и нитей.
     add("GPU XOR rnd(50,100) r<=10 (8x64)", m50, Algorithm::SimpleXor, 10,
-        ComputeDevice::GPU, 8, 64);
+        ComputeDevice::Gpu, 8, 64);
 
     // Единичные матрицы: I(n) порождает вообще все слова, поэтому спектр равен
     // C(n,w) точно, а при частичном переборе — C(n,w) для w <= maxRows.
     // На случайных матрицах сверять можно только количество слов; здесь
     // проверяется всё распределение целиком, без всякого предыдущего прогона.
-    for (ComputeDevice d : { ComputeDevice::CPU, ComputeDevice::GPU }) {
-        const bool cpu = (d == ComputeDevice::CPU);
+    for (ComputeDevice d : { ComputeDevice::Cpu, ComputeDevice::Gpu }) {
+        const bool cpu = (d == ComputeDevice::Cpu);
         const QString dn = cpu ? QStringLiteral("CPU") : QStringLiteral("GPU");
         const int mr = cpu ? 6 : 7;
         add(QStringLiteral("%1 XOR I(40) r<=%2").arg(dn).arg(mr),
@@ -1630,20 +1628,20 @@ static int dumpGolden(const QString& path)
             64, 256, Reference::identityPartialSpectrum(24, 24));
     }
     add("GPU XOR I(50) r<=10", Reference::identity(50), Algorithm::SimpleXor, 10,
-        ComputeDevice::GPU, 64, 256, Reference::identityPartialSpectrum(50, 10));
+        ComputeDevice::Gpu, 64, 256, Reference::identityPartialSpectrum(50, 10));
 
     // Длинный путь (k > 63) с аналитически известным распределением: I(70)
     // порождает все слова, поэтому спектр равен C(70,w) для каждого веса.
     // 144 млн комбинаций — на таком объёме гонка в подготовке стартовых масок
     // проявилась бы перекосом весов, а не только недостачей в сумме.
     add("GPU XOR I(70) r<=6", Reference::identity(70), Algorithm::SimpleXor, 6,
-        ComputeDevice::GPU, 64, 256, Reference::identityPartialSpectrum(70, 6));
+        ComputeDevice::Gpu, 64, 256, Reference::identityPartialSpectrum(70, 6));
     add("CPU XOR I(70) r<=6", Reference::identity(70), Algorithm::SimpleXor, 6,
-        ComputeDevice::CPU, 64, 256, Reference::identityPartialSpectrum(70, 6));
+        ComputeDevice::Cpu, 64, 256, Reference::identityPartialSpectrum(70, 6));
     // То же при мелком разбиении: чанков становится много, значит много и
     // перекладываний буфера стартовых масок.
     add("GPU XOR I(70) r<=6 (8x32)", Reference::identity(70), Algorithm::SimpleXor, 6,
-        ComputeDevice::GPU, 8, 32, Reference::identityPartialSpectrum(70, 6));
+        ComputeDevice::Gpu, 8, 32, Reference::identityPartialSpectrum(70, 6));
     // Длинный путь + матрица в ГЛОБАЛЬНОЙ памяти + округление числа слов —
     // сочетание, которого не было ни в одном случае, и оно скрыло настоящий
     // баг: в запасной ветке цикл шёл до округлённого числа слов, а шаг строки
@@ -1653,15 +1651,15 @@ static int dumpGolden(const QString& path)
     // I(900): матрица 900 x 15 слов = 108 КБ, в разделяемую (40 КБ) не влезает;
     // 15 слов округляются до 16. Спектр при этом известен точно — C(900,w).
     add("GPU XOR I(900) r<=3, глобальная память", Reference::identity(900),
-        Algorithm::SimpleXor, 3, ComputeDevice::GPU, 64, 256,
+        Algorithm::SimpleXor, 3, ComputeDevice::Gpu, 64, 256,
         Reference::identityPartialSpectrum(900, 3));
 
     // Длинный путь на случайной матрице, 670 млн комбинаций.
     add("GPU XOR rnd(90,300) r<=6", Reference::randomMatrix(90, 300, 14),
-        Algorithm::SimpleXor, 6, ComputeDevice::GPU);
+        Algorithm::SimpleXor, 6, ComputeDevice::Gpu);
     // Тот же расчёт при мелком разбиении — распределение обязано не измениться.
     add("GPU XOR I(50) r<=10 (8x64)", Reference::identity(50), Algorithm::SimpleXor, 10,
-        ComputeDevice::GPU, 8, 64, Reference::identityPartialSpectrum(50, 10));
+        ComputeDevice::Gpu, 8, 64, Reference::identityPartialSpectrum(50, 10));
 
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -1672,7 +1670,7 @@ static int dumpGolden(const QString& path)
     fs.setCodec("UTF-8");
 
     for (const Case& c : cases) {
-        if (c.cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+        if (c.cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
             out << QStringLiteral("  ПРОПУСК  ") << c.name << Qt::endl;
             continue;
         }
@@ -1746,7 +1744,7 @@ static int dumpGolden(const QString& path)
 static bool sweepCase(const QString& which, RunConfig& base)
 {
     base = RunConfig();
-    base.device = ComputeDevice::GPU;
+    base.device = ComputeDevice::Gpu;
 
     if (which == QStringLiteral("wide")) {
         base.matrix    = Reference::randomMatrix(50, 2000, 10);
@@ -1842,7 +1840,7 @@ static bool loadMatrixOrCase(const QString& which, RunConfig& cfg)
         return false;
     }
     cfg = RunConfig();
-    cfg.device    = ComputeDevice::GPU;
+    cfg.device    = ComputeDevice::Gpu;
     cfg.algorithm = Algorithm::SimpleXor;
     const QStringList lines = QString::fromUtf8(file.readAll())
                                   .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
@@ -2117,19 +2115,19 @@ static void benchmark()
     QVector<Case> cases;
 
     // Код Грея: 2^26 масок на каждое устройство.
-    for (ComputeDevice dev : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+    for (ComputeDevice dev : { ComputeDevice::Cpu, ComputeDevice::Gpu }) {
         RunConfig c;
         c.matrix    = Reference::identity(28);
         c.algorithm = Algorithm::GrayCode;
         c.device    = dev;
         cases.append({ QStringLiteral("%1 Грей I(28)")
-                           .arg(dev == ComputeDevice::CPU ? QStringLiteral("CPU")
+                           .arg(dev == ComputeDevice::Cpu ? QStringLiteral("CPU")
                                                           : QStringLiteral("GPU")),
                        c, 1ULL << 28 });
     }
 
     // Простой XOR по слоям: самый нагруженный режим короткого пути.
-    for (ComputeDevice dev : { ComputeDevice::CPU, ComputeDevice::GPU }) {
+    for (ComputeDevice dev : { ComputeDevice::Cpu, ComputeDevice::Gpu }) {
         RunConfig c;
         c.matrix    = Reference::identity(40);
         c.algorithm = Algorithm::SimpleXor;
@@ -2138,14 +2136,14 @@ static void benchmark()
         quint64 total = 0;
         for (quint64 r = 0; r <= 7; ++r) total += Reference::binom(40, r);
         cases.append({ QStringLiteral("%1 XOR I(40) maxRows=7")
-                           .arg(dev == ComputeDevice::CPU ? QStringLiteral("CPU")
+                           .arg(dev == ComputeDevice::Cpu ? QStringLiteral("CPU")
                                                           : QStringLiteral("GPU")),
                        c, total });
     }
 
     out << QStringLiteral("Замер скорости") << Qt::endl;
     for (const Case& c : cases) {
-        if (c.cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+        if (c.cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
             out << QStringLiteral("  ПРОПУСК  ") << c.name << Qt::endl;
             continue;
         }
@@ -2265,7 +2263,7 @@ static void testProbeLeavesNoTrace()
         return;
     }
     RunConfig cfg;
-    cfg.device    = ComputeDevice::GPU;
+    cfg.device    = ComputeDevice::Gpu;
     cfg.matrix    = Reference::randomMatrix(40, 200, 7);
     cfg.algorithm = Algorithm::SimpleXor;
     cfg.maxRows   = 6;
@@ -2450,7 +2448,7 @@ static int bzFile(const QString& path, int r, int maxSets)
 // должно быть засчитано ровно один раз — спектр совпадает с точным целиком.
 static Spectrum checkBzExact(const QString& name, const RunConfig& cfg, const Spectrum& exact)
 {
-    if (cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+    if (cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
         out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return Spectrum();
     }
@@ -2511,7 +2509,7 @@ static void expectSame(const QString& name, const Spectrum& a, const Spectrum& b
 // Досчёт до большего веса: запись после расчёта до w1 — начало расчёта до w2.
 static void checkExtendBz(const QString& name, RunConfig cfg, int from, int to)
 {
-    if (cfg.device == ComputeDevice::GPU && !g_gpuAvailable) {
+    if (cfg.device == ComputeDevice::Gpu && !g_gpuAvailable) {
         out << QStringLiteral("  ПРОПУСК  ") << name << QStringLiteral("  (GPU недоступен)") << Qt::endl;
         return;
     }
@@ -2558,15 +2556,15 @@ static void testBrouwerZimmermannWorker()
         cfg.algorithm = Algorithm::BrouwerZimmermann;
         cfg.bzWeight  = 6;
 
-        cfg.device = ComputeDevice::CPU;
+        cfg.device = ComputeDevice::Cpu;
         const Spectrum cpu = checkBzExact(c.name + QStringLiteral(" CPU, вес 6"), cfg, exact);
-        cfg.device = ComputeDevice::GPU;
+        cfg.device = ComputeDevice::Gpu;
         const Spectrum gpu = checkBzExact(c.name + QStringLiteral(" GPU, вес 6"), cfg, exact);
         expectSame(c.name + QStringLiteral(": CPU и GPU совпадают"), cpu, gpu);
 
         // Вес во всю длину: перебирается всё, спектр обязан совпасть целиком.
         cfg.bzWeight = c.rows.first().length();
-        cfg.device   = ComputeDevice::CPU;
+        cfg.device   = ComputeDevice::Cpu;
         checkBzExact(c.name + QStringLiteral(" CPU, весь код"), cfg, exact);
     }
 
@@ -2579,7 +2577,7 @@ static void testBrouwerZimmermannWorker()
         cfg.algorithm = Algorithm::BrouwerZimmermann;
         cfg.bzWeight  = 5;
 
-        cfg.device = ComputeDevice::CPU;
+        cfg.device = ComputeDevice::Cpu;
         clearCheckpoints();
         const Spectrum cpu = runWorker(cfg);
         const int exactCpu = g_planExactUpTo, setsCpu = g_planSets, rowsCpu = g_planRows;
@@ -2587,7 +2585,7 @@ static void testBrouwerZimmermannWorker()
 
         Spectrum gpu;
         if (g_gpuAvailable) {
-            cfg.device = ComputeDevice::GPU;
+            cfg.device = ComputeDevice::Gpu;
             gpu = runWorker(cfg);
             clearCheckpoints();
         }
@@ -2629,9 +2627,9 @@ static void testBrouwerZimmermannWorker()
         cfg.matrix    = Bz::scramble(Bz::systematicRandom(24, 96, 9), 2);
         cfg.algorithm = Algorithm::BrouwerZimmermann;
         cfg.bzWeight  = 8;
-        cfg.device    = ComputeDevice::CPU;
+        cfg.device    = ComputeDevice::Cpu;
         checkResume(QStringLiteral("CPU [96,24], вес 8, обрыв на границе множества"), cfg, cfg, 100, 300);
-        RunConfig gpuCfg = cfg; gpuCfg.device = ComputeDevice::GPU;
+        RunConfig gpuCfg = cfg; gpuCfg.device = ComputeDevice::Gpu;
         checkResume(QStringLiteral("GPU [96,24], вес 8, обрыв на границе множества"), gpuCfg, gpuCfg, 100, 300);
         checkResume(QStringLiteral("CPU -> GPU [96,24], перенос записи"), cfg, gpuCfg, 100, 300);
         checkExtendBz(QStringLiteral("CPU [96,24]: вес 5, потом 8"), cfg, 5, 8);
@@ -2643,8 +2641,8 @@ static void testBrouwerZimmermannWorker()
         mid.matrix    = Bz::scramble(Bz::systematicRandom(48, 96, 33), 6);
         mid.algorithm = Algorithm::BrouwerZimmermann;
         mid.bzWeight  = 11;
-        mid.device    = ComputeDevice::CPU;
-        RunConfig midGpu = mid; midGpu.device = ComputeDevice::GPU;
+        mid.device    = ComputeDevice::Cpu;
+        RunConfig midGpu = mid; midGpu.device = ComputeDevice::Gpu;
         checkResume(QStringLiteral("CPU [96,48], вес 11, обрыв внутри множества"), mid, mid, 1000000, 2500000);
         checkResume(QStringLiteral("GPU [96,48], вес 11, обрыв внутри множества"), midGpu, midGpu, 1000000, 2500000);
 
@@ -2654,10 +2652,10 @@ static void testBrouwerZimmermannWorker()
         lng.matrix     = Bz::scramble(Bz::systematicRandom(66, 140, 21), 4);
         lng.algorithm  = Algorithm::BrouwerZimmermann;
         lng.bzWeight   = 9;
-        lng.device     = ComputeDevice::CPU;
+        lng.device     = ComputeDevice::Cpu;
         lng.blocksGpu  = 8;
         lng.threadsGpu = 32;
-        RunConfig lngGpu = lng; lngGpu.device = ComputeDevice::GPU;
+        RunConfig lngGpu = lng; lngGpu.device = ComputeDevice::Gpu;
         checkResume(QStringLiteral("CPU [140,66] длинный, обрыв внутри множества"), lng, lng, 3000000, 8000000);
         checkResume(QStringLiteral("GPU [140,66] длинный, обрыв внутри множества"), lngGpu, lngGpu, 3000000, 8000000);
         lng.bzWeight = 5;
@@ -2675,15 +2673,15 @@ static int bzRun(const QString& path, int weight, const QString& device)
         return 2;
     cfg.algorithm = Algorithm::BrouwerZimmermann;
     cfg.bzWeight  = weight;
-    cfg.device    = device == QStringLiteral("cpu") ? ComputeDevice::CPU : ComputeDevice::GPU;
+    cfg.device    = device == QStringLiteral("cpu") ? ComputeDevice::Cpu : ComputeDevice::Gpu;
     cfg.threadsCpu = omp_get_num_procs();
-    cfg.autoTune   = cfg.device == ComputeDevice::GPU;
+    cfg.autoTune   = cfg.device == ComputeDevice::Gpu;
 
     const int k = cfg.matrix.size();
     const int n = cfg.matrix.first().length();
     out << QStringLiteral("[%1,%2], точно до веса %3, %4")
                .arg(n).arg(k).arg(weight)
-               .arg(cfg.device == ComputeDevice::CPU ? QStringLiteral("CPU") : QStringLiteral("GPU")) << Qt::endl;
+               .arg(cfg.device == ComputeDevice::Cpu ? QStringLiteral("CPU") : QStringLiteral("GPU")) << Qt::endl;
     out.flush();
 
     clearCheckpoints();
@@ -2844,8 +2842,8 @@ static void testLeonWorker()
         { QStringLiteral("случайный [96,24]"),       Bz::scramble(Bz::systematicRandom(24, 96, 9), 2),   20 },
     };
     auto checkDevice = [&](const Case& c, const Spectrum& exact, ComputeDevice device) {
-        const QString who = device == ComputeDevice::CPU ? QStringLiteral("CPU") : QStringLiteral("GPU");
-        if (device == ComputeDevice::GPU && !g_gpuAvailable) {
+        const QString who = device == ComputeDevice::Cpu ? QStringLiteral("CPU") : QStringLiteral("GPU");
+        if (device == ComputeDevice::Gpu && !g_gpuAvailable) {
             out << QStringLiteral("  ПРОПУСК  ") << c.name << QStringLiteral(" GPU  (GPU недоступен)") << Qt::endl;
             return;
         }
@@ -2884,8 +2882,8 @@ static void testLeonWorker()
 
     for (const Case& c : cases) {
         const Spectrum exact = Reference::bruteForce(c.rows);
-        checkDevice(c, exact, ComputeDevice::CPU);
-        checkDevice(c, exact, ComputeDevice::GPU);
+        checkDevice(c, exact, ComputeDevice::Cpu);
+        checkDevice(c, exact, ComputeDevice::Gpu);
     }
 
     // Длинный код: точного спектра нет, сверяемся с Брауэром–Циммерманом,
@@ -2896,13 +2894,13 @@ static void testLeonWorker()
         bz.matrix    = rows;
         bz.algorithm = Algorithm::BrouwerZimmermann;
         bz.bzWeight  = 8;
-        bz.device    = ComputeDevice::CPU;
+        bz.device    = ComputeDevice::Cpu;
         clearCheckpoints();
         const Spectrum exact = runWorker(bz);
         const int exactUpTo = g_planExactUpTo;
 
-        for (ComputeDevice device : { ComputeDevice::CPU, ComputeDevice::GPU }) {
-            const bool gpu = device == ComputeDevice::GPU;
+        for (ComputeDevice device : { ComputeDevice::Cpu, ComputeDevice::Gpu }) {
+            const bool gpu = device == ComputeDevice::Gpu;
             if (gpu && !g_gpuAvailable) {
                 out << QStringLiteral("  ПРОПУСК  [140,66] длинный GPU  (GPU недоступен)") << Qt::endl;
                 continue;
@@ -2940,7 +2938,7 @@ static void testLeonWorker()
         RunConfig dual;
         dual.matrix    = rows;
         dual.algorithm = Algorithm::DualCode;
-        dual.device    = ComputeDevice::CPU;
+        dual.device    = ComputeDevice::Cpu;
         clearCheckpoints();
         const Spectrum exact = runWorker(dual);
 
@@ -2948,7 +2946,7 @@ static void testLeonWorker()
         leon.matrix     = rows;
         leon.algorithm  = Algorithm::RandomInfoSets;
         leon.leonWeight = 9;
-        leon.device     = ComputeDevice::GPU;
+        leon.device     = ComputeDevice::Gpu;
         clearCheckpoints();
         const Spectrum found = runWorker(leon);
         const Spectrum again = runWorker(leon);
@@ -2975,7 +2973,7 @@ static void testLeonWorker()
         cfg.matrix     = Reference::golay24_12();
         cfg.algorithm  = Algorithm::RandomInfoSets;
         cfg.leonWeight = 12;
-        cfg.device     = ComputeDevice::GPU;
+        cfg.device     = ComputeDevice::Gpu;
         cfg.autoTune   = true;
         clearCheckpoints();
         const Spectrum found = runWorker(cfg);
@@ -3045,12 +3043,12 @@ static void testLeonWorker()
             cfg.matrix     = t.rows;
             cfg.algorithm  = Algorithm::RandomInfoSets;
             cfg.leonWeight = t.weight;
-            cfg.device     = ComputeDevice::CPU;
+            cfg.device     = ComputeDevice::Cpu;
             cfg.window     = Leon::WindowPolicy::none();
             clearCheckpoints();
             const Spectrum cpu = runWorker(cfg);
             const quint64 cpuTrials = g_searchDone;
-            cfg.device = ComputeDevice::GPU;
+            cfg.device = ComputeDevice::Gpu;
             clearCheckpoints();
             const Spectrum gpu = runWorker(cfg);
             const quint64 gpuTrials = g_searchDone;
@@ -3107,7 +3105,7 @@ static void testLeonWorker()
             cfg.matrix     = c.rows;
             cfg.algorithm  = Algorithm::RandomInfoSets;
             cfg.leonWeight = c.weight;
-            cfg.device     = ComputeDevice::CPU;
+            cfg.device     = ComputeDevice::Cpu;
             cfg.threadsCpu = omp_get_num_procs();
             clearCheckpoints();
             auto t0 = std::chrono::steady_clock::now();
@@ -3160,7 +3158,7 @@ static int leonRun(const QString& path, int weight, int missExponent, const QStr
     cfg.algorithm        = Algorithm::RandomInfoSets;
     cfg.leonWeight       = weight;
     cfg.leonMissExponent = missExponent;
-    cfg.device           = device.startsWith(QStringLiteral("gpu")) ? ComputeDevice::GPU : ComputeDevice::CPU;
+    cfg.device           = device.startsWith(QStringLiteral("gpu")) ? ComputeDevice::Gpu : ComputeDevice::Cpu;
     cfg.threadsCpu       = omp_get_num_procs();
     // «cpu-plain» — процессор без окна Штерна–Дюмера, для сравнения;
     // «gpu-window» — видеокарта с окном.
@@ -3171,11 +3169,11 @@ static int leonRun(const QString& path, int weight, int missExponent, const QStr
     const int n = cfg.matrix.first().length();
     const Leon::SternProfile profile = Leon::sternProfile(cfg.matrix);
     const Leon::Plan plan = Leon::plan(n, k, weight, std::pow(10.0, -missExponent),
-                                       cfg.device == ComputeDevice::GPU, &profile, cfg.window);
+                                       cfg.device == ComputeDevice::Gpu, &profile, cfg.window);
     out << QStringLiteral("[%1,%2], все слова до веса %3, пропуск 10^-%4, %8: %5 строк за попытку%9, попыток %6, слов %7")
                .arg(n).arg(k).arg(weight).arg(missExponent)
                .arg(plan.rows).arg(plan.trials).arg(double(plan.trials) * plan.wordsPerTrial, 0, 'g', 3)
-               .arg(cfg.device == ComputeDevice::GPU ? QStringLiteral("GPU") : QStringLiteral("CPU"))
+               .arg(cfg.device == ComputeDevice::Gpu ? QStringLiteral("GPU") : QStringLiteral("CPU"))
                .arg(plan.window > 0 ? QStringLiteral(", окно %1").arg(plan.window) : QString()) << Qt::endl;
     out.flush();
 
@@ -3410,7 +3408,7 @@ static void testProductCode()
         cfg.matrix2     = Reference::extHamming8_4();
         cfg.algorithm   = Algorithm::ProductCode;
         cfg.productRank = 4;
-        cfg.device      = ComputeDevice::CPU;
+        cfg.device      = ComputeDevice::Cpu;
         clearCheckpoints();
         const Spectrum got   = runWorker(cfg);
         const Spectrum exact = Reference::bruteForce(kronecker(cfg.matrix, cfg.matrix2));
@@ -3442,7 +3440,7 @@ static void testProductCode()
         cfg.matrix2     = Reference::hamming7_4();
         cfg.algorithm   = Algorithm::ProductCode;
         cfg.productRank = 1;
-        cfg.device      = ComputeDevice::CPU;
+        cfg.device      = ComputeDevice::Cpu;
         cfg.productBruteForceMaxK = 3;
         clearCheckpoints();
         const Spectrum got = runWorker(cfg);
@@ -3475,7 +3473,7 @@ static void testProductCode()
         cfg.matrix2     = Reference::hamming7_4();
         cfg.algorithm   = Algorithm::ProductCode;
         cfg.productRank = 2;
-        cfg.device      = ComputeDevice::CPU;
+        cfg.device      = ComputeDevice::Cpu;
         clearCheckpoints();
         const Spectrum exact = runWorker(cfg);
         const int exactUpTo = g_productExactUpTo;
@@ -3520,9 +3518,9 @@ static int productRun(const QString& path1, const QString& path2, int weight, in
     cfg.algorithm     = Algorithm::ProductCode;
     cfg.productWeight = weight;
     cfg.productRank   = rank;
-    cfg.device        = device == QStringLiteral("gpu") ? ComputeDevice::GPU : ComputeDevice::CPU;
+    cfg.device        = device == QStringLiteral("gpu") ? ComputeDevice::Gpu : ComputeDevice::Cpu;
     cfg.threadsCpu    = omp_get_num_procs();
-    cfg.autoTune      = cfg.device == ComputeDevice::GPU;
+    cfg.autoTune      = cfg.device == ComputeDevice::Gpu;
 
     out << QStringLiteral("[%1,%2] x [%3,%4], вес %5, ранги до %6")
                .arg(c1.matrix.first().length()).arg(c1.matrix.size())

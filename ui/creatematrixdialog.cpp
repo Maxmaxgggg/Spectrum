@@ -17,8 +17,8 @@
 #include <set>
 
 namespace {
-const QColor kHighlight(0x9f, 0xe1, 0xcb);   // подсветка столбца при наведении
-const QColor kSelected(0x5d, 0xca, 0xa5);    // закреплённый выбор
+const QColor HIGHLIGHT_COLOR(0x9f, 0xe1, 0xcb);   // подсветка столбца при наведении
+const QColor SELECTED_COLOR(0x5d, 0xca, 0xa5);    // закреплённый выбор
 // Столбцы таблицы БЧХ — как в справочнике, до m = 10; у m = 11 классов
 // вдвое больше, и таблица разрослась бы вдвое.
 constexpr int TABLE_MAX_M = 10;
@@ -239,9 +239,9 @@ void CreateMatrixDialog::highlight(int row, int column)
             QTableWidgetItem* const item = table->item(r, c);
             QColor color = Qt::transparent;
             if (c == selCol && repsUpTo[c][r] > 0 && repsUpTo[c][r] <= selectedReps)
-                color = kSelected;
+                color = SELECTED_COLOR;
             if (c == column && repsUpTo[c][r] > 0 && repsUpTo[c][r] <= repsUpTo[column][row])
-                color = kHighlight;
+                color = HIGHLIGHT_COLOR;
             item->setBackground(color == Qt::transparent ? QBrush() : QBrush(color));
         }
     if (row >= 0)

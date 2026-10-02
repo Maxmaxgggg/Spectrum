@@ -19,11 +19,11 @@
 class ProgressTracker
 {
 public:
-    using clock   = std::chrono::steady_clock;
-    using seconds = std::chrono::seconds;
+    using Clock   = std::chrono::steady_clock;
+    using Seconds = std::chrono::seconds;
     // Обновление спектра задаётся в миллисекундах: секунда — слишком грубый
     // шаг для показа хода расчёта, глазу заметно.
-    using millis  = std::chrono::milliseconds;
+    using Millis  = std::chrono::milliseconds;
 
     // Что назрело к текущему моменту.
     struct Due {
@@ -40,7 +40,7 @@ public:
     // их запись безопасна из любого потока и ничего не ждёт.
     //
     // Ровно так же устроена отмена расчёта: она тоже пишет атомик напрямую.
-    void setIntervals(millis spectrum, seconds checkpoint)
+    void setIntervals(Millis spectrum, Seconds checkpoint)
     {
         m_spectrumMs        .store(int(spectrum.count()),   std::memory_order_relaxed);
         m_checkpointSeconds .store(int(checkpoint.count()), std::memory_order_relaxed);
@@ -66,7 +66,7 @@ public:
         m_doneOps    = doneOps;
         m_elapsedSec = resumeElapsedSec;
 
-        m_start = clock::now() - seconds(resumeElapsedSec);
+        m_start = Clock::now() - Seconds(resumeElapsedSec);
         m_lastEstimate = m_lastBar = m_lastSpectrum = m_lastCheckpoint = m_start;
 
         // Режим по операциям настраивают до begin(), а doneOps здесь меняется —
@@ -85,23 +85,23 @@ public:
     // Снимок «что назрело». Метки не двигает — это делают mark*().
     Due due()
     {
-        m_now = clock::now();
+        m_now = Clock::now();
         Due d;
-        d.estimate   = (m_now - m_lastEstimate   >= seconds(1));
+        d.estimate   = (m_now - m_lastEstimate   >= Seconds(1));
         d.bar        = (m_now - m_lastBar        >= m_barInterval);
         d.spectrum   = (m_now - m_lastSpectrum
-                            >= millis(m_spectrumMs.load(std::memory_order_relaxed)));
+                            >= Millis(m_spectrumMs.load(std::memory_order_relaxed)));
         d.checkpoint = m_opsCheckpoint > 0
                            ? (m_doneOps >= m_nextCheckpointOps)
                            : (m_now - m_lastCheckpoint
-                                  >= seconds(m_checkpointSeconds.load(std::memory_order_relaxed)));
+                                  >= Seconds(m_checkpointSeconds.load(std::memory_order_relaxed)));
         return d;
     }
 
     void markEstimate()
     {
         m_lastEstimate = m_now;
-        m_elapsedSec   = std::chrono::duration_cast<seconds>(m_now - m_start).count();
+        m_elapsedSec   = std::chrono::duration_cast<Seconds>(m_now - m_start).count();
     }
     void markBar()      { m_lastBar      = m_now; }
     void markSpectrum() { m_lastSpectrum = m_now; }
@@ -144,14 +144,14 @@ private:
     quint64 m_opsCheckpoint     = 0;
     quint64 m_nextCheckpointOps = 0;
 
-    clock::time_point m_start;
-    clock::time_point m_now;
-    clock::time_point m_lastEstimate;
-    clock::time_point m_lastBar;
-    clock::time_point m_lastSpectrum;
-    clock::time_point m_lastCheckpoint;
+    Clock::time_point m_start;
+    Clock::time_point m_now;
+    Clock::time_point m_lastEstimate;
+    Clock::time_point m_lastBar;
+    Clock::time_point m_lastSpectrum;
+    Clock::time_point m_lastCheckpoint;
 
     std::atomic<int> m_spectrumMs        { 1000 };
     std::atomic<int> m_checkpointSeconds { 10 };
-    const seconds m_barInterval  { 1  };
+    const Seconds m_barInterval  { 1  };
 };

@@ -12,8 +12,8 @@ namespace {
 // первый элемент.
 const QStringList& palette()
 {
-    static const QStringList colors{ "Blue", "Green", "Red" };
-    return colors;
+    static const QStringList COLORS{ "Blue", "Green", "Red" };
+    return COLORS;
 }
 
 // Целевое расстояние между подписями оси X в пикселях. Реже — ось выглядит

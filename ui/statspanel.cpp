@@ -14,7 +14,7 @@ namespace {
 
 // Прочерк, а не пустота: пустое поле читается как «ещё не посчитали», а
 // прочерк — как «здесь нечему быть».
-const QString kDash = QStringLiteral("—");
+const QString DASH = QStringLiteral("—");
 
 QString algorithmName(ComputationSettings::Algorithm algorithm)
 {
@@ -59,13 +59,13 @@ StatsPanel::StatsPanel(QWidget* parent)
     doneValue      = addRow(form, tr("Перебрано:"));
 
     clearProgress();
-    deviceValue->setText(kDash);
-    algorithmValue->setText(kDash);
+    deviceValue->setText(DASH);
+    algorithmValue->setText(DASH);
 }
 
 QLabel* StatsPanel::addRow(QFormLayout* form, const QString& caption)
 {
-    auto* const value = new QLabel(kDash, this);
+    auto* const value = new QLabel(DASH, this);
     // Моноширинный: цифры бегут каждую секунду, и в пропорциональном шрифте
     // они дёргаются по ширине на каждом обновлении.
     value->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
@@ -78,7 +78,7 @@ void StatsPanel::showTask(const ComputationSettings& settings)
 {
     grid.clear();
 
-    if (settings.compDev == ComputationSettings::GPU) {
+    if (settings.compDev == ComputationSettings::Gpu) {
         // У случайного поиска своя сетка: блок на попытку, 256 нитей.
         deviceText = settings.algorithmType == ComputationSettings::RandomInfoSets
                          ? tr("GPU, блок на попытку")
@@ -122,14 +122,14 @@ void StatsPanel::showProgress(int elapsedSec, int minutesLeft, double speed,
     // Время окончания полезнее остатка, когда расчёт на часы: сразу видно,
     // ждать ли его сегодня. За горизонтом оценки показывать нечего — она
     // построена на средней скорости и там уже ничего не значит.
-    constexpr int minutesInYear = 365 * 24 * 60;
-    if (minutesLeft > 0 && minutesLeft < minutesInYear) {
+    constexpr int MINUTES_IN_YEAR = 365 * 24 * 60;
+    if (minutesLeft > 0 && minutesLeft < MINUTES_IN_YEAR) {
         const QDateTime finish = QDateTime::currentDateTime().addSecs(qint64(minutesLeft) * 60);
         const bool today = finish.date() == QDate::currentDate();
         finishValue->setText(today ? finish.toString(QStringLiteral("HH:mm"))
                                    : finish.toString(QStringLiteral("d MMMM, HH:mm")));
     } else {
-        finishValue->setText(kDash);
+        finishValue->setText(DASH);
     }
 
     speedValue->setText(Format::speed(speed));
@@ -138,11 +138,11 @@ void StatsPanel::showProgress(int elapsedSec, int minutesLeft, double speed,
 
 void StatsPanel::showState(const QString& text)
 {
-    stateValue->setText(text.isEmpty() ? kDash : text);
+    stateValue->setText(text.isEmpty() ? DASH : text);
 }
 
 void StatsPanel::clearProgress()
 {
     for (QLabel* value : { elapsedValue, remainingValue, finishValue, speedValue, doneValue })
-        value->setText(kDash);
+        value->setText(DASH);
 }

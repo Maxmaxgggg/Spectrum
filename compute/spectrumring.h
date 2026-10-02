@@ -28,16 +28,16 @@ class SpectrumRing
 public:
     // Мест в кольце. Больше четырёх смысла нет: хост убегает вперёд на три чанка, и лишние
     // места в кольце просто не успевают заполниться.
-    static constexpr int MaxSlots = 4;
+    static constexpr int MAX_SLOTS = 4;
 
     // values — длина спектра, copies — сколько копий может ехать одновременно.
     //
     // Имя не slots: так называется макрос Qt из qobjectdefs.h (тот самый из
     // "public slots:"), он разворачивается в пустоту и съедает параметр.
-    void allocate(size_t values, int copies = MaxSlots)
+    void allocate(size_t values, int copies = MAX_SLOTS)
     {
         reset();
-        m_slots  = qBound(1, copies, MaxSlots);
+        m_slots  = qBound(1, copies, MAX_SLOTS);
         m_values = values;
         m_buffers.allocate(values * size_t(m_slots), HostBuffer<quint64>::Kind::Pinned);
         for (int i = 0; i < m_slots; ++i)
@@ -47,7 +47,7 @@ public:
     void reset()
     {
         m_buffers.reset();
-        for (int i = 0; i < MaxSlots; ++i)
+        for (int i = 0; i < MAX_SLOTS; ++i)
             m_events[i].reset();
         m_slots = m_head = m_tail = m_inFlight = 0;
         m_values = 0;
@@ -95,7 +95,7 @@ public:
 
 private:
     HostBuffer<quint64> m_buffers;
-    CudaEvent           m_events[MaxSlots];
+    CudaEvent           m_events[MAX_SLOTS];
 
     size_t m_values   = 0;
     int    m_slots    = 0;

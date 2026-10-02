@@ -51,8 +51,8 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     ui->leonMissCBX->setItemData(3, 12);
 
     computeDeviceBGP = new QButtonGroup(this);
-    computeDeviceBGP->addButton( ui->cpuRB, ComputeDevice::CPU );
-    computeDeviceBGP->addButton( ui->gpuRB, ComputeDevice::GPU );
+    computeDeviceBGP->addButton( ui->cpuRB, ComputeDevice::Cpu );
+    computeDeviceBGP->addButton( ui->gpuRB, ComputeDevice::Gpu );
 
     // Устанавливаем данные для save и update
     ui->saveSpectrumIntervalCBX->setItemData(0, TenSeconds);
@@ -523,7 +523,7 @@ void SettingsDialog::applyDeviceLimits()
 // недоступны: так видно, что значения не потеряны, просто не в деле.
 void SettingsDialog::updateDeviceControls()
 {
-    const bool gpu  = computeDeviceBGP->checkedId() == ComputeDevice::GPU;
+    const bool gpu  = computeDeviceBGP->checkedId() == ComputeDevice::Gpu;
     const bool auto_ = gpu && ui->autoTuneGridCHB->isChecked();
 
     ui->blocksGpuLBL->setVisible(gpu);

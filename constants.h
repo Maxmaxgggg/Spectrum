@@ -35,7 +35,7 @@ namespace Constants
     // матрицы. Предел устройства 48 КБ, немного оставляем про запас.
     constexpr  int MAX_SHARED_BYTES = 40 * 1024;
     constexpr  int BINOM_TABLE_SIZE_FOR_SHORT_CODES = ( MAX_SHORT_CODE_LENGTH + 1 ) * ( MAX_SHORT_CODE_LENGTH + 1 );
-    constexpr  int ERROR_OCCURED = -1;
+    constexpr  int ERROR_OCCURRED = -1;
 
     // Сколько крутится проба потолка обновления. Полутора секунд хватает и
     // самой медленной из замеренных конфигураций: широкий код 2000x50 отдаёт
