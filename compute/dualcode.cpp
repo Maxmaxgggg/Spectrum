@@ -1,10 +1,11 @@
-#include <iostream>
-
 #include "dualcode.h"
 
 #include <limits>
 
-// Функция для генерации дуальной матрицы (писал GPT)
+// Проверочная матрица: порождающая приводится к ступенчатому виду
+// Гаусса–Жордана, и на каждый свободный (неопорный) столбец f строится строка
+// проверочной матрицы — единица в f и единицы в опорных столбцах тех строк,
+// где в столбце f стоит единица.
 Matrix generatorToParity(const Matrix& gen)
 {
     if (gen.isEmpty()) return {};
@@ -73,106 +74,82 @@ Matrix generatorToParity(const Matrix& gen)
 
     return parity;
 }
-// Биноминальная таблица для расчета дуального спектра
-static std::vector<std::vector<mpz_class>> buildBinomTable(int n) {
-    std::vector<std::vector<mpz_class>> C(n + 1, std::vector<mpz_class>(n + 1));
-    for (int i = 0; i <= n; ++i) {
-        C[i][0] = 1;
-        for (int j = 1; j <= i; ++j) {
-            C[i][j] = C[i - 1][j - 1] + C[i - 1][j];
-        }
-    }
-    return C;
-}
+namespace {
 
-// Многочлены для расчета дуального спектра
-static mpz_class krawtchouk(const std::vector<std::vector<mpz_class>>& C, int n, int j, int i) {
-    int tmin = std::max(0, j - (n - i));
-    int tmax = std::min(j, i);
-    mpz_class s = 0;
-    for (int t = tmin; t <= tmax; ++t) {
-        mpz_class term = C[j][t] * C[n - j][i - t];
-        if ((t & 1) != 0) s -= term; else s += term;
-    }
-    return s;
-}
-
-static std::vector<mpz_class> macWilliams(const quint64* dualSpectrum, int numOfCols, int numOfRows)
+mpz_class fromU64(quint64 value)
 {
-    // numOfRows — строк проверочной матрицы; 2^numOfRows — её слов.
-    std::vector<mpz_class> B(numOfCols + 1);
-    for (int j = 0; j <= numOfCols; ++j)
-        B[j] = mpz_class(std::to_string(dualSpectrum[j]));
-    auto C = buildBinomTable(numOfCols);
-    const mpz_class scale = mpz_class(1) << numOfRows;
-    std::vector<mpz_class> A(numOfCols + 1);
-    for (int i = 0; i <= numOfCols; ++i) {
-        mpz_class s = 0;
-        for (int j = 0; j <= numOfCols; ++j) {
-            if (B[j] == 0) continue;
-            s += B[j] * krawtchouk(C, numOfCols, j, i);
-        }
-        A[i] = s / scale;
-    }
-    return A;
+    // Не mpz_class(unsigned long): на Windows unsigned long 32-битный.
+    mpz_class out;
+    mpz_import(out.get_mpz_t(), 1, -1, sizeof(value), 0, 0, &value);
+    return out;
 }
 
-QVector<quint64> spectrumFromDual(const quint64* dualSpectrum, int numOfCols, int numOfRows)
+} // namespace
+
+// Раньше A_i считалось по определению: K_i(x) = Σ_t (−1)^t C(x, t) C(n − x, i − t)
+// для каждой пары (i, x) по таблице биномов из больших чисел — O(n^3)
+// больших умножений и сотни мегабайт на таблицу; на длине 2047 это полминуты,
+// и дважды за расчёт. Теперь по каждому весу x дуального кода многочлены
+// идут трёхчленной рекуррентностью
+//
+//     K_0(x) = 1,  K_1(x) = n − 2x,
+//     (i + 1)·K_{i+1}(x) = (n − 2x)·K_i(x) − (n − i + 1)·K_{i−1}(x),
+//
+// — O(n) операций на вес, без таблицы (сотые доли секунды на той же длине).
+// Деление на i + 1 в рекуррентности точное.
+std::vector<mpz_class> macWilliams(const quint64* dualSpectrum, int length, int dualDimension)
 {
-    const std::vector<mpz_class> A = macWilliams(dualSpectrum, numOfCols, numOfRows);
-    QVector<quint64> out(numOfCols + 1, 0ULL);
-    for (int i = 0; i <= numOfCols; ++i) {
-        // unsigned long на Windows 32-битный, поэтому не mpz_get_ui, а export.
-        if (A[i] == 0)
+    const int n = length;
+    std::vector<mpz_class> sum(size_t(n) + 1, 0);
+    mpz_class prev, cur, next, b;
+    for (int x = 0; x <= n; ++x) {
+        if (dualSpectrum[x] == 0)
             continue;
-        if (mpz_sizeinbase(A[i].get_mpz_t(), 2) > 64) {
+        b    = fromU64(dualSpectrum[x]);
+        prev = 1;            // K_0(x)
+        cur  = n - 2 * x;    // K_1(x)
+        sum[0] += b * prev;
+        if (n >= 1)
+            sum[1] += b * cur;
+        for (int i = 1; i < n; ++i) {
+            next = mpz_class(n - 2 * x) * cur - mpz_class(n - i + 1) * prev;
+            mpz_divexact_ui(next.get_mpz_t(), next.get_mpz_t(), static_cast<unsigned long>(i + 1));
+            sum[size_t(i) + 1] += b * next;
+            mpz_swap(prev.get_mpz_t(), cur.get_mpz_t());
+            mpz_swap(cur.get_mpz_t(), next.get_mpz_t());
+        }
+    }
+    // Деление на число слов дуального кода. У настоящего спектра оно точное;
+    // усечение к нулю — как у прежнего деления mpz_class.
+    for (mpz_class& a : sum)
+        mpz_tdiv_q_2exp(a.get_mpz_t(), a.get_mpz_t(), static_cast<mp_bitcnt_t>(dualDimension));
+    return sum;
+}
+
+QVector<quint64> saturatedCounts(const std::vector<mpz_class>& spectrum)
+{
+    QVector<quint64> out(int(spectrum.size()), 0ULL);
+    for (int i = 0; i < out.size(); ++i) {
+        const mpz_class& a = spectrum[size_t(i)];
+        if (sgn(a) <= 0)
+            continue;
+        if (mpz_sizeinbase(a.get_mpz_t(), 2) > 64) {
             out[i] = std::numeric_limits<quint64>::max();
             continue;
         }
+        // Не mpz_get_ui: на Windows unsigned long 32-битный.
         quint64 v = 0;
-        mpz_export(&v, nullptr, -1, sizeof(v), 0, 0, A[i].get_mpz_t());
+        mpz_export(&v, nullptr, -1, sizeof(v), 0, 0, a.get_mpz_t());
         out[i] = v;
     }
     return out;
 }
 
-// Функция, которая рассчитывает спектр из дуального и записывает его в QStringList
-SpectrumText computeSpectrumFromDual(quint64* dualSpectrum, int numOfCols, int numOfRows) {
-
-    // Переводим параметры дуального кода в обычный
-    numOfRows = numOfCols - numOfRows;
-    // Копируем входной массив в mpz-вектор
-    std::vector<mpz_class> B(numOfCols + 1);
-    mpz_class sumB = 0;
-    for (int j = 0; j <= numOfCols; ++j) {
-        quint64 t = dualSpectrum[j];
-        B[j] = mpz_class(std::to_string(dualSpectrum[j]));
-        sumB += B[j];
-    }
-
-    mpz_class expected = mpz_class(1) << (numOfCols - numOfRows);
-    auto C = buildBinomTable(numOfCols);
-    mpz_class scale = mpz_class(1) << (numOfCols - numOfRows);
-
-    std::vector<mpz_class> A(numOfCols + 1);
-    for (int i = 0; i <= numOfCols; ++i) {
-        mpz_class s = 0;
-        for (int j = 0; j <= numOfCols; ++j) {
-            if (B[j] == 0) continue;
-            mpz_class K = krawtchouk(C, numOfCols, j, i);
-            s += B[j] * K;
-        }
-        mpz_class Ai = s / scale;
-
-        A[i] = Ai;
-    }
-
+SpectrumText spectrumText(const std::vector<mpz_class>& spectrum)
+{
     SpectrumText result;
-    for (int i = 0; i <= numOfCols; ++i) {
-        QString Ai_str = QString::fromStdString(A[i].get_str(10));
-        if (Ai_str != "0") {
-            result.append(QString("%1 - %2").arg(i).arg(Ai_str));
-        }
-    }
+    for (size_t i = 0; i < spectrum.size(); ++i)
+        if (spectrum[i] != 0)
+            result.append(QStringLiteral("%1 - %2").arg(i).arg(QString::fromStdString(spectrum[i].get_str(10))));
     return result;
 }

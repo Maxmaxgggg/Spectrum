@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <thread>
@@ -419,6 +420,13 @@ static void testPartialShort(const QStringList& matrix, int maxRows)
 
 // Дуальный код: считается спектр проверочной матрицы, затем восстанавливается
 // исходный через тождества Мак-Вильямс. Результат обязан совпасть с перебором.
+// Простая проверка условия: ok или ПРОВАЛ с именем.
+static void expectStore(const QString& name, bool condition)
+{
+    if (condition) { ++g_passed; out << "  ok       " << name << Qt::endl; }
+    else           { ++g_failed; out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl; }
+}
+
 static void testDualCode(const QString& label, const QStringList& matrix)
 {
     out << Qt::endl << label << QStringLiteral(" — через дуальный код") << Qt::endl;
@@ -433,6 +441,60 @@ static void testDualCode(const QString& label, const QStringList& matrix)
     check("CPU  дуальный", cfg, brute);
     cfg.device = ComputeDevice::GPU;
     check("GPU  дуальный", cfg, brute);
+}
+
+// Преобразование Мак-Вильямс само по себе: спектр кода по спектру дуального
+// против полного перебора самого кода, а также числа длиннее 64 бит.
+static void testMacWilliams()
+{
+    out << Qt::endl << QStringLiteral("Мак-Вильямс: спектр кода по спектру дуального") << Qt::endl;
+
+    struct Case { QString name; QStringList generator; };
+    const QVector<Case> cases = {
+        { QStringLiteral("Хэмминг (7,4)"), Reference::hamming7_4() },
+        { QStringLiteral("Голей (24,12)"), Reference::golay24_12() },
+        { QStringLiteral("rnd(10,30)"),    Reference::randomMatrix(10, 30, 21) },
+        { QStringLiteral("rnd(14,26)"),    Reference::randomMatrix(14, 26, 22) },
+        { QStringLiteral("rnd(16,33)"),    Reference::randomMatrix(16, 33, 23) },
+    };
+    for (const Case& c : cases) {
+        const int n = c.generator.first().length();
+        const QStringList parity = generatorToParity(c.generator);
+        const Spectrum code = Reference::bruteForce(c.generator);
+        const Spectrum dual = Reference::bruteForce(parity);
+        std::vector<quint64> dualCounts(size_t(n) + 1, 0);
+        for (auto it = dual.constBegin(); it != dual.constEnd(); ++it)
+            dualCounts[size_t(it.key())] = it.value();
+
+        const std::vector<mpz_class> a = macWilliams(dualCounts.data(), n, parity.size());
+        bool same = int(a.size()) == n + 1 && parity.size() == n - c.generator.size();
+        for (int w = 0; same && w <= n; ++w)
+            same = a[size_t(w)] == mpz_class(QString::number(code.value(w, 0)).toStdString());
+        expectStore(c.name + QStringLiteral(": совпадает с полным перебором"), same);
+    }
+
+    // Код с проверкой на чётность [100, 99]: дуальный — повторение {0, 1…1},
+    // и спектр кода — C(100, w) на чётных весах. C(100, 50) ≈ 10^29 в 64 бита
+    // не помещается: числа обязаны выйти точными, а в 64-битном виде —
+    // насыщенными, не обрезанными.
+    const int n = 100;
+    std::vector<quint64> repetition(size_t(n) + 1, 0);
+    repetition[0] = repetition[size_t(n)] = 1;
+    const std::vector<mpz_class> even = macWilliams(repetition.data(), n, 1);
+    const QVector<quint64> saturated = saturatedCounts(even);
+    bool exact = int(even.size()) == n + 1, clamped = exact;
+    for (int w = 0; exact && w <= n; ++w) {
+        mpz_class binom;
+        mpz_bin_uiui(binom.get_mpz_t(), static_cast<unsigned long>(n), static_cast<unsigned long>(w));
+        const mpz_class expected = (w % 2 == 0) ? binom : mpz_class(0);
+        exact = even[size_t(w)] == expected;
+        const quint64 expected64 = mpz_sizeinbase(expected.get_mpz_t(), 2) > 64
+                                     ? std::numeric_limits<quint64>::max()
+                                     : quint64(QString::fromStdString(expected.get_str()).toULongLong());
+        clamped = clamped && saturated[w] == expected64;
+    }
+    expectStore(QStringLiteral("[100,99]: числа длиннее 64 бит точны"), exact);
+    expectStore(QStringLiteral("[100,99]: в 64 битах — насыщение"), clamped);
 }
 
 // ---------------------------------------------------- чекпоинты
@@ -930,12 +992,6 @@ static void testAutoTunedCheckpoints()
 }
 
 // ------------------------------------------------- хранилище автосохранений
-
-static void expectStore(const QString& name, bool condition)
-{
-    if (condition) { ++g_passed; out << "  ok       " << name << Qt::endl; }
-    else           { ++g_failed; out << QStringLiteral("  ПРОВАЛ   ") << name << Qt::endl; }
-}
 
 // Копия настроек обязана нести обе матрицы. Самописный конструктор
 // копирования их пропускал. Работало это только потому, что fromJson
@@ -3794,6 +3850,8 @@ int main(int argc, char* argv[])
     testLongCode(64, 2);
 
     testDualCode(QStringLiteral("Хэмминг (7,4)"), Reference::hamming7_4());
+    testDualCode(QStringLiteral("rnd(16,40)"), Reference::randomMatrix(16, 40, 24));
+    testMacWilliams();
 
     testAxisLabelStep();
     testUpdateIntervals();

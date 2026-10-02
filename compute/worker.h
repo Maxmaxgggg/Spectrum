@@ -244,7 +244,8 @@ private:
     // Отправить в интерфейс спектр, лежащий по указателю: снимки для показа
     // берутся из кольца, а не из h_spectrum.
     void updateSpectrumFrom(const quint64* spectrum, int numOfCols);
-    void updateSpectrumDual( int numOfCols, int numOfRows );
+    // Спектр по Мак-Вильямс — точными большими целыми.
+    void updateSpectrumExact(const std::vector<mpz_class>& spectrum);
 
 
     /* Функции для работы с чекпоинтами */

@@ -2101,36 +2101,23 @@ void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
         emit updateSpectrumPlot(spectrumCopyPlot);
     }
 }
-void Worker::updateSpectrumDual(int numOfCols, int numOfRows)
+// Спектр по Мак-Вильямс: числа бывают длиннее 64 бит, поэтому текст строится
+// по большим целым, а график — через double.
+void Worker::updateSpectrumExact(const std::vector<mpz_class>& spectrum)
 {
     if (probeMode) {
         ++probeSends;
         return;
     }
-    if (!h_spectrum.get())
+    const SpectrumText text = spectrumText(spectrum);
+    if (text.isEmpty())
         return;
-
-    bool spectrumEmpty = true;
-    // Считаем текстовый спектр из дуального
-    QStringList spectrumCopyPTE = computeSpectrumFromDual( h_spectrum.get(), numOfCols, numOfRows );
-    SpectrumFloat spectrumCopyPlot;
-    spectrumCopyPlot.reserve(numOfCols+1);
-
-    for (int i = 0; i <= numOfCols; i++) { spectrumCopyPlot.push_back(0.f); }
-    // Получаем значения типа float из текстового спектра
-    for (const QString& line : spectrumCopyPTE) {
-        QStringList parts = line.split(" - ");
-        int index = parts[0].toInt();
-        float value = parts[1].toFloat();
-        if (value != 0.f)
-            spectrumEmpty = false;
-        spectrumCopyPlot[index] = value;
-    }
-    // Если спектр не пуст, то обновляем его
-    if (!spectrumEmpty) {
-        emit updateSpectrumPTE(spectrumCopyPTE);
-        emit updateSpectrumPlot(spectrumCopyPlot);
-    }
+    SpectrumFloat plot;
+    plot.reserve(int(spectrum.size()));
+    for (const mpz_class& a : spectrum)
+        plot.append(float(a.get_d()));
+    emit updateSpectrumPTE(text);
+    emit updateSpectrumPlot(plot);
 }
 void Worker::makeCheckpoint(int numOfCols, bool finished)
 {
@@ -2650,22 +2637,24 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
     // спектр перебираемой матрицы, с него и продолжают.
     makeCheckpoint(int(g.numOfCols), true);
 
+    // Дуальный расчёт даёт спектр проверочной матрицы — исходный получается
+    // из него преобразованием Мак-Вильямс. Считается один раз: из него и
+    // итог, и то, что видит пользователь.
+    const bool dual = settings.algorithmType == ComputationSettings::Algorithm::DualCode;
+    const std::vector<mpz_class> original = dual
+        ? macWilliams(runState.spectrum.constData(), int(g.numOfCols), int(g.numOfRows))
+        : std::vector<mpz_class>();
+
     // Итог — на случай, если этот расчёт вложенный (компонента произведения).
-    // У дуального пути runState хранит спектр проверочной матрицы — итог
-    // сразу переводится в спектр исходного кода.
-    m_finalSpectrum  = settings.algorithmType == ComputationSettings::Algorithm::DualCode
-                         ? spectrumFromDual(runState.spectrum.constData(), int(g.numOfCols), int(g.numOfRows))
-                         : runState.spectrum;
+    m_finalSpectrum  = dual ? saturatedCounts(original) : runState.spectrum;
     m_finalExactUpTo = g.guaranteedBelow > 0 ? g.guaranteedBelow - 1
                      : settings.algorithmType == ComputationSettings::ProductCode ? productExactUpTo
                      : int(g.numOfCols);
 
     initializeRunState(LoadMode::Reset);
 
-    // Дуальный расчёт даёт спектр проверочной матрицы — исходный получается
-    // из него преобразованием Мак-Вильямс.
-    if (settings.algorithmType == ComputationSettings::Algorithm::DualCode)
-        updateSpectrumDual(int(g.numOfCols), int(g.numOfRows));
+    if (dual)
+        updateSpectrumExact(original);
     else
         updateSpectrum(int(g.numOfCols));
 
