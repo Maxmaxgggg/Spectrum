@@ -145,11 +145,15 @@ QVector<quint64> saturatedCounts(const std::vector<mpz_class>& spectrum)
     return out;
 }
 
-SpectrumText spectrumText(const std::vector<mpz_class>& spectrum)
+SpectrumCounts spectrumCounts(const std::vector<mpz_class>& spectrum)
 {
-    SpectrumText result;
-    for (size_t i = 0; i < spectrum.size(); ++i)
-        if (spectrum[i] != 0)
-            result.append(QStringLiteral("%1 - %2").arg(i).arg(QString::fromStdString(spectrum[i].get_str(10))));
-    return result;
+    SpectrumCounts out;
+    out.counts = saturatedCounts(spectrum);
+    for (size_t i = 0; i < spectrum.size(); ++i) {
+        if (mpz_sizeinbase(spectrum[i].get_mpz_t(), 2) <= 64)
+            continue;
+        out.exact.resize(out.size());
+        out.exact[int(i)] = QString::fromStdString(spectrum[i].get_str(10));
+    }
+    return out;
 }

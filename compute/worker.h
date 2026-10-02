@@ -189,10 +189,8 @@ public slots:
 signals:
     // Сигнал для обновления progressbar-а
     void updateInfoPBR(       int percent                       );
-    // Сигнал для обновления текстового спектра
-    void updateSpectrumPTE(   const SpectrumText spectrum       );
-    // Сигнал для обновления графического спектра
-    void updateSpectrumPlot(  const SpectrumFloat spectrum      );
+    // Текущий спектр — числами; как его показать, решает интерфейс.
+    void spectrumUpdated(     const SpectrumCounts& spectrum    );
     // Сигнал, посылаемый при возникновении ошибки
     void errorOccurred(       const QString& message            );
     // Сигнал, посылаемый при окончании расчета спектра

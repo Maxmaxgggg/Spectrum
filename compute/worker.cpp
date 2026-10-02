@@ -13,6 +13,8 @@ using namespace std::chrono;
 Worker::Worker(QObject *parent)
     : QObject(parent)
 {
+    // Спектр уходит в окно через очередь событий.
+    qRegisterMetaType<SpectrumCounts>("SpectrumCounts");
 }
 
 Worker::~Worker()
@@ -237,46 +239,30 @@ void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
         ++probeSends;
         return;
     }
-    bool spectrumEmpty = true;
-    QStringList spectrumCopyPTE;
-    SpectrumFloat spectrumCopyPlot;
 
-    // Веса за пределом заказа не показываются вовсе: график остаётся той же
+    // Веса за пределом заказа не показываются вовсе: спектр остаётся той же
     // длины, но там нули.
-    const quint64 shownUpTo = displayUpToWeight >= 0
-                                ? std::min<quint64>(quint64(numOfCols), quint64(displayUpToWeight))
-                                : quint64(numOfCols);
-    for (quint64 w = 0; w <= numOfCols; ++w) {
-        const quint64 value = w <= shownUpTo ? spectrum[w] : 0;
-        spectrumCopyPlot.append(float(value));
-        if (value != 0) {
-            spectrumCopyPTE.append(QString::number(w) + " - " + QString::number(value));
-            spectrumEmpty = false;
-        }
-    }
-    if (!spectrumEmpty) {
-        emit updateSpectrumPTE(spectrumCopyPTE);
-        emit updateSpectrumPlot(spectrumCopyPlot);
-    }
+    const int shownUpTo = displayUpToWeight >= 0 ? std::min(numOfCols, displayUpToWeight) : numOfCols;
+    SpectrumCounts shown;
+    shown.counts.resize(numOfCols + 1);
+    for (int w = 0; w <= shownUpTo; ++w)
+        shown.counts[w] = spectrum[w];
+    if (!shown.isEmpty())
+        emit spectrumUpdated(shown);
 }
-// Спектр по Мак-Вильямс: числа бывают длиннее 64 бит, поэтому текст строится
-// по большим целым, а график — через double.
+
+// Спектр по Мак-Вильямс: числа бывают длиннее 64 бит.
 void Worker::updateSpectrumExact(const std::vector<mpz_class>& spectrum)
 {
     if (probeMode) {
         ++probeSends;
         return;
     }
-    const SpectrumText text = spectrumText(spectrum);
-    if (text.isEmpty())
-        return;
-    SpectrumFloat plot;
-    plot.reserve(int(spectrum.size()));
-    for (const mpz_class& a : spectrum)
-        plot.append(float(a.get_d()));
-    emit updateSpectrumPTE(text);
-    emit updateSpectrumPlot(plot);
+    const SpectrumCounts shown = spectrumCounts(spectrum);
+    if (!shown.isEmpty())
+        emit spectrumUpdated(shown);
 }
+
 void Worker::makeCheckpoint(int numOfCols, bool finished)
 {
     runState.spectrum.resize(numOfCols + 1);

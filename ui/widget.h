@@ -54,8 +54,8 @@ private slots:
     void on_cancelPBN_clicked();
     void handleUpdateInfoPBR(int percent);
     void sendSettingsToWorker();
-    void handleUpdateSpectrumPlot( const SpectrumFloat   spectrum ); // сигнал от воркера
-    void handleUpdateSpectrumPTE(  const SpectrumText    spectrum );
+    // Спектр от воркера: текст и график.
+    void handleSpectrum(const SpectrumCounts& spectrum);
     void handleError(const QString& message);
     void handleFinished(int);
     void handleUpdateRemainingMinutes(int elapsedSec, int minutesLeft, double speed,
@@ -144,8 +144,8 @@ private:
     // добавить состояние, как подпись и значок разъезжались.
     void updateExecuteButton();
 
-    // Спектр показывается списком строк «вес - число слов».
-    void setSpectrumRows(const SpectrumText& lines);
+    // Текст спектра — строками «вес - число слов» по lastSpectrum.
+    void showSpectrumText();
 
     // Три панели живут в доках: любую можно вытащить в отдельное окно и
     // закрыть, а вернуть из меню «Вид». Раскладка запоминается целиком.
@@ -153,7 +153,7 @@ private:
     void resetLayout();
 
     // Последний показанный спектр — его же и сохраняем между запусками.
-    SpectrumText lastSpectrum;
+    SpectrumCounts lastSpectrum;
     // До какого веса показанный спектр точен. -1 — весь спектр на равных
     // (обычный перебор); иначе строки тяжелее помечаются как неполные.
 

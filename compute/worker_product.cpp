@@ -111,8 +111,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     QString error;
     connect(&sub, &Worker::updateInfoPBR,           this, &Worker::updateInfoPBR);
     connect(&sub, &Worker::updateRemainingMinutes,  this, &Worker::updateRemainingMinutes);
-    connect(&sub, &Worker::updateSpectrumPTE,       this, &Worker::updateSpectrumPTE);
-    connect(&sub, &Worker::updateSpectrumPlot,      this, &Worker::updateSpectrumPlot);
+    connect(&sub, &Worker::spectrumUpdated,         this, &Worker::spectrumUpdated);
     connect(&sub, &Worker::gridTuned,               this, &Worker::gridTuned);
     connect(&sub, &Worker::errorOccurred, [&error](const QString& m) { error = m; });
 

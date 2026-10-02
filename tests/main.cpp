@@ -4,9 +4,8 @@
 // + дуальный код) и сверяет результат с эталоном. Требование к спектру
 // абсолютное: расхождение даже на единицу — провал.
 //
-// Спектр снимается штатным сигналом updateSpectrumPTE: он несёт точный
-// десятичный текст "вес - количество" и, в отличие от updateSpectrumPlot
-// (float), не теряет разрядность на больших значениях.
+// Спектр снимается штатным сигналом spectrumUpdated: числа в нём точные, а
+// не float, как у графика.
 
 #include <QCoreApplication>
 #include <QDir>
@@ -72,14 +71,15 @@ static int     g_productExactUpTo = -1;
 
 // ---------------------------------------------------------------- утилиты
 
-static Spectrum parseSpectrumText(const SpectrumText& lines)
+// Ненулевые веса спектра. Числа длиннее 64 бит (Мак-Вильямс у длинного
+// кода) в сверках не встречаются; попади такое — в counts насыщение, и
+// сверка с эталоном его не пропустит.
+static Spectrum toSpectrum(const SpectrumCounts& counts)
 {
     Spectrum s;
-    for (const QString& line : lines) {
-        const QStringList parts = line.split(QStringLiteral(" - "));
-        if (parts.size() != 2) continue;
-        s[parts[0].toInt()] = parts[1].toULongLong();
-    }
+    for (int w = 0; w < counts.size(); ++w)
+        if (counts.counts.at(w) != 0)
+            s[w] = counts.counts.at(w);
     return s;
 }
 
@@ -182,8 +182,8 @@ static Spectrum runWorker(const RunConfig& cfg,
     bool errored = false;
     QString errorMessage;
 
-    QObject::connect(&worker, &Worker::updateSpectrumPTE,
-                     [&captured](const SpectrumText& s) { captured = parseSpectrumText(s); });
+    QObject::connect(&worker, &Worker::spectrumUpdated,
+                     [&captured](const SpectrumCounts& s) { captured = toSpectrum(s); });
     QObject::connect(&worker, &Worker::errorOccurred,
                      [&](const QString& m) { errored = true; errorMessage = m; });
     g_planSets = g_planRows = g_planExactUpTo = -1;
@@ -495,6 +495,42 @@ static void testMacWilliams()
     }
     expectStore(QStringLiteral("[100,99]: числа длиннее 64 бит точны"), exact);
     expectStore(QStringLiteral("[100,99]: в 64 битах — насыщение"), clamped);
+}
+
+// Спектр строками «вес - число» и обратно: так он хранится в настройках
+// между запусками. Числа длиннее 64 бит обязаны пройти туда и обратно
+// точными.
+static void testSpectrumCounts()
+{
+    out << Qt::endl << QStringLiteral("Спектр: строки «вес - число» и обратно") << Qt::endl;
+
+    // [100,99]: C(100, 50) ≈ 10^29 в 64 бита не помещается.
+    const int n = 100;
+    std::vector<quint64> repetition(size_t(n) + 1, 0);
+    repetition[0] = repetition[size_t(n)] = 1;
+    const std::vector<mpz_class> exact = macWilliams(repetition.data(), n, 1);
+    const SpectrumCounts big = spectrumCounts(exact);
+
+    bool same = big.size() == n + 1;
+    for (int w = 0; same && w <= n; ++w)
+        same = big.decimal(w) == QString::fromStdString(exact[size_t(w)].get_str());
+    expectStore(QStringLiteral("числа длиннее 64 бит видны точными"), same);
+
+    const SpectrumCounts back = SpectrumCounts::fromLines(big.lines());
+    bool roundTrip = back.size() == n + 1;
+    for (int w = 0; roundTrip && w <= n; ++w)
+        roundTrip = back.decimal(w) == big.decimal(w) && back.counts.at(w) == big.counts.at(w);
+    expectStore(QStringLiteral("строки -> спектр -> строки без потерь"), roundTrip);
+
+    // Строки прежних версий и мусор: нечитаемое пропускается.
+    const SpectrumCounts old = SpectrumCounts::fromLines(QStringList{
+        QStringLiteral("0 - 1"), QStringLiteral("8 - 759"), QStringLiteral("мусор"),
+        QStringLiteral("12 - 2576"), QStringLiteral("13 - abc"), QStringLiteral("x - 5") });
+    expectStore(QStringLiteral("строки прежних версий читаются, мусор пропускается"),
+                old.size() == 13 && old.counts.at(0) == 1 && old.counts.at(8) == 759
+                && old.counts.at(12) == 2576 && old.exact.isEmpty()
+                && old.lines() == QStringList({ QStringLiteral("0 - 1"), QStringLiteral("8 - 759"),
+                                                QStringLiteral("12 - 2576") }));
 }
 
 // ---------------------------------------------------- чекпоинты
@@ -1839,8 +1875,8 @@ static int updateRate(const QString& which, int intervalMs, int rows)
     // момент отправки, без очереди событий.
     QVector<double> stamps;
     const auto started = std::chrono::steady_clock::now();
-    QObject::connect(&worker, &Worker::updateSpectrumPTE,
-                     [&stamps, started](const SpectrumText&) {
+    QObject::connect(&worker, &Worker::spectrumUpdated,
+                     [&stamps, started](const SpectrumCounts&) {
         stamps.append(std::chrono::duration<double, std::milli>(
                           std::chrono::steady_clock::now() - started).count());
     });
@@ -2235,8 +2271,8 @@ static void testProbeLeavesNoTrace()
 
     int    spectraSent = 0;
     double measured    = -1.0;
-    QObject::connect(&worker, &Worker::updateSpectrumPTE,
-                     [&spectraSent](const SpectrumText&) { ++spectraSent; });
+    QObject::connect(&worker, &Worker::spectrumUpdated,
+                     [&spectraSent](const SpectrumCounts&) { ++spectraSent; });
     QObject::connect(&worker, &Worker::updateRateMeasured,
                      [&measured](double perSecond) { measured = perSecond; });
     // В приложении пробу останавливает таймер интерфейса. Здесь цикла событий
@@ -3852,6 +3888,7 @@ int main(int argc, char* argv[])
     testDualCode(QStringLiteral("Хэмминг (7,4)"), Reference::hamming7_4());
     testDualCode(QStringLiteral("rnd(16,40)"), Reference::randomMatrix(16, 40, 24));
     testMacWilliams();
+    testSpectrumCounts();
 
     testAxisLabelStep();
     testUpdateIntervals();

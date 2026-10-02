@@ -22,5 +22,6 @@ std::vector<mpz_class> macWilliams(const quint64* dualSpectrum, int length, int 
 // вложенному расчёту произведения нужны лишь лёгкие веса, а они малы.
 QVector<quint64> saturatedCounts(const std::vector<mpz_class>& spectrum);
 
-// Строки «вес - число» для ненулевых весов, числа точные.
-SpectrumText spectrumText(const std::vector<mpz_class>& spectrum);
+// Спектр для показа: числа, что помещаются в 64 бита, — в counts, длиннее —
+// ещё и точной десятичной строкой в exact.
+SpectrumCounts spectrumCounts(const std::vector<mpz_class>& spectrum);

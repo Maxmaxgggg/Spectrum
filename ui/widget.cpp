@@ -188,16 +188,12 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
 
     // Спектр показывается сырым — ровно так же, как во время расчёта: у
     // дуального кода преобразование Мак-Вильямс делается только в конце.
-    SpectrumFloat plot;
-    SpectrumText  text;
-    for (int w = 0; w < record.state.spectrum.size(); ++w) {
-        const quint64 value = shownUpTo >= 0 && w > shownUpTo ? 0 : record.state.spectrum.at(w);
-        plot.append(float(value));
-        if (value != 0)
-            text.append(QString::number(w) + " - " + QString::number(value));
-    }
-    handleUpdateSpectrumPlot(plot);
-    handleUpdateSpectrumPTE(text);
+    SpectrumCounts spectrum;
+    spectrum.counts = record.state.spectrum;
+    if (shownUpTo >= 0)
+        for (int w = shownUpTo + 1; w < spectrum.size(); ++w)
+            spectrum.counts[w] = 0;
+    handleSpectrum(spectrum);
 
     const double total = totalOperations(record, matrix.size());
     const int percent = total > 0.0 ? int(100.0 * double(record.state.doneOps) / total) : 0;
@@ -233,39 +229,38 @@ void MainWindow::updateExecuteButton()
     }
 }
 
-// Спектр выводится так же, как его присылает воркер: строками «вес - число».
+void MainWindow::handleSpectrum(const SpectrumCounts& spectrum)
+{
+    lastSpectrum = spectrum;
+    showSpectrumText();
+    spectrumPlot->setSpectrum(spectrum.plotValues());
+}
+
+// Спектр строками «вес - число» для ненулевых весов.
 //
 // Веса, которых не заказывали, сюда не приходят — воркер режет спектр по
 // заказанному весу сам, и помечать на экране нечего.
-void MainWindow::setSpectrumRows(const SpectrumText& lines)
+void MainWindow::showSpectrumText()
 {
-    lastSpectrum = lines;
-
     // Позиция прокрутки сохраняется: спектр обновляется раз в секунду, и без
     // этого список дёргался бы в начало на каждом обновлении.
     QScrollBar* const bar = ui->spectrumPTE->verticalScrollBar();
     const int scroll = bar->value();
 
     // Числа — с разбивкой по три цифры; копируются они без неё
-    // (SpectrumTextEdit), в lastSpectrum лежат сырые строки.
-    SpectrumText shown;
-    shown.reserve(lines.size());
-    for (const QString& raw : lines) {
-        const QString weightText = raw.section(QStringLiteral(" - "), 0, 0);
-        const QString countText  = raw.section(QStringLiteral(" - "), 1);
-        QString line = countText.isEmpty()
-            ? raw
-            : weightText + QStringLiteral(" - ") + SpectrumTextEdit::grouped(countText);
+    // (SpectrumTextEdit).
+    QStringList shown;
+    for (int w = 0; w < lastSpectrum.size(); ++w) {
+        if (lastSpectrum.counts.at(w) == 0)
+            continue;
+        QString line = QString::number(w) + QStringLiteral(" - ")
+                     + SpectrumTextEdit::grouped(lastSpectrum.decimal(w));
         // Случайный поиск: у весов, где по словам, пойманным по одному разу,
         // видно недобор, дописывается оценка — сколько ещё не найдено.
-        if (!unseenByWeight.isEmpty()) {
-            const int weight = weightText.toInt();
-            if (weight >= 0 && weight < unseenByWeight.size()
-                && unseenByWeight.at(weight) >= 0.5f)
-                line += tr("   (осталось ≈%1)")
-                            .arg(SpectrumTextEdit::grouped(
-                                QString::number(qRound64(double(unseenByWeight.at(weight))))));
-        }
+        if (w < unseenByWeight.size() && unseenByWeight.at(w) >= 0.5f)
+            line += tr("   (осталось ≈%1)")
+                        .arg(SpectrumTextEdit::grouped(
+                            QString::number(qRound64(double(unseenByWeight.at(w))))));
         shown.append(line);
     }
 
@@ -409,8 +404,7 @@ void MainWindow::setWorker()
     workerPtr->moveToThread(workerThreadPtr);
 
     connect( workerPtr,       &Worker::updateInfoPBR,                  this,      &MainWindow::handleUpdateInfoPBR,                  Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::updateSpectrumPlot,             this,      &MainWindow::handleUpdateSpectrumPlot,             Qt::QueuedConnection );
-    connect( workerPtr,       &Worker::updateSpectrumPTE,              this,      &MainWindow::handleUpdateSpectrumPTE,              Qt::QueuedConnection );
+    connect( workerPtr,       &Worker::spectrumUpdated,                this,      &MainWindow::handleSpectrum,                       Qt::QueuedConnection );
     connect( workerPtr,       &Worker::updateRemainingMinutes,         this,      &MainWindow::handleUpdateRemainingMinutes,         Qt::QueuedConnection );
     connect( workerPtr,       &Worker::errorOccurred,                  this,      &MainWindow::handleError,                          Qt::QueuedConnection );
     connect( workerPtr,       &Worker::finished,                       this,      &MainWindow::handleFinished,                       Qt::QueuedConnection );
@@ -690,15 +684,6 @@ void MainWindow::sendSettingsToWorker()
     MainWindow::sendSettingsToWorker(settings.toJson());
 }
 
-void MainWindow::handleUpdateSpectrumPlot(const SpectrumFloat spectrum)
-{
-    spectrumPlot->setSpectrum(spectrum);
-}
-
-void MainWindow::handleUpdateSpectrumPTE( const SpectrumText spectrum )
-{
-    setSpectrumRows(spectrum);
-}
 // Сетку показываем: иначе при включённом автоподборе непонятно, на чём
 // программа в итоге считает и почему время отличается от прошлого запуска.
 void MainWindow::handleGridTuned(int blocks, int threads)
@@ -718,7 +703,7 @@ void MainWindow::handleSearchEstimate(int weight, quint64 trialsDone, quint64 tr
 {
     Q_UNUSED(weight); Q_UNUSED(trialsDone); Q_UNUSED(trialsTotal); Q_UNUSED(missProbability);
     this->unseenByWeight = unseenByWeight;
-    setSpectrumRows(lastSpectrum);
+    showSpectrumText();
 }
 
 void MainWindow::handleProductPlan(const QString& text, int exactUpToWeight)
@@ -894,7 +879,7 @@ void MainWindow::saveSettings()
     s.setValue(SettingsKeys::WINDOW_STATE,    this->saveState(Constants::LAYOUT_VERSION));
     s.setValue(SettingsKeys::CODE_MATRIX,     ui->matrixPTE->toPlainText()   );
     s.setValue(SettingsKeys::CODE_MATRIX2,    matrix2PTE->toPlainText()      );
-    s.setValue(SettingsKeys::SPECTRUM_TEXT,   lastSpectrum.join(QLatin1Char('\n')) );
+    s.setValue(SettingsKeys::SPECTRUM_TEXT,   lastSpectrum.lines().join(QLatin1Char('\n')) );
     s.setValue(SettingsKeys::WIDGET_GEOMETRY, this->saveGeometry()           );
     QVariantList values;
     for (double v : spectrumPlot->values())
@@ -912,8 +897,10 @@ void MainWindow::loadSettings()
     // Номер раскладки: при изменении набора панелей restoreState вернёт false
     // и останется та, что собрана по умолчанию, а не каша от прошлой версии.
     restoreState(s.value(SettingsKeys::WINDOW_STATE).toByteArray(), Constants::LAYOUT_VERSION);
-    setSpectrumRows( s.value(SettingsKeys::SPECTRUM_TEXT).toString()
-                          .split(QLatin1Char('\n'), Qt::SkipEmptyParts) );
+    // Спектр хранится строками «вес - число» — как и в прежних версиях.
+    lastSpectrum = SpectrumCounts::fromLines(s.value(SettingsKeys::SPECTRUM_TEXT).toString()
+                                                 .split(QLatin1Char('\n'), Qt::SkipEmptyParts));
+    showSpectrumText();
     ui->matrixPTE->setPlainText(              s.value(SettingsKeys::CODE_MATRIX                    ).toString()          );
     matrix2PTE->setPlainText(                 s.value(SettingsKeys::CODE_MATRIX2                   ).toString()          );
     if (s.contains(SettingsKeys::SPECTRUM_VALUES)) {
