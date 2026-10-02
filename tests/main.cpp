@@ -3622,7 +3622,10 @@ int main(int argc, char* argv[])
             CUDA_CALL(cudaDeviceSynchronize());
             const double us = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() / trials * 1e6;
             out << QStringLiteral("  p=%1: %2 мкс на попытку").arg(p).arg(us, 0, 'f', 1) << Qt::endl;
-            if (p == 0) {   // PROFILE: такты по фазам столбца у нити 0 блока 0
+#ifdef LEON_PROFILE
+            // Такты по фазам у нити 0 блока 0 — их пишет ядро, собранное с
+            // LEON_PROFILE (см. leonkernel.cu); без него в буфере пусто.
+            if (p == 0) {
                 std::vector<quint64> prof(7, 0);
                 CUDA_CALL(cudaMemcpy(prof.data(), d_out.get(), 7 * sizeof(quint64), cudaMemcpyDeviceToHost));
                 const double cols = double(std::max<quint64>(1, prof[6]));
@@ -3635,6 +3638,7 @@ int main(int argc, char* argv[])
                            .arg(prof[0] / cols, 0, 'f', 0).arg(prof[1] / cols, 0, 'f', 0).arg(prof[2] / cols, 0, 'f', 0)
                            .arg(prof[3] / cols, 0, 'f', 0).arg(prof[4] / cols, 0, 'f', 0).arg(prof[5] / cols, 0, 'f', 0) << Qt::endl;
             }
+#endif
         }
         out.flush();
         return 0;

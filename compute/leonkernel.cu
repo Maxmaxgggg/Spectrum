@@ -7,6 +7,18 @@
 #include <stdexcept>
 #include <string>
 
+// Замер тактов по фазам Гаусса и выбор режима Гаусса переменной окружения
+// LEON_GAUSS — только для --gpu-gauss-bench. В обычной сборке их нет: лишние
+// счётчики занимают регистры, которых ядру и так в обрез (__launch_bounds__),
+// замер пишется в буфер выложенных слов, а переменная окружения тихо меняла
+// бы алгоритм у пользователя. Включается определением LEON_PROFILE в обоих
+// проектах — основном (CUDA C/C++ → Defines) и тестовом.
+#ifdef LEON_PROFILE
+    #define LEON_PROF(...) __VA_ARGS__
+#else
+    #define LEON_PROF(...)
+#endif
+
 namespace {
 
 // Заготовленные варианты числа слов в строке — до MAX_BLOCKWORDS, что в
@@ -292,11 +304,10 @@ __global__ void __launch_bounds__(LEON_THREADS, WORDS <= 8 ? 4 : 2) leonTrialsKe
         }
         __syncthreads();
     }
-    long long gprof[6] = { 0, 0, 0, 0, 0, 0 };   // PROFILE
-    int groups = 0;
+    LEON_PROF(long long gprof[6] = { 0, 0, 0, 0, 0, 0 }; int groups = 0;)
     for (int idx = 0; S > 1 && idx < n && found < k; idx += S) {
         const int width = min(S, n - idx);
-        long long g0 = clock64(); ++groups;   // PROFILE
+        LEON_PROF(long long g0 = clock64(); ++groups;)
 
         // Ключи своих строк: биты на столбцах группы, младший — первый столбец.
         for (int r = tid; r < k; r += B) {
@@ -307,7 +318,7 @@ __global__ void __launch_bounds__(LEON_THREADS, WORDS <= 8 ? 4 : 2) leonTrialsKe
             key[r] = uint8_t(x);
         }
 
-        long long g1 = clock64(); gprof[0] += g1 - g0;   // PROFILE keys
+        LEON_PROF(long long g1 = clock64(); gprof[0] += g1 - g0;)   // ключи
         // Опоры группы: по столбцу — незанятая строка с битом j, первая по
         // номеру; её ключ вычитается из ключей прочих строк с битом j.
         int s = 0;
@@ -367,7 +378,7 @@ __global__ void __launch_bounds__(LEON_THREADS, WORDS <= 8 ? 4 : 2) leonTrialsKe
             __syncthreads();
         }
         found += s;
-        long long g2 = clock64(); gprof[1] += g2 - g1;   // PROFILE search
+        LEON_PROF(long long g2 = clock64(); gprof[1] += g2 - g1;)   // поиск опор
         if (s == 0)
             continue;
         if (tid < s) { colPivot[s_pivotCol[tid]] = 1; rowOf[found - s + tid] = uint16_t(s_pivotRow[tid]); }
@@ -431,7 +442,7 @@ __global__ void __launch_bounds__(LEON_THREADS, WORDS <= 8 ? 4 : 2) leonTrialsKe
             }
             __syncthreads();
         }
-        long long g3 = clock64(); gprof[2] += g3 - g2;   // PROFILE phase B
+        LEON_PROF(long long g3 = clock64(); gprof[2] += g3 - g2;)   // фаза B
         // Исключение: каждая своя строка, кроме опор группы, складывается с
         // записью таблицы по своим битам на опорных столбцах — или прямо с
         // приведёнными опорами по этим битам, если таблицы нет.
@@ -470,13 +481,17 @@ __global__ void __launch_bounds__(LEON_THREADS, WORDS <= 8 ? 4 : 2) leonTrialsKe
             for (int w = 0; w < WORDS; ++w) row[w] = acc[w];
         }
         __syncthreads();
-        long long g4 = clock64(); gprof[3] += g4 - g3;   // PROFILE phase C
+        LEON_PROF(long long g4 = clock64(); gprof[3] += g4 - g3;)   // исключение
     }
-    if (S > 1 && blockIdx.x == 0 && tid == 0 && P.maxWeight == 0) {   // PROFILE
+#ifdef LEON_PROFILE
+    // Такты по фазам у нити 0 блока 0 — в буфер выложенных слов: при
+    // maxWeight = 0 слов там всё равно нет.
+    if (S > 1 && blockIdx.x == 0 && tid == 0 && P.maxWeight == 0) {
         for (int i = 0; i < 4; ++i) P.outWords[i] = uint64_t(gprof[i]);
         P.outWords[4] = 0; P.outWords[5] = 0;
         P.outWords[6] = uint64_t(groups);
     }
+#endif
     // Ранг проверен хостом заранее; если что — попытка просто пустая.
     if (found < k)
         return;
@@ -925,12 +940,15 @@ GaussMode gaussModeFor(int rows, int cols, int words, int tier, int threadsPerBl
         mode.group = gaussGroupFor(rows, cols, words, true, threadsPerBlock);
         mode.table = mode.group > 1;
     }
-    if (const char* forced = getenv("LEON_GAUSS")) {   // EXPERIMENT: col | group | table
+#ifdef LEON_PROFILE
+    // Эксперимент: col | group | table — режим Гаусса в обход выбора выше.
+    if (const char* forced = getenv("LEON_GAUSS")) {
         const std::string f = forced;
         if (f == "col") { mode.group = 1; mode.table = false; }
         if (f == "group") { mode.group = 8; mode.table = false; mode.rowsPerLane = 32; }
         if (f == "table") { mode.group = tier == 0 ? mode.group : 6; mode.table = true; mode.rowsPerLane = 32; }
     }
+#endif
     return mode;
 }
 
