@@ -3,26 +3,22 @@
 
 #include <atomic>
 #include <chrono>
-#include <functional>
+#include <memory>
 #include <QThread>
 #include <cmath>
-#include <omp.h>
-#include <cuda_runtime.h>
 #include <qjsonobject.h>
 #include <qsettings.h>
 
+// Заголовок без CUDA, OpenMP и GMP: его видит интерфейс. Память на
+// видеокарте и всё, что касается перебора по чанкам, — в worker_p.h.
 #include "defines.h"
-#include "dualcode.h"
-#include "computeSpectrumKernel.cuh"
 #include "settings.h"
+#include "types.h"
 #include "progresstracker.h"
 #include "binomtable.h"
 #include "infosets.h"
 #include "leonsearch.h"
 #include "productcode.h"
-// Переопределяет CUDA_CALL из .cuh: там макрос звал abort(), здесь бросает.
-#include "cudabuffers.h"
-#include "spectrumring.h"
 #include "autosavestore.h"
 
 enum LoadMode {
@@ -84,41 +80,10 @@ struct CodeGeometry
     double                leonPairs         = 0.0;   // пар списков за попытку по профилю ключей
 };
 
-// Кусок слоя, уходящий в один запуск ядра или один параллельный проход.
-//
-// Слой r у Брауэра–Циммермана — это C(k, r) сочетаний на каждое множество,
-// подряд: сначала все сочетания первого, потом второго и так далее. Номер в
-// слое (chunkOffset) сквозной, поэтому чекпоинты устроены так же, как в
-// обычном расчёте. Кусок никогда не пересекает границу множества: ядру
-// нужна одна матрица и один номер множества на запуск. У кода Грея слой
-// один и множество одно — кусок задаёт номера масок.
-struct LayerSlice
-{
-    MatrixSlot slot;
-    quint64    offset = 0;   // номер первого сочетания внутри своего множества
-    quint64    size   = 0;
-};
-
-// Что перебирать и как — для Worker::runChunks. Общий цикл ведёт слои и
-// чанки, паузу и отмену, ход расчёта, снимки спектра и чекпоинты; путь
-// перебора задаёт только размеры и перебор одного чанка.
-struct ChunkPlan
-{
-    // Слои по числу складываемых строк: простой XOR и Брауэр–Циммерман. У
-    // кода Грея (и дуального расчёта) слой один — все 2^k масок подряд.
-    bool    layered     = true;
-    quint64 lastLayer   = 0;
-    quint64 totalOps    = 0;
-    quint64 chunkTarget = 0;
-    // Сочетаний в слое на одно множество.
-    std::function<quint64(quint64 layer)> layerSize;
-    // Перебор чанка. false — прерван отменой: результат чанка отброшен
-    // целиком и не попадает ни в спектр, ни в чекпоинт.
-    std::function<bool(quint64 layer, const LayerSlice& slice)> run;
-    // Поток видеокарты, в который идут ядра; nullptr — расчёт на процессоре,
-    // и спектр уже лежит в h_spectrum.
-    cudaStream_t stream = nullptr;
-};
+// Внутренности для собственных .cpp Worker — см. worker_p.h.
+struct LayerSlice;
+struct ChunkPlan;
+struct WorkerBuffers;
 
 Q_DECLARE_METATYPE(LoadMode)
 class Worker : public QObject
@@ -296,17 +261,17 @@ private:
     // Отправить в интерфейс спектр, лежащий по указателю: снимки для показа
     // берутся из кольца, а не из h_spectrum.
     void updateSpectrumFrom(const quint64* spectrum, int numOfCols);
-    // Спектр по Мак-Вильямс — точными большими целыми.
-    void updateSpectrumExact(const std::vector<mpz_class>& spectrum);
+    // Отправить спектр в окно; при замере потолка — только сосчитать.
+    void publishSpectrum(const SpectrumCounts& shown);
 
 
     /* Функции для работы с чекпоинтами */
     // finished — расчёт дошёл до конца. Такая запись не удаляется: по ней
     // потом можно досчитать спектр до большего числа строк, а не с нуля.
     void    makeCheckpoint(int numOfCols, bool finished = false);
-    // Чекпоинт по ходу перебора. gpuStream — поток, после которого спектр
-    // забирается с видеокарты; nullptr — CPU, спектр уже в h_spectrum.
-    void    saveCheckpoint(cudaStream_t gpuStream, int numOfCols,
+    // Чекпоинт по ходу перебора. На видеокарте спектр сначала забирается
+    // после потока ядер (plan.stream), на процессоре он уже в h_spectrum.
+    void    saveCheckpoint(const ChunkPlan& plan, int numOfCols,
                            quint64 rOffset, quint64 chunkOffset);
     // Останавливает расчёт, если задан порог из setCheckpointOpsPolicy.
     void    stopIfOpsLimitReached();
@@ -368,26 +333,17 @@ private:
     Leon::WindowPolicy          windowPolicy;
     int                         productBruteForceMaxK = Product::kBruteForceMaxK;
 
-    // Все ресурсы владеющие: освобождаются вместе с объектом, каким бы путём
-    // ни завершился расчёт — успехом, отменой или исключением.
-    CudaStream           stream;
-
-    HostBuffer<quint64>  h_spectrum;
-    // Снимки спектра для показа по ходу расчёта. h_spectrum этим не занят:
-    // туда пишет чекпоинт и итоговая копия, и они должны быть точными.
-    SpectrumRing         spectrumRing;
+    // Память расчёта на хосте и на видеокарте, поток ядер и кольцо снимков
+    // (worker_p.h). Владеющая: освобождается вместе с объектом, каким бы
+    // путём ни завершился расчёт — успехом, отменой или исключением.
+    std::unique_ptr<WorkerBuffers> buffers;
 
     // Идёт замер потолка: спектры не отправляются, а считаются, и ход расчёта
     // в интерфейс не идёт — прогрессбар не должен дёргаться от пробы.
     bool                 probeMode  = false;
     quint64              probeSends = 0;
-    HostBuffer<quint64>  h_matrix;
     BinomTable           binomTable;
     AutosaveStore        autosave;
-
-    DeviceBuffer<quint64> d_spectrum;
-    DeviceBuffer<quint64> d_matrix;
-    DeviceBuffer<quint64> d_binomTable;
 
     // Тело расчёта. Отделено от computeSpectrum(), чтобы та могла обернуть
     // его в try/catch и превратить исключение в сигнал об ошибке.

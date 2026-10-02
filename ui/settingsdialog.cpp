@@ -2,6 +2,7 @@
 #include "ui_settingsdialog.h"
 #include "updateintervals.h"
 #include "leonsearch.h"
+#include "gpuinfo.h"
 
 #include <algorithm>
 
@@ -485,12 +486,7 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
 // ------------------------------------------------------------ вычислитель
 
 bool SettingsDialog::isGpuAvailable() {
-    int deviceCount = 0;
-    cudaError_t err = cudaGetDeviceCount(&deviceCount);
-    if (err != cudaSuccess)
-        return false;
-    else
-        return deviceCount > 0;
+    return queryGpu().available;
 }
 // Подгоняет пределы под конкретную видеокарту и объясняет их пользователем.
 //
@@ -499,16 +495,16 @@ bool SettingsDialog::isGpuAvailable() {
 // значение через интерфейс просто нельзя было выбрать.
 void SettingsDialog::applyDeviceLimits()
 {
-    cudaDeviceProp prop{};
-    if (cudaGetDeviceProperties(&prop, 0) != cudaSuccess)
+    const GpuInfo gpu = queryGpu();
+    if (!gpu.available)
         return;
 
-    const int sm = prop.multiProcessorCount;
+    const int sm = gpu.multiprocessors;
 
     // С запасом: смысл имеет несколько блоков на мультипроцессор, но верхнюю
     // границу лучше не занижать — оптимум зависит от матрицы.
     ui->blocksGpuSPB->setMaximum(qMax(200, sm * 32));
-    ui->threadsGpuSPB->setMaximum(prop.maxThreadsPerBlock);
+    ui->threadsGpuSPB->setMaximum(gpu.maxThreadsPerBlock);
 
     ui->blocksGpuLBL->setToolTip(
         tr("У видеокарты %1 мультипроцессоров.\n"
@@ -519,7 +515,7 @@ void SettingsDialog::applyDeviceLimits()
         tr("Предел устройства — %1 нитей в блоке.\n"
            "Для широких кодов доступно меньше: ядру не хватает регистров,\n"
            "и запуск будет отклонён с понятным сообщением.")
-            .arg(prop.maxThreadsPerBlock));
+            .arg(gpu.maxThreadsPerBlock));
 }
 
 // Поля числа блоков и нитей нужны только видеокарте, а при включённом

@@ -65,6 +65,9 @@
     <ClCompile Include="compute\worker_product.cpp">
       <Filter>compute</Filter>
     </ClCompile>
+    <ClCompile Include="compute\gpuinfo.cpp">
+      <Filter>compute</Filter>
+    </ClCompile>
     <ClCompile Include="compute\dualcode.cpp">
       <Filter>compute</Filter>
     </ClCompile>
@@ -89,6 +92,12 @@
       <Filter>compute</Filter>
     </ClInclude>
     <ClInclude Include="compute\combinations.h">
+      <Filter>compute</Filter>
+    </ClInclude>
+    <ClInclude Include="compute\gpuinfo.h">
+      <Filter>compute</Filter>
+    </ClInclude>
+    <ClInclude Include="compute\worker_p.h">
       <Filter>compute</Filter>
     </ClInclude>
     <ClInclude Include="helpers\workwithmatrix.h">

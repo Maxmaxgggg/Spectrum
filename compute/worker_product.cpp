@@ -1,7 +1,7 @@
 // Код-произведение: спектры и списки лёгких слов компонент (вложенным
 // Worker), свёртка по рангам — шаг расчёта Worker.
 
-#include "worker.h"
+#include "worker_p.h"
 
 #include <algorithm>
 #include <cmath>
@@ -303,10 +303,10 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     }
 
     productExactUpTo = exactFor(ranksDone);
-    h_spectrum.fillZero();
-    h_spectrum[0] = 1;
+    buffers->h_spectrum.fillZero();
+    buffers->h_spectrum[0] = 1;
     for (size_t w = 1; w < total.size() && int(w) <= productExactUpTo; ++w)
-        h_spectrum[w] = total[w];
+        buffers->h_spectrum[w] = total[w];
 
     if (productMissExponent > 0)
         notes.prepend(tr("компоненты %1 — стохастическим поиском, в-ть пропуска до 10^-%2")

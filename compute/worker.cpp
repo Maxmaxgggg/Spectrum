@@ -1,5 +1,6 @@
-#include "worker.h"
+#include "worker_p.h"
 #include "combinations.h"
+#include "dualcode.h"
 #include "gridtuner.h"
 #include "leonkernel.cuh"
 
@@ -12,6 +13,7 @@ using namespace std::chrono;
 
 Worker::Worker(QObject *parent)
     : QObject(parent)
+    , buffers(new WorkerBuffers)
 {
     // Спектр уходит в окно, а настройки приходят из него через очередь
     // событий; вызов по имени (invokeMethod) ищет тип тоже по имени.
@@ -121,12 +123,12 @@ void Worker::reportProgressBar()
 // Ошибка CUDA здесь — исключение, как и везде: раньше чекпоинт сообщал о ней
 // сигналом и возвращал false, путь перебора выходил, и расчёт рапортовал об
 // успехе с недосчитанным спектром.
-void Worker::saveCheckpoint(cudaStream_t gpuStream, int numOfCols, quint64 rOffset, quint64 chunkOffset)
+void Worker::saveCheckpoint(const ChunkPlan& plan, int numOfCols, quint64 rOffset, quint64 chunkOffset)
 {
     progress.markCheckpoint();
-    if (gpuStream) {
-        CUDA_CALL(cudaStreamSynchronize(gpuStream));
-        CUDA_CALL(cudaMemcpy(h_spectrum.get(), d_spectrum.get(), size_t(numOfCols + 1) * sizeof(quint64),
+    if (plan.stream) {
+        CUDA_CALL(cudaStreamSynchronize(plan.stream));
+        CUDA_CALL(cudaMemcpy(buffers->h_spectrum.get(), buffers->d_spectrum.get(), size_t(numOfCols + 1) * sizeof(quint64),
                              cudaMemcpyDeviceToHost));
     }
     runState.rOffset     = rOffset;
@@ -181,9 +183,9 @@ void Worker::runChunks(const CodeGeometry& g, const ChunkPlan& plan)
                 // Снимок едет с видеокарты через кольцо. Метка двигается, только
                 // когда копия реально встала в очередь: иначе при занятом кольце
                 // следующая попытка откладывалась бы на целый интервал.
-                if (due.spectrum && spectrumRing.enqueue(d_spectrum.get(), plan.stream))
+                if (due.spectrum && buffers->spectrumRing.enqueue(buffers->d_spectrum.get(), plan.stream))
                     progress.markSpectrum();
-                if (const quint64* snapshot = spectrumRing.takeReady())
+                if (const quint64* snapshot = buffers->spectrumRing.takeReady())
                     updateSpectrumFrom(snapshot, cols);
             }
             else if (due.spectrum) {
@@ -193,7 +195,7 @@ void Worker::runChunks(const CodeGeometry& g, const ChunkPlan& plan)
             if (due.bar)
                 reportProgressBar();
             if (due.checkpoint)
-                saveCheckpoint(plan.stream, cols, r, offset);
+                saveCheckpoint(plan, cols, r, offset);
             if (cancelled.load())
                 return;
         }
@@ -228,7 +230,7 @@ bool Worker::waitWhilePaused()
 
 void Worker::updateSpectrum(int numOfCols)
 {
-    updateSpectrumFrom(h_spectrum.get(), numOfCols);
+    updateSpectrumFrom(buffers->h_spectrum.get(), numOfCols);
 }
 
 void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
@@ -249,18 +251,15 @@ void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
     shown.counts.resize(numOfCols + 1);
     for (int w = 0; w <= shownUpTo; ++w)
         shown.counts[w] = spectrum[w];
-    if (!shown.isEmpty())
-        emit spectrumUpdated(shown);
+    publishSpectrum(shown);
 }
 
-// Спектр по Мак-Вильямс: числа бывают длиннее 64 бит.
-void Worker::updateSpectrumExact(const std::vector<mpz_class>& spectrum)
+void Worker::publishSpectrum(const SpectrumCounts& shown)
 {
     if (probeMode) {
         ++probeSends;
         return;
     }
-    const SpectrumCounts shown = spectrumCounts(spectrum);
     if (!shown.isEmpty())
         emit spectrumUpdated(shown);
 }
@@ -269,7 +268,7 @@ void Worker::makeCheckpoint(int numOfCols, bool finished)
 {
     runState.spectrum.resize(numOfCols + 1);
     for (int i = 0; i < numOfCols + 1; i++)
-        runState.spectrum[i] = h_spectrum[i];
+        runState.spectrum[i] = buffers->h_spectrum[i];
 
     AutosaveRecord record;
     record.algorithm = settings.algorithmType;
@@ -521,18 +520,18 @@ void Worker::prepareBuffers(const CodeGeometry& g)
         /* ДОПИСАТЬ КОПИРОВАНИЕ МАТРИЦЫ В ПАМЯТЬ ДЛЯ КОРОТКИХ КОДОВ */
         if (!g.isLongCode)
             throw std::invalid_argument("матрица слишком большая для короткого кода");
-        d_matrix.allocate(g.matrixWords);
+        buffers->d_matrix.allocate(g.matrixWords);
     }
 
     // calloc внутри, поэтому матрица уже обнулена
-    h_matrix.allocate(g.matrixWords, HostBuffer<quint64>::Kind::Paged);
+    buffers->h_matrix.allocate(g.matrixWords, HostBuffer<quint64>::Kind::Paged);
     if (!g.setRows.empty()) {
         // Брауэр–Циммерман: матрицы множеств уже упакованы планом.
-        std::copy(g.setRows.begin(), g.setRows.end(), h_matrix.get());
+        std::copy(g.setRows.begin(), g.setRows.end(), buffers->h_matrix.get());
     }
     else {
         for (quint64 i = 0; i < g.numOfRows; ++i) {
-            quint64* rowData = h_matrix.get() + i * g.wordsPerRow;
+            quint64* rowData = buffers->h_matrix.get() + i * g.wordsPerRow;
             const QString& row = g.matrix[int(i)];
             for (quint64 j = 0; j < g.numOfCols; ++j)
                 if (row.at(int(j)) == QLatin1Char('1'))
@@ -552,49 +551,49 @@ void Worker::prepareBuffers(const CodeGeometry& g)
     // Спектр на хосте. Для GPU нужна pinned-память — иначе не работает
     // асинхронное копирование; для CPU обычная, cudaMallocHost без видеокарты
     // недоступен.
-    h_spectrum.allocate(g.spectrumSize, g.useGpu ? HostBuffer<quint64>::Kind::Pinned
+    buffers->h_spectrum.allocate(g.spectrumSize, g.useGpu ? HostBuffer<quint64>::Kind::Pinned
                                                  : HostBuffer<quint64>::Kind::Paged);
     // Кольцо снимков нужно только видеокарте: на CPU спектр и так лежит в
     // h_spectrum, копировать его неоткуда.
     if (g.useGpu)
-        spectrumRing.allocate(g.spectrumSize);
+        buffers->spectrumRing.allocate(g.spectrumSize);
     else
-        spectrumRing.reset();
+        buffers->spectrumRing.reset();
     if (exportSpectrum) {
         // Продолжаем с чекпоинта — переносим накопленный спектр
         for (quint64 i = 0; i < g.spectrumSize; ++i)
-            h_spectrum[i] = runState.spectrum.at(int(i));
+            buffers->h_spectrum[i] = runState.spectrum.at(int(i));
     } else {
-        h_spectrum.fillZero();
+        buffers->h_spectrum.fillZero();
     }
 
     if (!g.useGpu)
         return;
 
     if (g.matrixInGlobalMem)
-        CUDA_CALL(cudaMemcpy(d_matrix.get(), h_matrix.get(),
+        CUDA_CALL(cudaMemcpy(buffers->d_matrix.get(), buffers->h_matrix.get(),
                              g.matrixWords * Constants::WORD_SIZE, cudaMemcpyHostToDevice));
     else
-        CUDA_CALL(copyMatrixToConstant(h_matrix.get(), g.matrixWords));
+        CUDA_CALL(copyMatrixToConstant(buffers->h_matrix.get(), g.matrixWords));
     if (g.setCount > 1)
         CUDA_CALL(copyMasksToConstant(g.setMasks.data(), g.setCount, int(g.wordsPerRow)));
 
-    d_spectrum.allocate(g.spectrumSize);
+    buffers->d_spectrum.allocate(g.spectrumSize);
     if (exportSpectrum)
-        CUDA_CALL(cudaMemcpy(d_spectrum.get(), h_spectrum.get(),
+        CUDA_CALL(cudaMemcpy(buffers->d_spectrum.get(), buffers->h_spectrum.get(),
                              g.spectrumSize * sizeof(quint64), cudaMemcpyHostToDevice));
     else
-        d_spectrum.fillZero();
+        buffers->d_spectrum.fillZero();
 
-    stream.create();
+    buffers->stream.create();
 
     // Ядро коротких кодов читает таблицу как binomTable[n * 64 + k]. BinomTable
     // хранит её плоско ровно с таким шагом, поэтому копируем как есть, без
     // промежуточного «уплощения».
     if (settings.layered() && !g.isLongCode) {
         Q_ASSERT(binomTable.stride() == Constants::MAX_SHORT_CODE_LENGTH + 1);
-        d_binomTable.allocate(Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES);
-        CUDA_CALL(cudaMemcpy(d_binomTable.get(), binomTable.data(),
+        buffers->d_binomTable.allocate(Constants::BINOM_TABLE_SIZE_FOR_SHORT_CODES);
+        CUDA_CALL(cudaMemcpy(buffers->d_binomTable.get(), binomTable.data(),
                              binomTable.bytes(), cudaMemcpyHostToDevice));
     }
 }
@@ -613,7 +612,7 @@ void Worker::tuneGrid(CodeGeometry& g)
     task.numOfCols   = int(g.numOfCols);
     task.numOfRows   = int(g.numOfRows);
     task.wordsPerRow = int(g.wordsPerRow);
-    task.binomTable  = d_binomTable.get();
+    task.binomTable  = buffers->d_binomTable.get();
     task.chunkSize   = g.chunkSize;
     task.minWorthSeconds = tuneThresholdSec;
     task.userGrid    = { g.blocksGpu, g.threadsGpu };
@@ -698,10 +697,10 @@ void Worker::tuneGrid(CodeGeometry& g)
 
         task.startPositions   = d_tuneSlots.get();
         task.filledStartMasks = slotCount;
-        task.matrixGlobal     = g.matrixInGlobalMem ? d_matrix.get() : nullptr;
+        task.matrixGlobal     = g.matrixInGlobalMem ? buffers->d_matrix.get() : nullptr;
     }
 
-    const LaunchGrid grid = tuneLaunchGrid(task, stream.get());
+    const LaunchGrid grid = tuneLaunchGrid(task, buffers->stream.get());
     if (!grid.isValid())
         return;   // подбор отказался — остаёмся на настройках
 
@@ -754,7 +753,7 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
     // забирать оттуда нечего, это затёрло бы найденное нулями.
     if (g.useGpu && settings.algorithmType != ComputationSettings::RandomInfoSets) {
         CUDA_CALL(cudaDeviceSynchronize());
-        CUDA_CALL(cudaMemcpy(h_spectrum.get(), d_spectrum.get(),
+        CUDA_CALL(cudaMemcpy(buffers->h_spectrum.get(), buffers->d_spectrum.get(),
                              g.spectrumSize * sizeof(quint64), cudaMemcpyDeviceToHost));
     }
 
@@ -802,7 +801,7 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
     initializeRunState(LoadMode::Reset);
 
     if (dual)
-        updateSpectrumExact(original);
+        publishSpectrum(spectrumCounts(original));
     else
         updateSpectrum(int(g.numOfCols));
 
@@ -848,8 +847,8 @@ void Worker::computeSpectrumImpl()
     // Код произведения не перебирает собственную матрицу: ни буферов, ни
     // сетки ему не нужно, только спектр на хосте.
     if (settings.algorithmType == ComputationSettings::ProductCode) {
-        h_spectrum.allocate(g.spectrumSize, HostBuffer<quint64>::Kind::Paged);
-        h_spectrum.fillZero();
+        buffers->h_spectrum.allocate(g.spectrumSize, HostBuffer<quint64>::Kind::Paged);
+        buffers->h_spectrum.fillZero();
         computeSpectrumProduct(g);
         finishComputation(g, startedAt);
         return;
@@ -870,15 +869,15 @@ void Worker::computeSpectrumImpl()
 // пропущенный здесь вызов не приводит к утечке: их освободит деструктор.
 void Worker::releaseResources()
 {
-    h_spectrum.reset();
-    h_matrix.reset();
+    buffers->h_spectrum.reset();
+    buffers->h_matrix.reset();
     binomTable = BinomTable();
 
-    d_spectrum.reset();
-    d_matrix.reset();
-    d_binomTable.reset();
+    buffers->d_spectrum.reset();
+    buffers->d_matrix.reset();
+    buffers->d_binomTable.reset();
 
-    stream.reset();
+    buffers->stream.reset();
 }
 
 

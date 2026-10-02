@@ -8,7 +8,6 @@
 #include <QJsonObject>
 #include <qjsondocument.h>
 #include <qbuttongroup.h>
-#include <cuda_runtime.h>
 
 namespace Ui { class SettingsDialog; }
 enum class Length { Short, Long };

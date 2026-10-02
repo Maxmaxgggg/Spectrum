@@ -23,6 +23,7 @@
     <ClCompile Include="compute\worker_gpu.cpp" />
     <ClCompile Include="compute\worker_leon.cpp" />
     <ClCompile Include="compute\worker_product.cpp" />
+    <ClCompile Include="compute\gpuinfo.cpp" />
     <ClCompile Include="helpers\workwithmatrix.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="qcustomplot.cpp" />
@@ -58,6 +59,8 @@
     <ClInclude Include="compute\mixing.h" />
     <ClInclude Include="compute\wordvariants.h" />
     <ClInclude Include="compute\combinations.h" />
+    <ClInclude Include="compute\gpuinfo.h" />
+    <ClInclude Include="compute\worker_p.h" />
     <ClInclude Include="defines.h" />
     <ClInclude Include="storage\autosavestore.h" />
     <ClInclude Include="ui\axisticks.h" />

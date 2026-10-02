@@ -6,7 +6,7 @@
 // попадает только целиком: прерванный отменой выбрасывается (см.
 // ChunkPlan::run).
 
-#include "worker.h"
+#include "worker_p.h"
 #include "bitops.h"
 #include "combinations.h"
 
@@ -108,7 +108,7 @@ bool Worker::cpuGrayChunk(const CodeGeometry& g, const LayerSlice& s)
             // Первая маска нити: XOR всех её строк
             quint64 mask = gray(startIdx);
             for (quint64 tmp = mask; tmp; tmp &= tmp - 1) {
-                const quint64* rowData = h_matrix.get() + Bits::lowestSetBit(tmp) * wordsPerRow;
+                const quint64* rowData = buffers->h_matrix.get() + Bits::lowestSetBit(tmp) * wordsPerRow;
                 for (quint64 b = 0; b < wordsPerRow; ++b)
                     localCodeword[b] ^= rowData[b];
             }
@@ -129,7 +129,7 @@ bool Worker::cpuGrayChunk(const CodeGeometry& g, const LayerSlice& s)
 
                 // Соседние коды Грея отличаются ровно одним битом
                 const quint64 next = gray(i);
-                const quint64* rowData = h_matrix.get() + Bits::lowestSetBit(mask ^ next) * wordsPerRow;
+                const quint64* rowData = buffers->h_matrix.get() + Bits::lowestSetBit(mask ^ next) * wordsPerRow;
                 for (quint64 b = 0; b < wordsPerRow; ++b)
                     localCodeword[b] ^= rowData[b];
                 mask = next;
@@ -156,7 +156,7 @@ bool Worker::cpuGrayChunk(const CodeGeometry& g, const LayerSlice& s)
     if (cancelled.load())
         return false;
     for (quint64 w = 0; w <= numOfCols; ++w)
-        h_spectrum[w] += chunkSpectrum[w];
+        buffers->h_spectrum[w] += chunkSpectrum[w];
     return true;
 }
 
@@ -204,7 +204,7 @@ bool Worker::cpuXorShortChunk(const CodeGeometry& g, quint64 r, const LayerSlice
                     const int p = Bits::lowestSetBit(bits);
                     bits &= (bits - 1);
                     const quint64* rowData =
-                        h_matrix.get() + (s.slot.rowBase + numOfRows - 1 - p) * wordsPerRow;
+                        buffers->h_matrix.get() + (s.slot.rowBase + numOfRows - 1 - p) * wordsPerRow;
                     for (quint64 b = 0; b < wordsPerRow; ++b)
                         localCodeword[b] ^= rowData[b];
                 }
@@ -241,7 +241,7 @@ bool Worker::cpuXorShortChunk(const CodeGeometry& g, quint64 r, const LayerSlice
     }
 
     for (quint64 w = 0; w <= numOfCols; ++w)
-        h_spectrum[w] += chunkSpectrum[w];
+        buffers->h_spectrum[w] += chunkSpectrum[w];
     return true;
 }
 
@@ -276,7 +276,7 @@ bool Worker::cpuXorLongChunk(const CodeGeometry& g, quint64 r, const LayerSlice&
         std::vector<quint64> codeword(size_t(wordsPerRow), 0ULL);
 
         auto rowOf = [&](int row) {
-            return h_matrix.get() + quint64(s.slot.rowBase + row) * wordsPerRow;
+            return buffers->h_matrix.get() + quint64(s.slot.rowBase + row) * wordsPerRow;
         };
         auto rebuild = [&]() {
             std::fill(codeword.begin(), codeword.end(), 0ULL);
@@ -354,6 +354,6 @@ bool Worker::cpuXorLongChunk(const CodeGeometry& g, quint64 r, const LayerSlice&
         return false;
     for (int t = 0; t < numThreads; ++t)
         for (quint64 w = 0; w <= numOfCols; ++w)
-            h_spectrum[w] += threadSpectrum[size_t(t)][w];
+            buffers->h_spectrum[w] += threadSpectrum[size_t(t)][w];
     return true;
 }

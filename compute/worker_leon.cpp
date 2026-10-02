@@ -1,7 +1,7 @@
 // Случайный поиск по информационным множествам (Леон, Штерн–Дюмер) на
 // процессоре и на видеокарте — шаг расчёта Worker.
 
-#include "worker.h"
+#include "worker_p.h"
 #include "leonkernel.cuh"
 
 #include <algorithm>
@@ -47,7 +47,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
         std::vector<int> order;
         Leon::shuffledColumns(cols, 0, order);
         InfoSets::InfoSet set;
-        if (!InfoSets::systematize(h_matrix.get(), rows, cols, words, order, nullptr, set))
+        if (!InfoSets::systematize(buffers->h_matrix.get(), rows, cols, words, order, nullptr, set))
             throw std::invalid_argument(
                 "строки матрицы зависимы: стохастическому поиску нужна матрица полного ранга");
     }
@@ -98,10 +98,10 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
 
     auto publish = [&](bool force) {
         const std::vector<quint64> found = table.countByWeight();
-        h_spectrum.fillZero();
-        h_spectrum[0] = 1;
+        buffers->h_spectrum.fillZero();
+        buffers->h_spectrum[0] = 1;
         for (size_t w = 1; w < found.size() && w < g.spectrumSize; ++w)
-            h_spectrum[w] = found[w];
+            buffers->h_spectrum[w] = found[w];
 
         const ProgressTracker::Due due = progress.due();
         if (due.estimate)
@@ -156,10 +156,10 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
             for (long long t = 0; t < (long long)count; ++t) {
                 auto visit = [&](const quint64* word, int weight) { table.add(word, weight); };
                 if (g.leonWindow > 0)
-                    Leon::trialStern(h_matrix.get(), rows, cols, words, depth, g.leonWindow, maxWeight,
+                    Leon::trialStern(buffers->h_matrix.get(), rows, cols, words, depth, g.leonWindow, maxWeight,
                                      launched + quint64(t), visit);
                 else
-                    Leon::trial(h_matrix.get(), rows, cols, words, depth, maxWeight,
+                    Leon::trial(buffers->h_matrix.get(), rows, cols, words, depth, maxWeight,
                                 launched + quint64(t), visit);
             }
 
@@ -213,7 +213,7 @@ void Worker::computeSpectrumLeon(const CodeGeometry& g)
 
     DeviceBuffer<quint64> d_mat;
     d_mat.allocate(size_t(rows) * words);
-    CUDA_CALL(cudaMemcpy(d_mat.get(), h_matrix.get(), size_t(rows) * words * sizeof(quint64),
+    CUDA_CALL(cudaMemcpy(d_mat.get(), buffers->h_matrix.get(), size_t(rows) * words * sizeof(quint64),
                          cudaMemcpyHostToDevice));
 
     struct Slot

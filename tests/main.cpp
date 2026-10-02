@@ -26,9 +26,13 @@
 #include <random>
 #include <thread>
 
-// worker.h тянет gmpxx.h, где есть std::numeric_limits<...>::min(). Его нужно
+// dualcode.h тянет gmpxx.h, где есть std::numeric_limits<...>::min(). Его нужно
 // разобрать до windows.h, иначе макросы min/max из windows.h ломают тело класса.
 #include "worker.h"
+#include "cudabuffers.h"
+#include "dualcode.h"
+
+#include <omp.h>
 #include "autosavestore.h"
 #include "reference.h"
 #include "ui/axisticks.h"
