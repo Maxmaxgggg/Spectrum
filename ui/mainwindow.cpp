@@ -364,7 +364,7 @@ void MainWindow::updateMatrixTabs()
 {
     if (!m_matrixTabBar)
         return;
-    const bool product = m_settings.algorithmType == ComputationSettings::ProductCode;
+    const bool product = m_settings.algorithm == ComputationSettings::ProductCode;
     m_matrixTabBar->setTabVisible(1, product);
     m_matrixTabBar->setVisible(product);
     if (!product) {
@@ -463,7 +463,7 @@ void MainWindow::connectSettingsDialog()
 
     connect( m_settingsDialog, &SettingsDialog::settingsChanged,
         this, [this]( const ComputationSettings& fromDialog ) {
-            const ComputationSettings::Algorithm before = m_settings.algorithmType;
+            const ComputationSettings::Algorithm before = m_settings.algorithm;
             m_settings = fromDialog;
             m_settings.matrix  = m_ui->matrixPTE->toStringList();
             m_settings.matrix2 = m_matrix2PTE->toStringList();
@@ -473,7 +473,7 @@ void MainWindow::connectSettingsDialog()
             // Поднятая запись — про свой алгоритм. Сменили алгоритм — кнопка
             // «Продолжить» больше не про неё: иначе расчёт стартовал бы как
             // продолжение и тащил бы за собой состояние прежнего показа.
-            if (m_runState == RunState::Loaded && m_settings.algorithmType != before) {
+            if (m_runState == RunState::Loaded && m_settings.algorithm != before) {
                 m_runState = RunState::Idle;
                 updateExecuteButton();
             }
@@ -483,8 +483,8 @@ void MainWindow::connectSettingsDialog()
             // самого конца не возвращается в свой цикл событий. Живые интервалы
             // передаются напрямую.
             if (m_worker && (m_runState == RunState::Running || m_runState == RunState::Paused))
-                m_worker->setLiveIntervals(m_settings.timeIntSet.updateSpectrumInterval,
-                                           m_settings.timeIntSet.saveSpectrumInterval);
+                m_worker->setLiveIntervals(m_settings.intervals.updateSpectrumInterval,
+                                           m_settings.intervals.saveSpectrumInterval);
         });
 }
 
@@ -522,13 +522,13 @@ QString MainWindow::matrixError() const
     };
 
     const QString first = check(m_ui->matrixPTE->toStringList(),
-                                m_settings.algorithmType == ComputationSettings::ProductCode
+                                m_settings.algorithm == ComputationSettings::ProductCode
                                     ? tr("Матрица 1") : tr("Матрица"));
     if (!first.isEmpty())
         return first;
     // Код произведения: компоненты проверяются каждая сама по себе, само
     // произведение в памяти не строится, и его размер ничем не ограничен.
-    if (m_settings.algorithmType == ComputationSettings::ProductCode)
+    if (m_settings.algorithm == ComputationSettings::ProductCode)
         return check(m_matrix2PTE->toStringList(), tr("Матрица 2 (вторая компонента)"));
     return QString();
 }
@@ -762,7 +762,7 @@ void MainWindow::updateMatrixTitles()
         for (const QString& row : rows) maxLen = qMax(maxLen, row.length());
         return QStringLiteral(" (%1,%2)").arg(maxLen).arg(rows.size());
     };
-    const bool product = m_settings.algorithmType == ComputationSettings::ProductCode;
+    const bool product = m_settings.algorithm == ComputationSettings::ProductCode;
     m_matrixDock->setWindowTitle(product ? tr("Матрицы")
                                        : tr("Матрица") + size(m_ui->matrixPTE->toStringList()));
     m_matrixTabBar->setTabText(0, tr("Матрица 1") + size(m_ui->matrixPTE->toStringList()));
@@ -835,9 +835,9 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 bool MainWindow::hasCheckpoint() const
 {
     AutosaveRecord record;
-    const Matrix key = m_settings.algorithmType == ComputationSettings::ProductCode
+    const Matrix key = m_settings.algorithm == ComputationSettings::ProductCode
                            ? m_settings.matrix + m_settings.matrix2 : m_settings.matrix;
-    if (!m_autosave.load(key, m_settings.algorithmType, record))
+    if (!m_autosave.load(key, m_settings.algorithm, record))
         return false;
 
     // Запись может оказаться непригодной: она ушла дальше, чем просят сейчас.

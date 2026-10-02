@@ -1,5 +1,4 @@
-#ifndef SETTINGSDIALOG_H
-#define SETTINGSDIALOG_H
+#pragma once
 
 #include <QDialog>
 #include "constants.h"
@@ -112,5 +111,3 @@ private:
 
     ComputationSettings m_settings;
 };
-
-#endif // SETTINGSDIALOG_H

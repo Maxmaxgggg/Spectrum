@@ -139,7 +139,7 @@ static ComputationSettings makeSettings(const RunConfig& cfg)
 {
     ComputationSettings s;
     s.matrix        = cfg.matrix;
-    s.algorithmType = cfg.algorithm;
+    s.algorithm = cfg.algorithm;
     s.enumType      = ComputationSettings::Full;
     s.maxRows       = cfg.maxRows > 0 ? cfg.maxRows : cfg.matrix.size();
     s.bzWeight      = cfg.bzWeight > 0 ? cfg.bzWeight : 8;
@@ -149,15 +149,15 @@ static ComputationSettings makeSettings(const RunConfig& cfg)
     s.productWeight = cfg.productWeight;
     s.productRank   = cfg.productRank;
     s.productAlgorithm = int(cfg.productAlgorithm);
-    s.compDev       = cfg.device;
-    s.compDevSet.threadsCpu = cfg.threadsCpu;
-    s.compDevSet.blocksGpu  = cfg.blocksGpu;
-    s.compDevSet.threadsGpu = cfg.threadsGpu;
+    s.device       = cfg.device;
+    s.deviceSettings.threadsCpu = cfg.threadsCpu;
+    s.deviceSettings.blocksGpu  = cfg.blocksGpu;
+    s.deviceSettings.threadsGpu = cfg.threadsGpu;
     s.autoTuneGrid          = cfg.autoTune;
     // Интервалы задраны так, чтобы за время теста чекпоинт не сработал:
     // сохранение состояния проверяется отдельными тестами.
-    s.timeIntSet.saveSpectrumInterval   = 100000;
-    s.timeIntSet.updateSpectrumInterval = 100000;
+    s.intervals.saveSpectrumInterval   = 100000;
+    s.intervals.updateSpectrumInterval = 100000;
     return s;
 }
 
@@ -1048,7 +1048,7 @@ static void testSettingsCopy()
     ComputationSettings s;
     s.matrix        = QStringList{ QStringLiteral("1011"), QStringLiteral("0110") };
     s.matrix2       = QStringList{ QStringLiteral("111") };
-    s.algorithmType = Algorithm::ProductCode;
+    s.algorithm = Algorithm::ProductCode;
     s.leonMemoryMb  = 512;
 
     const ComputationSettings copied(s);
@@ -1058,7 +1058,7 @@ static void testSettingsCopy()
 
     auto same = [&s](const ComputationSettings& x) {
         return x.matrix == s.matrix && x.matrix2 == s.matrix2
-            && x.algorithmType == s.algorithmType && x.leonMemoryMb == s.leonMemoryMb;
+            && x.algorithm == s.algorithm && x.leonMemoryMb == s.leonMemoryMb;
     };
     expectStore(QStringLiteral("конструктор копирования переносит матрицы"), same(copied));
     expectStore(QStringLiteral("присваивание переносит матрицы"), same(assigned));
@@ -1215,7 +1215,7 @@ static void testCanResume()
     g_out << Qt::endl << QStringLiteral("Годность автосохранения") << Qt::endl;
 
     ComputationSettings settings;
-    settings.algorithmType = Algorithm::SimpleXor;
+    settings.algorithm = Algorithm::SimpleXor;
     settings.maxRows       = 7;
 
     AutosaveRecord record;
@@ -1258,7 +1258,7 @@ static void testCanResume()
                 canResume(record, settings));
 
     // У кода Грея слоёв нет, maxRows там ни при чём.
-    settings.algorithmType = Algorithm::GrayCode;
+    settings.algorithm = Algorithm::GrayCode;
     record.algorithm = Algorithm::GrayCode;
     record.state.rOffset = 0;
     expectStore(QStringLiteral("код Грея годится независимо от maxRows"),
@@ -1874,7 +1874,7 @@ static int updateRate(const QString& which, int intervalMs, int rows)
     if (rows > 0) cfg.maxRows = rows;
 
     ComputationSettings settings = makeSettings(cfg);
-    settings.timeIntSet.updateSpectrumInterval = intervalMs;
+    settings.intervals.updateSpectrumInterval = intervalMs;
 
     Worker worker;
     worker.setAutosaveRoot(autosaveRoot());

@@ -27,7 +27,7 @@ Worker::ComponentPlan Worker::planComponent(const QStringList& rows, int weightU
     // Product::bruteForce сам, до planComponent дело не доходит.
     if (wantWords) {
         const Leon::Plan p = Leon::plan(n, k, limit, m_settings.leonMissProbability(),
-                                       m_settings.compDev == ComputationSettings::ComputeDevice::Gpu);
+                                       m_settings.device == ComputationSettings::ComputeDevice::Gpu);
         return ComponentPlan{ ComputationSettings::RandomInfoSets, double(p.trials) * p.costPerTrial,
                               tr("стохастический поиск до веса %1, в-ть пропуска 10^-%2")
                                   .arg(limit).arg(m_settings.leonMissExponent) };
@@ -102,7 +102,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     ComputationSettings cs = m_settings;
     cs.matrix        = rows;
     cs.matrix2.clear();
-    cs.algorithmType = plan.algorithm;
+    cs.algorithm = plan.algorithm;
     cs.enumType      = full ? ComputationSettings::EnumerationType::Full
                             : ComputationSettings::EnumerationType::Partial;
     cs.bzWeight      = std::min(std::max(weightUpTo, 1), n);
@@ -322,5 +322,5 @@ void Worker::computeProduct(const CodeGeometry& g)
     emit productPlanReady(summary, m_productExactUpTo);
     m_progress.setDoneOps(1);
     emit progressChanged(100);
-    updateSpectrum(int(g.numOfCols));
+    updateSpectrum(int(g.cols));
 }

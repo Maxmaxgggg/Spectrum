@@ -109,14 +109,14 @@ bool canResume(const AutosaveRecord& record, const ComputationSettings& settings
 {
     // Запись случайного поиска — только итог: найденные слова в ней не
     // хранятся, а без них продолжать нечего.
-    if (settings.algorithmType == ComputationSettings::RandomInfoSets
-        || settings.algorithmType == ComputationSettings::ProductCode)
+    if (settings.algorithm == ComputationSettings::RandomInfoSets
+        || settings.algorithm == ComputationSettings::ProductCode)
         return false;
     if (!settings.layered())
         return true;
 
     quint64 maxRows = quint64(settings.maxRows);
-    if (settings.algorithmType == ComputationSettings::BrouwerZimmermann) {
+    if (settings.algorithm == ComputationSettings::BrouwerZimmermann) {
         // Без множеств запись не продолжить: неизвестно, по каким матрицам
         // шёл перебор и какое множество засчитывало какое слово.
         if (record.infoSets.isEmpty() || settings.matrix.isEmpty())
@@ -406,7 +406,7 @@ int AutosaveStore::migrateFromRegistry()
             continue;
 
         AutosaveRecord record;
-        record.algorithm = old.algorithmType;
+        record.algorithm = old.algorithm;
         record.enumType  = old.enumType;
         record.maxRows   = old.maxRows;
         record.finished  = false;   // о завершённости старый формат не знал

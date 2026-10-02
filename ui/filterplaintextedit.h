@@ -1,5 +1,4 @@
-#ifndef FILTERPLAINTEXTEDIT_H
-#define FILTERPLAINTEXTEDIT_H
+#pragma once
 
 #include <QPlainTextEdit>
 #include <QRegularExpression>
@@ -19,5 +18,3 @@ protected:
 private:
     const QRegularExpression m_reInvalid{QStringLiteral("[^01\n]")};
 };
-
-#endif // FILTERPLAINTEXTEDIT_H

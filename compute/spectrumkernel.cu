@@ -126,12 +126,12 @@ static void checkLaunch(const char* what, int blocks, int threads, size_t shared
 // за них — молчаливая порча памяти на устройстве, поэтому ловим до запуска.
 // Раньше эти пределы проверялись только в интерфейсе, а Worker и ядра
 // принимали что угодно.
-static void validateLaunchParams(int wordsPerRow, int numOfCols)
+static void validateLaunchParams(int wordsPerRow, int n)
 {
     if (wordsPerRow > Constants::MAX_BLOCKWORDS)
         throw std::invalid_argument(
             "слишком длинная строка матрицы: не хватает MAX_BLOCKWORDS");
-    if (numOfCols > Constants::MAX_COLS)
+    if (n > Constants::MAX_COLS)
         throw std::invalid_argument("число столбцов больше MAX_COLS");
 }
 
@@ -190,7 +190,7 @@ __global__ void grayKernel(
 __host__ void launchXorShort(
     quint64* d_spectrum,
     const quint64* d_binomTable,
-    int numOfBlocks,
+    int blocks,
     int threadsPerBlock,
     cudaStream_t stream,
     int n,
@@ -217,7 +217,7 @@ __host__ void launchXorShort(
 
     auto launch = [&](auto w) {
         constexpr int W = decltype(w)::value;
-        xorKernelShort<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(
+        xorKernelShort<W><<<blocks, threadsPerBlock, sharedBytes, stream>>>(
             d_spectrum, d_binomTable, n, k, wordsPerRow, chunkOffset, chunkSize, r, slot);
     };
     // Запасной путь: размер берётся из аргумента, кодовое слово живёт в
@@ -225,7 +225,7 @@ __host__ void launchXorShort(
     if (!dispatchWords(words, launch))
         launch(std::integral_constant<int, 0>());
 
-    checkLaunch("ядро коротких кодов", numOfBlocks, threadsPerBlock, sharedBytes);
+    checkLaunch("ядро коротких кодов", blocks, threadsPerBlock, sharedBytes);
 }
 
 
@@ -271,7 +271,7 @@ __global__ void xorKernelShort(
 
     for (int i = tid; i <= n; i += blockDim.x) s_spectrum[i] = 0ULL;
     // Шаг копии — words, а не wordsPerRow: если WORDS округлён вверх, лишние
-    // слова заполняются нулями. Это безопасно, потому что биты за numOfCols в
+    // слова заполняются нулями. Это безопасно, потому что биты за n в
     // матрице всегда нули, и XOR с нулём ничего не меняет.
     for (int i = tid; i < k * words; i += blockDim.x) {
         const int row = i / words;
@@ -391,30 +391,30 @@ __global__ void xorKernelShort(
 template <int WORDS>
 __global__ void xorKernelLong(
     uint64_t* d_spectrum, const uint64_t* matrixGlobal,
-    int numCols, int numRows, int wordsPerRow, uint64_t chunkSize,
+    int n, int k, int wordsPerRow, uint64_t chunkSize,
     int16_t* d_startPositions, uint64_t masksPerThread,
-    uint64_t numStartMasks, uint64_t numOfOnes,
+    uint64_t numStartMasks, uint64_t r,
     uint64_t* d_maskCounter, bool stageMatrix, MatrixSlot slot);
 
 __host__ void launchXorLong(
-    int numBlocks,
+    int blocks,
     int threadsPerBlock,
     cudaStream_t stream,
     uint64_t* d_spectrum,
     const uint64_t* matrixGlobal,
-    int numCols,
-    int numRows,
+    int n,
+    int k,
     int wordsPerRow,
     uint64_t chunkSize,
     int16_t* d_startPositions,
     uint64_t masksPerThread,
     uint64_t numStartMasks,
-    uint64_t numOfOnes,
+    uint64_t r,
     uint64_t* d_maskCounter,
     MatrixSlot slot
 ) {
-    validateLaunchParams(wordsPerRow, numCols);
-    if (numOfOnes > Constants::MAX_POSITIONS)
+    validateLaunchParams(wordsPerRow, n);
+    if (r > Constants::MAX_POSITIONS)
         throw std::invalid_argument(
             "число складываемых строк больше MAX_POSITIONS");
 
@@ -428,23 +428,23 @@ __host__ void launchXorLong(
     // строки, а константная память такой запрос дробит. Но у длинных кодов
     // матрица бывает до полумегабайта, и тогда она туда не помещается — в этом
     // случае читаем как раньше.
-    const size_t histogramBytes = (size_t)((numCols + 2) & ~1) * sizeof(uint64_t);
+    const size_t histogramBytes = (size_t)((n + 2) & ~1) * sizeof(uint64_t);
     const size_t matrixBytes =
-        (size_t)numRows * (words > 0 ? words : wordsPerRow) * sizeof(uint64_t);
+        (size_t)k * (words > 0 ? words : wordsPerRow) * sizeof(uint64_t);
 
     const bool   stageMatrix = (histogramBytes + matrixBytes) <= Constants::MAX_SHARED_BYTES;
     const size_t sharedBytes = histogramBytes + (stageMatrix ? matrixBytes : 0);
 
     auto launch = [&](auto w) {
         constexpr int W = decltype(w)::value;
-        xorKernelLong<W><<<numBlocks, threadsPerBlock, sharedBytes, stream>>>(
-            d_spectrum, matrixGlobal, numCols, numRows, wordsPerRow, chunkSize, d_startPositions,
-            masksPerThread, numStartMasks, numOfOnes, d_maskCounter, stageMatrix, slot);
+        xorKernelLong<W><<<blocks, threadsPerBlock, sharedBytes, stream>>>(
+            d_spectrum, matrixGlobal, n, k, wordsPerRow, chunkSize, d_startPositions,
+            masksPerThread, numStartMasks, r, d_maskCounter, stageMatrix, slot);
     };
     if (!dispatchWords(words, launch))
         launch(std::integral_constant<int, 0>());
 
-    checkLaunch("ядро длинных кодов", numBlocks, threadsPerBlock, sharedBytes);
+    checkLaunch("ядро длинных кодов", blocks, threadsPerBlock, sharedBytes);
 }
 // Шаблон по числу слов — как и в коротких ядрах, чтобы codeword жил в
 // регистрах, а не в локальной памяти.
@@ -457,14 +457,14 @@ template <int WORDS>
 __global__ void xorKernelLong(
     uint64_t* d_spectrum,
     const uint64_t* matrixGlobal,
-    int             numCols,
-    int             numRows,
+    int             n,
+    int             k,
     int             wordsPerRow,
     uint64_t        chunkSize,
     int16_t* d_startPositions,
     uint64_t        masksPerThread,
     uint64_t        numStartMasks,
-    uint64_t        numOfOnes,
+    uint64_t        r,
     uint64_t*       d_maskCounter,
     bool            stageMatrix,
     MatrixSlot      matrixSlot
@@ -477,19 +477,19 @@ __global__ void xorKernelLong(
     // Копия матрицы идёт следом за гистограммой. Если она не влезла, хост
     // передаёт stageMatrix = false, и этой части просто нет.
     // Гистограмма дополнена до чётного числа слов — см. короткие ядра.
-    uint64_t* const s_matrix   = s_mem + ((numCols + 2) & ~1);
+    uint64_t* const s_matrix   = s_mem + ((n + 2) & ~1);
 
     int tid = threadIdx.x;
     uint64_t gtid =
         (uint64_t)blockIdx.x * blockDim.x + (uint64_t)tid;
 
     /* -------- init shared histogram -------- */
-    for (int i = tid; i <= numCols; i += blockDim.x)
+    for (int i = tid; i <= n; i += blockDim.x)
         s_spectrum[i] = 0ULL;
 
     /* -------- копия матрицы, если она туда влезла -------- */
     if (stageMatrix) {
-        for (int i = tid; i < numRows * words; i += blockDim.x) {
+        for (int i = tid; i < k * words; i += blockDim.x) {
             const int row = i / words;
             const int w   = i % words;
             s_matrix[i] = (w < wordsPerRow)
@@ -518,7 +518,7 @@ __global__ void xorKernelLong(
 
         // positions
         int16_t a[Constants::MAX_POSITIONS];
-        for (int i = 0; i < numOfOnes; ++i)
+        for (int i = 0; i < r; ++i)
             a[i] = slot[i];
 
         // codeword
@@ -528,7 +528,7 @@ __global__ void xorKernelLong(
             codeword[w] = 0ULL;
 
         /* ---- first mask ---- */
-        for (int i = 0; i < numOfOnes; ++i) {
+        for (int i = 0; i < r; ++i) {
             int row = a[i];
             if (matrixSrc)
                 xorRowFromShared<WORDS>(codeword, &matrixSrc[(size_t)row * words], words);
@@ -542,7 +542,7 @@ __global__ void xorKernelLong(
         for (int w = 0; w < words; ++w)
             weight += __popcll(codeword[w]);
 
-        if (matrixSlot.setCount <= 1 || bzKeep<WORDS>(codeword, words, int(numOfOnes), matrixSlot))
+        if (matrixSlot.setCount <= 1 || bzKeep<WORDS>(codeword, words, int(r), matrixSlot))
             atomicAdd(&s_spectrum[weight], 1ULL);
         #ifdef _DEBUG
         atomicAdd(d_maskCounter, 1ULL);
@@ -556,22 +556,22 @@ __global__ void xorKernelLong(
 
         for (uint64_t it = 1; it < iters; ++it) {
 
-            for (int i = 0; i < numOfOnes; ++i)
+            for (int i = 0; i < r; ++i)
                 oldA[i] = a[i];
 
-            if (!Combinations::nextPositions(a, int(numOfOnes), numRows))
+            if (!Combinations::nextPositions(a, int(r), k))
                 break;
 
             int16_t changed[2 * Constants::MAX_POSITIONS];
             int numChanged;
-            Combinations::diffPositions(oldA, a, int(numOfOnes), changed, numChanged);
+            Combinations::diffPositions(oldA, a, int(r), changed, numChanged);
 
-            if (numChanged > numOfOnes) {
+            if (numChanged > r) {
                 #pragma unroll
         for (int w = 0; w < words; ++w)
                     codeword[w] = 0ULL;
 
-                for (int i = 0; i < numOfOnes; ++i) {
+                for (int i = 0; i < r; ++i) {
                     int row = a[i];
                     if (matrixSrc)
                         xorRowFromShared<WORDS>(codeword, &matrixSrc[(size_t)row * words], words);
@@ -596,7 +596,7 @@ __global__ void xorKernelLong(
         for (int w = 0; w < words; ++w)
                 weight += __popcll(codeword[w]);
 
-            if (matrixSlot.setCount <= 1 || bzKeep<WORDS>(codeword, words, int(numOfOnes), matrixSlot))
+            if (matrixSlot.setCount <= 1 || bzKeep<WORDS>(codeword, words, int(r), matrixSlot))
                 atomicAdd(&s_spectrum[weight], 1ULL);
             #ifdef _DEBUG
             atomicAdd(d_maskCounter, 1ULL);
@@ -608,7 +608,7 @@ __global__ void xorKernelLong(
     __syncthreads();
 
     /* -------- merge shared -> global -------- */
-    for (int i = tid; i <= numCols; i += blockDim.x) {
+    for (int i = tid; i <= n; i += blockDim.x) {
         uint64_t v = s_spectrum[i];
         if (v)
             atomicAdd(&d_spectrum[i], v);
@@ -618,7 +618,7 @@ __global__ void xorKernelLong(
 
 // Обертка для ядра для расчета полного спектра с использованием кода Грея для кодов с k < 64
 __host__ void launchGray(
-    int numOfBlocks,
+    int blocks,
     int threadsPerBlock,
     cudaStream_t stream,
     quint64* d_spectrum,
@@ -638,13 +638,13 @@ __host__ void launchGray(
 
     auto launch = [&](auto w) {
         constexpr int W = decltype(w)::value;
-        grayKernel<W><<<numOfBlocks, threadsPerBlock, sharedBytes, stream>>>(
+        grayKernel<W><<<blocks, threadsPerBlock, sharedBytes, stream>>>(
             d_spectrum, n, k, wordsPerRow, chunkOffset, chunkSize);
     };
     if (!dispatchWords(words, launch))
         launch(std::integral_constant<int, 0>());
 
-    checkLaunch("ядро кода Грея", numOfBlocks, threadsPerBlock, sharedBytes);
+    checkLaunch("ядро кода Грея", blocks, threadsPerBlock, sharedBytes);
 }
 
 // Шаблон по числу слов — по той же причине, что и в ядре простого XOR:

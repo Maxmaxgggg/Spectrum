@@ -68,9 +68,9 @@ struct ComputationSettings
     // Тип вычислителя (ЦП, ГП)
     enum ComputeDevice { Cpu = 0, Gpu = 1 };
 
-    Algorithm       algorithmType = SimpleXor;
-    EnumerationType enumType = Full;
-    ComputeDevice   compDev = Cpu;
+    Algorithm       algorithm = SimpleXor;
+    EnumerationType enumType  = Full;
+    ComputeDevice   device    = Cpu;
     // Максимальное число перебираемых строк
     int             maxRows = 0;
     // Брауэр–Циммерман: до какого веса спектр нужен точно. Число строк
@@ -103,7 +103,7 @@ struct ComputationSettings
     // Брауэр–Циммерман. Код Грея и дуальный расчёт идут по маскам сплошь.
     bool layered() const
     {
-        return algorithmType == SimpleXor || algorithmType == BrouwerZimmermann;
+        return algorithm == SimpleXor || algorithm == BrouwerZimmermann;
     }
 
     // Подбирать число блоков и нитей замером перед расчётом вместо того,
@@ -118,7 +118,7 @@ struct ComputationSettings
         int blocksGpu = 1;
         // Число нитей ГП
         int threadsGpu = 1;
-    } compDevSet;
+    } deviceSettings;
 
     // Потолок числа столбцов на графике. К расчёту отношения не имеет и в
     // ключ автосохранения не входит — это только вид.
@@ -129,7 +129,7 @@ struct ComputationSettings
         int saveSpectrumInterval = TenSeconds;
         // Частота обновления спектра на экране, миллисекунды
         int updateSpectrumInterval = EverySecond;
-    } timeIntSet;
+    } intervals;
 
     // Копирование и перемещение — умолчательные, поле в поле. Самописный
     // конструктор копирования пропускал matrix и matrix2: копия выходила без
@@ -153,7 +153,7 @@ struct ComputationSettings
                 arr.append(str);
             obj["matrix2"] = arr;
         }
-        obj["algorithmType"] = static_cast<int>(algorithmType);
+        obj["algorithmType"] = static_cast<int>(algorithm);
         obj["enumType"] = static_cast<int>(enumType);
         obj["maxRows"] = maxRows;
         obj["bzWeight"] = bzWeight;
@@ -163,14 +163,14 @@ struct ComputationSettings
         obj["productWeight"] = productWeight;
         obj["productRank"] = productRank;
         obj["productAlgorithm"] = productAlgorithm;
-        obj["compDev"] = static_cast<int>(compDev);
+        obj["compDev"] = static_cast<int>(device);
         obj["maxPlotBars"] = maxPlotBars;
         obj["autoTuneGrid"] = autoTuneGrid;
 
         QJsonObject dev;
-        dev["threadsCpu"] = compDevSet.threadsCpu;
-        dev["blocksGpu"]  = compDevSet.blocksGpu;
-        dev["threadsGpu"] = compDevSet.threadsGpu;
+        dev["threadsCpu"] = deviceSettings.threadsCpu;
+        dev["blocksGpu"]  = deviceSettings.blocksGpu;
+        dev["threadsGpu"] = deviceSettings.threadsGpu;
 
         obj["compDevSet"] = dev;
 
@@ -182,8 +182,8 @@ struct ComputationSettings
         obj["version"] = 2;
 
         QJsonObject timeInt;
-        timeInt["saveSpectrumInterval"]   = timeIntSet.saveSpectrumInterval;
-        timeInt["updateSpectrumInterval"] = timeIntSet.updateSpectrumInterval;
+        timeInt["saveSpectrumInterval"]   = intervals.saveSpectrumInterval;
+        timeInt["updateSpectrumInterval"] = intervals.updateSpectrumInterval;
         obj["timeIntSet"] = timeInt;
         return obj;
     }
@@ -206,7 +206,7 @@ struct ComputationSettings
             for (const QJsonValue& val : obj["matrix2"].toArray())
                 s.matrix2.append(val.toString());
         }
-        s.algorithmType = static_cast<Algorithm>(obj["algorithmType"].toInt());
+        s.algorithm = static_cast<Algorithm>(obj["algorithmType"].toInt());
         s.enumType = static_cast<EnumerationType>(obj["enumType"].toInt());
         s.maxRows = obj["maxRows"].toInt();
         // Ноль означает «ключа не было» — остаётся значение по умолчанию.
@@ -222,30 +222,30 @@ struct ComputationSettings
             s.productRank = obj["productRank"].toInt();
         if (obj.contains("productAlgorithm"))
             s.productAlgorithm = obj["productAlgorithm"].toInt();
-        s.compDev = static_cast<ComputeDevice>(obj["compDev"].toInt());
+        s.device = static_cast<ComputeDevice>(obj["compDev"].toInt());
         // Ноль означает «ключа не было» — остаётся значение по умолчанию.
         if (obj["maxPlotBars"].toInt() > 0)
             s.maxPlotBars = obj["maxPlotBars"].toInt();
         s.autoTuneGrid = obj["autoTuneGrid"].toBool();
 
         QJsonObject dev = obj["compDevSet"].toObject();
-        s.compDevSet.threadsCpu = dev["threadsCpu"].toInt();
-        s.compDevSet.blocksGpu = dev["blocksGpu"].toInt();
-        s.compDevSet.threadsGpu = dev["threadsGpu"].toInt();
+        s.deviceSettings.threadsCpu = dev["threadsCpu"].toInt();
+        s.deviceSettings.blocksGpu = dev["blocksGpu"].toInt();
+        s.deviceSettings.threadsGpu = dev["threadsGpu"].toInt();
 
         QJsonObject timeInt = obj["timeIntSet"].toObject();
-        s.timeIntSet.saveSpectrumInterval   = timeInt["saveSpectrumInterval"].toInt();
-        s.timeIntSet.updateSpectrumInterval = timeInt["updateSpectrumInterval"].toInt();
+        s.intervals.saveSpectrumInterval   = timeInt["saveSpectrumInterval"].toInt();
+        s.intervals.updateSpectrumInterval = timeInt["updateSpectrumInterval"].toInt();
         // Настройки без метки версии писала программа, хранившая этот
         // интервал в секундах. Без пересчёта расчёт стал бы обновлять спектр
         // шестьдесят раз в секунду вместо раза в минуту.
         if (obj["version"].toInt() < 2)
-            s.timeIntSet.updateSpectrumInterval *= 1000;
+            s.intervals.updateSpectrumInterval *= 1000;
         // Пункт «33 мс» из списка убран. У тех, кто успел его выбрать, значение
         // осталось в настройках, и без правки они остались бы на интервале,
         // которого в списке нет.
-        if (s.timeIntSet.updateSpectrumInterval < EveryTenthSecond)
-            s.timeIntSet.updateSpectrumInterval = EveryTenthSecond;
+        if (s.intervals.updateSpectrumInterval < EveryTenthSecond)
+            s.intervals.updateSpectrumInterval = EveryTenthSecond;
         return s;
     }
 };

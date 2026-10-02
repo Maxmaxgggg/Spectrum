@@ -14,19 +14,19 @@ void Worker::computeGrayGpu(const CodeGeometry& g)
 {
     ChunkPlan plan;
     plan.layered     = false;
-    plan.totalOps    = 1ULL << g.numOfRows;
-    plan.layerSize   = [&g](quint64) { return quint64(1) << g.numOfRows; };
+    plan.totalOps    = 1ULL << g.rows;
+    plan.layerSize   = [&g](quint64) { return quint64(1) << g.rows; };
     plan.chunkTarget = g.chunkSize;
     plan.stream      = m_buffers->stream.get();
     plan.run = [this, &g](quint64, const LayerSlice& s) {
         launchGray(g.blocksGpu, g.threadsGpu, m_buffers->stream.get(), m_buffers->d_spectrum.get(),
-                   int(g.numOfCols), int(g.numOfRows), int(g.wordsPerRow),
+                   int(g.cols), int(g.rows), int(g.wordsPerRow),
                    s.offset, s.size);
         return true;
     };
     runChunks(g, plan);
-    copySpectrumFromDevice(int(g.numOfCols));
-    updateSpectrum(int(g.numOfCols));
+    copySpectrumFromDevice(int(g.cols));
+    updateSpectrum(int(g.cols));
 }
 
 void Worker::computeXorGpuShort(const CodeGeometry& g)
@@ -34,18 +34,18 @@ void Worker::computeXorGpuShort(const CodeGeometry& g)
     ChunkPlan plan;
     plan.totalOps    = totalLayerOps(g);
     plan.lastLayer   = g.maxRows;
-    plan.layerSize   = [this, &g](quint64 r) { return m_binomTable(g.numOfRows, r); };
+    plan.layerSize   = [this, &g](quint64 r) { return m_binomTable(g.rows, r); };
     plan.chunkTarget = g.chunkSize;
     plan.stream      = m_buffers->stream.get();
     plan.run = [this, &g](quint64 r, const LayerSlice& s) {
         launchXorShort(m_buffers->d_spectrum.get(), m_buffers->d_binomTable.get(), g.blocksGpu, g.threadsGpu,
-                       m_buffers->stream.get(), int(g.numOfCols), int(g.numOfRows), int(g.wordsPerRow),
+                       m_buffers->stream.get(), int(g.cols), int(g.rows), int(g.wordsPerRow),
                        s.offset, s.size, r, s.slot);
         return true;
     };
     runChunks(g, plan);
-    copySpectrumFromDevice(int(g.numOfCols));
-    updateSpectrum(int(g.numOfCols));
+    copySpectrumFromDevice(int(g.cols));
+    updateSpectrum(int(g.cols));
 }
 
 // Длинные коды (k >= 64): нить ядра берёт masksPerThread сочетаний подряд от
@@ -53,7 +53,7 @@ void Worker::computeXorGpuShort(const CodeGeometry& g)
 // номеру, массивом позиций — и копирует на устройство перед каждым чанком.
 void Worker::computeXorGpuLong(const CodeGeometry& g)
 {
-    const quint64 numOfRows       = g.numOfRows;
+    const quint64 rows            = g.rows;
     const int     threadsPerBlock = g.threadsGpu;
 
     // Нитей в сетке и сочетаний на нить
@@ -94,7 +94,7 @@ void Worker::computeXorGpuLong(const CodeGeometry& g)
     ChunkPlan plan;
     plan.totalOps    = totalLayerOps(g);
     plan.lastLayer   = g.maxRows;
-    plan.layerSize   = [this, &g](quint64 r) { return m_binomTable(g.numOfRows, r); };
+    plan.layerSize   = [this, &g](quint64 r) { return m_binomTable(g.rows, r); };
     plan.chunkTarget = maxThreads * masksPerThread;
     plan.stream      = m_buffers->stream.get();
     plan.run = [&](quint64 r, const LayerSlice& slice) {
@@ -119,8 +119,8 @@ void Worker::computeXorGpuLong(const CodeGeometry& g)
         // совмещения которой с расчётом заведён второй буфер.
         for (quint64 tid = 0; tid < numStartMasks; ++tid) {
             const quint64 rank = slice.offset + tid * masksPerThread;
-            assert(rank < m_binomTable(numOfRows, r));
-            Combinations::unrankPositions(rank, int(numOfRows), int(r),
+            assert(rank < m_binomTable(rows, r));
+            Combinations::unrankPositions(rank, int(rows), int(r),
                                           hostSlots + tid * Constants::MAX_POSITIONS,
                                           Constants::MAX_POSITIONS, m_binomTable);
         }
@@ -140,7 +140,7 @@ void Worker::computeXorGpuLong(const CodeGeometry& g)
         uint64_t* const maskCounter = nullptr;
         #endif
         launchXorLong(grid, threadsPerBlock, m_buffers->stream.get(), m_buffers->d_spectrum.get(), m_buffers->d_matrix.get(),
-                      int(g.numOfCols), int(numOfRows), int(g.wordsPerRow), chunkSize,
+                      int(g.cols), int(rows), int(g.wordsPerRow), chunkSize,
                       d_slots.get(), masksPerThread, numStartMasks, r, maskCounter,
                       slice.slot);
         // Синхронизации после ядра нет: хост переписывает только тот буфер
@@ -156,16 +156,16 @@ void Worker::computeXorGpuLong(const CodeGeometry& g)
         return true;
     };
     runChunks(g, plan);
-    copySpectrumFromDevice(int(g.numOfCols));
-    updateSpectrum(int(g.numOfCols));
+    copySpectrumFromDevice(int(g.cols));
+    updateSpectrum(int(g.cols));
     // Освобождать вручную нечего: буферы, события и счётчик владеющие — их
     // снимут деструкторы, в том числе при исключении.
 }
 
 // Итоговая копия спектра с видеокарты.
-void Worker::copySpectrumFromDevice(int numOfCols)
+void Worker::copySpectrumFromDevice(int cols)
 {
-    CUDA_CALL(cudaMemcpyAsync(m_buffers->h_spectrum.get(), m_buffers->d_spectrum.get(), size_t(numOfCols + 1) * sizeof(quint64),
+    CUDA_CALL(cudaMemcpyAsync(m_buffers->h_spectrum.get(), m_buffers->d_spectrum.get(), size_t(cols + 1) * sizeof(quint64),
                               cudaMemcpyDeviceToHost, m_buffers->stream.get()));
     CUDA_CALL(cudaStreamSynchronize(m_buffers->stream.get()));
 }

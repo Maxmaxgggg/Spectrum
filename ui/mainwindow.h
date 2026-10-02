@@ -1,5 +1,4 @@
-#ifndef WIDGET_H
-#define WIDGET_H
+#pragma once
 
 #include "qcustomplot.h"
 #include "settingsdialog.h"
@@ -98,15 +97,15 @@ private:
     // изменения размера идут десятками в секунду, и рисовать на каждое —
     // это и есть подлагивание. Ждём, пока размер перестанет меняться.
     QTimer*         m_plotRefreshTimer = nullptr;
-    Worker         *m_worker        = nullptr;
-    QThread        *m_workerThread  = nullptr;
+    Worker         *m_worker           = nullptr;
+    QThread        *m_workerThread     = nullptr;
     SettingsDialog *m_settingsDialog   = nullptr;
     MatrixMenu     *m_matrixMenu       = nullptr;
 
     // Автосохранения расчёта на диске.
     AutosaveStore   m_autosave;
     QGraphicsOpacityEffect* m_saveLBLOpacityEffect;
-    // состояние выполнения: Idle / Running / Paused
+    // Состояние выполнения: Idle / Running / Paused.
     // Loaded — из диалога поднято автосохранение: спектр и прогресс уже на
     // экране, кнопка предлагает продолжить, и спрашивать при запуске второй
     // раз незачем.
@@ -123,9 +122,6 @@ private:
     std::unique_ptr<SpectrumPlot> m_spectrumPlot;
 
     int m_remainingMinutes = -1;
-    // Строка о подобранной сетке. Пустая, если подбор не проводился.
-
-
 
     QString matrixError() const;
     void startComputation();
@@ -148,8 +144,6 @@ private:
 
     // Последний показанный спектр — его же и сохраняем между запусками.
     SpectrumCounts m_lastSpectrum;
-    // До какого веса показанный спектр точен. -1 — весь спектр на равных
-    // (обычный перебор); иначе строки тяжелее помечаются как неполные.
 
     // Случайный поиск: сколько слов каждого веса, по оценке, ещё не найдено.
     // Пусто — пометок нет.
@@ -173,5 +167,3 @@ private:
     // после сборки окна: индикатору нужен готовый нативный дескриптор.
     std::unique_ptr<TaskbarProgress> m_taskbar;
 };
-
-#endif // WIDGET_H

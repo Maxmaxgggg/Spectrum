@@ -26,16 +26,17 @@ __host__ cudaError_t copyMasksToConstant(const quint64* h_masks, int setCount, i
 // Ядра шаблонные по числу слов в строке и объявлены в .cu — снаружи нужны
 // только обёртки запуска, они и выбирают вариант (wordvariants.h).
 //
-// У коротких кодов (k <= 63) n — длина кода (столбцов матрицы), k — её
-// строк, wordsPerRow — 64-битных слов в строке; матрица в константной
-// памяти (copyMatrixToConstant).
+// Во всех ядрах n — длина кода (столбцов матрицы), k — её строк,
+// wordsPerRow — 64-битных слов в строке, r — сколько строк складывается.
+// У коротких кодов (k <= 63) матрица в константной памяти
+// (copyMatrixToConstant).
 
 // Простой XOR и Брауэр–Циммерман: сочетания из r строк с номерами
 // [chunkOffset, chunkOffset + chunkSize) внутри множества slot.
 __host__ void launchXorShort(
     quint64 * d_spectrum,
     const quint64 * d_binomTable,
-    int numOfBlocks,
+    int blocks,
     int threadsPerBlock,
     cudaStream_t stream,
     int n,
@@ -51,26 +52,26 @@ __host__ void launchXorShort(
 // своего стартового (d_startPositions, по MAX_POSITIONS позиций на нить).
 // matrixGlobal — матрица в глобальной памяти; nullptr — в константной.
 __host__ void launchXorLong(
-    int              numBlocks,
+    int              blocks,
     int              threadsPerBlock,
     cudaStream_t     stream,
     uint64_t*        d_spectrum,
     const uint64_t*  matrixGlobal,
-    int              numCols,
-    int              numRows,
+    int              n,
+    int              k,
     int              wordsPerRow,
     uint64_t         chunkSize,
     int16_t*         d_startPositions,
     uint64_t         masksPerThread,
     uint64_t         numStartMasks,
-    uint64_t         numOfOnes,
+    uint64_t         r,
     uint64_t*        d_maskCounter,
     MatrixSlot       slot = MatrixSlot()
 );
 // Код Грея (и дуальный расчёт): маски с номерами [chunkOffset,
 // chunkOffset + chunkSize) в порядке кода Грея.
 __host__ void launchGray(
-    int numOfBlocks,
+    int blocks,
     int threadsPerBlock,
     cudaStream_t stream,
     quint64* d_spectrum,

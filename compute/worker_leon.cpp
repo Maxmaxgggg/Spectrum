@@ -28,8 +28,8 @@
 // самой своей природе короткий — его предел ставит память под слова.
 void Worker::computeLeon(const CodeGeometry& g)
 {
-    const int rows  = int(g.numOfRows);
-    const int cols  = int(g.numOfCols);
+    const int rows  = int(g.rows);
+    const int cols  = int(g.cols);
     const int words = int(g.wordsPerRow);
     const int depth = int(g.maxRows);
     const int maxWeight = m_settings.leonWeight;

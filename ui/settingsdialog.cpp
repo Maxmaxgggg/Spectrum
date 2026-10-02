@@ -29,20 +29,20 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     m_ui->setupUi(this);
 
     m_codeKindBGP = new QButtonGroup(this);
-    m_codeKindBGP->addButton( m_ui->singleCodeRB,  SingleCode  );
-    m_codeKindBGP->addButton( m_ui->productCodeRB, ProductCode );
+    m_codeKindBGP->addButton( m_ui->singleCodeRBN,  SingleCode  );
+    m_codeKindBGP->addButton( m_ui->productCodeRBN, ProductCode );
 
     m_enumeratorBGP = new QButtonGroup(this);
-    m_enumeratorBGP->addButton( m_ui->fullEnumRB,    EnumerationType::Full    );
-    m_enumeratorBGP->addButton( m_ui->partialEnumRB, EnumerationType::Partial );
+    m_enumeratorBGP->addButton( m_ui->fullEnumRBN,    EnumerationType::Full    );
+    m_enumeratorBGP->addButton( m_ui->partialEnumRBN, EnumerationType::Partial );
 
     // Одна группа на обе пары: видна всегда только подходящая пара, но
     // выбранной может быть лишь одна кнопка из четырёх.
     m_algorithmBGP = new QButtonGroup(this);
-    m_algorithmBGP->addButton( m_ui->grayCodeRB,          Algorithm::GrayCode          );
-    m_algorithmBGP->addButton( m_ui->dualCodeRB,          Algorithm::DualCode          );
-    m_algorithmBGP->addButton( m_ui->brouwerZimmermannRB, Algorithm::BrouwerZimmermann );
-    m_algorithmBGP->addButton( m_ui->randomInfoSetsRB,    Algorithm::RandomInfoSets    );
+    m_algorithmBGP->addButton( m_ui->grayCodeRBN,          Algorithm::GrayCode          );
+    m_algorithmBGP->addButton( m_ui->dualCodeRBN,          Algorithm::DualCode          );
+    m_algorithmBGP->addButton( m_ui->brouwerZimmermannRBN, Algorithm::BrouwerZimmermann );
+    m_algorithmBGP->addButton( m_ui->randomInfoSetsRBN,    Algorithm::RandomInfoSets    );
 
     // Степень десятки в данных пункта: так же, как интервалы.
     m_ui->leonMissCBX->setItemData(0, 3);
@@ -51,8 +51,8 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     m_ui->leonMissCBX->setItemData(3, 12);
 
     m_computeDeviceBGP = new QButtonGroup(this);
-    m_computeDeviceBGP->addButton( m_ui->cpuRB, ComputeDevice::Cpu );
-    m_computeDeviceBGP->addButton( m_ui->gpuRB, ComputeDevice::Gpu );
+    m_computeDeviceBGP->addButton( m_ui->cpuRBN, ComputeDevice::Cpu );
+    m_computeDeviceBGP->addButton( m_ui->gpuRBN, ComputeDevice::Gpu );
 
     // Устанавливаем данные для save и update
     m_ui->saveSpectrumIntervalCBX->setItemData(0, TenSeconds);
@@ -76,7 +76,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
 
     int maxThreads = omp_get_max_threads();
     m_ui->threadsCpuSPB->setMaximum(maxThreads);
-    m_settings.compDevSet.threadsCpu = std::min(maxThreads, m_ui->threadsCpuSPB->value());
+    m_settings.deviceSettings.threadsCpu = std::min(maxThreads, m_ui->threadsCpuSPB->value());
 
     m_ui->maxPlotBarsSPB->setToolTip(
         tr("Сколько столбцов рисовать на графике.\n"
@@ -198,7 +198,7 @@ void SettingsDialog::updateComputationControls()
     // матриц — порождающая или проверочная — не длиннее 63 строк: код Грея
     // перебирает первую, дуальный расчёт — вторую.
     const bool fullPossible = !product && (m_codeLength == Length::Short || m_dualCodeLength == Length::Short);
-    m_ui->fullEnumRB->setEnabled(fullPossible);
+    m_ui->fullEnumRBN->setEnabled(fullPossible);
     m_ui->enumTypeGBX->setEnabled(!product);
     EnumerationType shown = product ? EnumerationType::Partial : m_singleEnumType;
     if (!fullPossible)
@@ -208,18 +208,18 @@ void SettingsDialog::updateComputationControls()
     const bool full = shown == EnumerationType::Full;
 
     // Алгоритм: видна пара, подходящая типу перебора.
-    m_ui->grayCodeRB->setVisible(full);
-    m_ui->dualCodeRB->setVisible(full);
-    m_ui->brouwerZimmermannRB->setVisible(!full);
-    m_ui->randomInfoSetsRB->setVisible(!full);
+    m_ui->grayCodeRBN->setVisible(full);
+    m_ui->dualCodeRBN->setVisible(full);
+    m_ui->brouwerZimmermannRBN->setVisible(!full);
+    m_ui->randomInfoSetsRBN->setVisible(!full);
     // Код Грея не длиннее 63 строк, дуальный расчёт — не длиннее 63 строк
     // проверочной матрицы.
-    m_ui->grayCodeRB->setEnabled(m_codeLength == Length::Short);
-    m_ui->dualCodeRB->setEnabled(m_dualCodeLength == Length::Short);
+    m_ui->grayCodeRBN->setEnabled(m_codeLength == Length::Short);
+    m_ui->dualCodeRBN->setEnabled(m_dualCodeLength == Length::Short);
     if (full) {
-        if (m_fullAlgorithm == Algorithm::GrayCode && !m_ui->grayCodeRB->isEnabled())
+        if (m_fullAlgorithm == Algorithm::GrayCode && !m_ui->grayCodeRBN->isEnabled())
             m_fullAlgorithm = Algorithm::DualCode;
-        if (m_fullAlgorithm == Algorithm::DualCode && !m_ui->dualCodeRB->isEnabled())
+        if (m_fullAlgorithm == Algorithm::DualCode && !m_ui->dualCodeRBN->isEnabled())
             m_fullAlgorithm = Algorithm::GrayCode;
     }
     if (QAbstractButton* button = m_algorithmBGP->button(full ? m_fullAlgorithm : m_partialAlgorithm))
@@ -230,10 +230,10 @@ void SettingsDialog::updateComputationControls()
     // У произведения алгоритм для компонент программа выбирает сама (по
     // размеру); переключатели не показываются, а настройки стохастического
     // поиска нужны только при рангах выше первого.
-    m_ui->grayCodeRB->setVisible(full && !product);
-    m_ui->dualCodeRB->setVisible(full && !product);
-    m_ui->brouwerZimmermannRB->setVisible(!full && !product);
-    m_ui->randomInfoSetsRB->setVisible(!full && !product);
+    m_ui->grayCodeRBN->setVisible(full && !product);
+    m_ui->dualCodeRBN->setVisible(full && !product);
+    m_ui->brouwerZimmermannRBN->setVisible(!full && !product);
+    m_ui->randomInfoSetsRBN->setVisible(!full && !product);
 
     // Поле веса: у полного перебора его нет, у произведения ноль — «до
     // границы ранга».
@@ -540,12 +540,12 @@ void SettingsDialog::updateDeviceControls()
 
 void SettingsDialog::checkGpuAvailable() {
     if (isGpuAvailable()) {
-        m_ui->gpuRB->setEnabled(true);
+        m_ui->gpuRBN->setEnabled(true);
         applyDeviceLimits();
     }
     else {
-        m_ui->gpuRB->setEnabled(false);
-        m_ui->cpuRB->setChecked(true);
+        m_ui->gpuRBN->setEnabled(false);
+        m_ui->cpuRBN->setChecked(true);
         updateDeviceControls();
     }
 }
@@ -580,7 +580,7 @@ void SettingsDialog::saveSettings() {
 void SettingsDialog::collectSettings()
 {
     const Algorithm algorithm = currentAlgorithm();
-    m_settings.algorithmType = algorithm;
+    m_settings.algorithm = algorithm;
     m_settings.enumType = m_enumeratorBGP->checkedId() == EnumerationType::Full
                           ? EnumerationType::Full : EnumerationType::Partial;
     // Число строк простого XOR больше не задаётся: всё, сколько есть.
@@ -594,16 +594,16 @@ void SettingsDialog::collectSettings()
     m_settings.leonMissExponent = m_ui->leonMissCBX->currentData().toInt();
     m_settings.leonMemoryMb = m_ui->leonMemorySPB->value();
     m_settings.productRank = 1;
-    m_settings.compDev = static_cast<ComputeDevice>(m_computeDeviceBGP->checkedId());
+    m_settings.device = static_cast<ComputeDevice>(m_computeDeviceBGP->checkedId());
 
-    m_settings.compDevSet.threadsCpu = m_ui->threadsCpuSPB->value();
-    m_settings.compDevSet.blocksGpu = m_ui->blocksGpuSPB->value();
-    m_settings.compDevSet.threadsGpu = m_ui->threadsGpuSPB->value();
+    m_settings.deviceSettings.threadsCpu = m_ui->threadsCpuSPB->value();
+    m_settings.deviceSettings.blocksGpu = m_ui->blocksGpuSPB->value();
+    m_settings.deviceSettings.threadsGpu = m_ui->threadsGpuSPB->value();
     m_settings.autoTuneGrid          = m_ui->autoTuneGridCHB->isChecked();
     m_settings.maxPlotBars           = m_ui->maxPlotBarsSPB->value();
 
-    m_settings.timeIntSet.saveSpectrumInterval = m_ui->saveSpectrumIntervalCBX->currentData().toInt();
-    m_settings.timeIntSet.updateSpectrumInterval = m_ui->updateSpectrumIntervalCBX->currentData().toInt();
+    m_settings.intervals.saveSpectrumInterval = m_ui->saveSpectrumIntervalCBX->currentData().toInt();
+    m_settings.intervals.updateSpectrumInterval = m_ui->updateSpectrumIntervalCBX->currentData().toInt();
 }
 
 void SettingsDialog::loadSettings() {
@@ -634,18 +634,18 @@ void SettingsDialog::loadSettings() {
     if (m_partialAlgorithm != Algorithm::BrouwerZimmermann && m_partialAlgorithm != Algorithm::RandomInfoSets)
         m_partialAlgorithm = Algorithm::BrouwerZimmermann;
 
-    switch (m_settings.algorithmType) {
+    switch (m_settings.algorithm) {
         case Algorithm::GrayCode:
         case Algorithm::DualCode:
             m_codeKindBGP->button(SingleCode)->setChecked(true);
             m_singleEnumType = EnumerationType::Full;
-            m_fullAlgorithm  = m_settings.algorithmType;
+            m_fullAlgorithm  = m_settings.algorithm;
             break;
         case Algorithm::BrouwerZimmermann:
         case Algorithm::RandomInfoSets:
             m_codeKindBGP->button(SingleCode)->setChecked(true);
             m_singleEnumType   = EnumerationType::Partial;
-            m_partialAlgorithm = m_settings.algorithmType;
+            m_partialAlgorithm = m_settings.algorithm;
             break;
         case Algorithm::ProductCode:
             m_codeKindBGP->button(ProductCode)->setChecked(true);
@@ -672,24 +672,24 @@ void SettingsDialog::loadSettings() {
 
     s.endGroup(); // ← не забыть
 
-    m_computeDeviceBGP->button(m_settings.compDev)->setChecked(true);
+    m_computeDeviceBGP->button(m_settings.device)->setChecked(true);
 
     int maxThreads = omp_get_max_threads();
     m_ui->threadsCpuSPB->setMaximum(maxThreads);
 
-    m_ui->threadsCpuSPB->setValue(std::min(maxThreads, m_settings.compDevSet.threadsCpu));
-    m_ui->blocksGpuSPB->setValue(m_settings.compDevSet.blocksGpu);
-    m_ui->threadsGpuSPB->setValue(m_settings.compDevSet.threadsGpu);
+    m_ui->threadsCpuSPB->setValue(std::min(maxThreads, m_settings.deviceSettings.threadsCpu));
+    m_ui->blocksGpuSPB->setValue(m_settings.deviceSettings.blocksGpu);
+    m_ui->threadsGpuSPB->setValue(m_settings.deviceSettings.threadsGpu);
     m_ui->autoTuneGridCHB->setChecked(m_settings.autoTuneGrid);
     m_ui->maxPlotBarsSPB->setValue(m_settings.maxPlotBars);
 
     updateDeviceControls();
 
-    int index = m_ui->saveSpectrumIntervalCBX->findData(m_settings.timeIntSet.saveSpectrumInterval);
+    int index = m_ui->saveSpectrumIntervalCBX->findData(m_settings.intervals.saveSpectrumInterval);
     if (index != -1) {
         m_ui->saveSpectrumIntervalCBX->setCurrentIndex(index);
     }
-    index = m_ui->updateSpectrumIntervalCBX->findData(m_settings.timeIntSet.updateSpectrumInterval);
+    index = m_ui->updateSpectrumIntervalCBX->findData(m_settings.intervals.updateSpectrumInterval);
     if (index != -1) {
         m_ui->updateSpectrumIntervalCBX->setCurrentIndex(index);
     }

@@ -91,25 +91,25 @@ double timeChunk(const GridTuneTask& task, const LaunchGrid& grid,
                 launchXorLong(
                     launchGrid, grid.threads, stream,
                     task.scratchSpectrum, task.matrixGlobal,
-                    task.numOfCols, task.numOfRows, task.wordsPerRow,
+                    task.cols, task.rows, task.wordsPerRow,
                     chunk,
                     const_cast<int16_t*>(task.startPositions),
-                    task.measureMasksPerThread, startMasks, task.numOfOnes,
+                    task.measureMasksPerThread, startMasks, task.r,
                     nullptr, task.slot);
             }
             else if (task.kernel == GridTuneTask::Kernel::Gray) {
                 launchGray(
                     grid.blocks, grid.threads, stream,
                     task.scratchSpectrum,
-                    task.numOfCols, task.numOfRows, task.wordsPerRow,
+                    task.cols, task.rows, task.wordsPerRow,
                     offset, chunk);
             }
             else {
                 launchXorShort(
                     task.scratchSpectrum, task.binomTable,
                     grid.blocks, grid.threads, stream,
-                    task.numOfCols, task.numOfRows, task.wordsPerRow,
-                    offset, chunk, task.numOfOnes, task.slot);
+                    task.cols, task.rows, task.wordsPerRow,
+                    offset, chunk, task.r, task.slot);
             }
         }
 

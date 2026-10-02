@@ -78,32 +78,32 @@ void StatsPanel::showTask(const ComputationSettings& settings)
 {
     m_grid.clear();
 
-    if (settings.compDev == ComputationSettings::Gpu) {
+    if (settings.device == ComputationSettings::Gpu) {
         // У случайного поиска своя сетка: блок на попытку, 256 нитей.
-        m_deviceText = settings.algorithmType == ComputationSettings::RandomInfoSets
+        m_deviceText = settings.algorithm == ComputationSettings::RandomInfoSets
                          ? tr("GPU, блок на попытку")
                          : tr("GPU, сетка %1 x %2")
-                               .arg(settings.compDevSet.blocksGpu)
-                               .arg(settings.compDevSet.threadsGpu);
+                               .arg(settings.deviceSettings.blocksGpu)
+                               .arg(settings.deviceSettings.threadsGpu);
     } else {
-        m_deviceText = tr("CPU, потоков: %1").arg(settings.compDevSet.threadsCpu);
+        m_deviceText = tr("CPU, потоков: %1").arg(settings.deviceSettings.threadsCpu);
     }
     m_deviceValue->setText(m_deviceText);
 
     QString enumeration = settings.enumType == ComputationSettings::Full
                               ? tr("полный перебор")
                               : tr("частичный, до %1 строк").arg(settings.maxRows);
-    if (settings.algorithmType == ComputationSettings::BrouwerZimmermann)
+    if (settings.algorithm == ComputationSettings::BrouwerZimmermann)
         enumeration = tr("компоненты весом до %1").arg(settings.bzWeight);
-    if (settings.algorithmType == ComputationSettings::RandomInfoSets)
+    if (settings.algorithm == ComputationSettings::RandomInfoSets)
         enumeration = tr("компоненты весом до %1, в-ть пропуска %2")
                           .arg(settings.leonWeight).arg(Format::powerOfTen(-settings.leonMissExponent, true));
-    if (settings.algorithmType == ComputationSettings::ProductCode) {
+    if (settings.algorithm == ComputationSettings::ProductCode) {
         enumeration = settings.productWeight > 0
                           ? tr("компоненты весом до %1").arg(settings.productWeight)
                           : tr("до границы Толхёйзена");
     }
-    m_algorithmValue->setText(algorithmName(settings.algorithmType)
+    m_algorithmValue->setText(algorithmName(settings.algorithm)
                               + QStringLiteral(", ") + enumeration);
 }
 

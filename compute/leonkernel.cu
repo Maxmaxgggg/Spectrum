@@ -119,8 +119,8 @@ __global__ void __launch_bounds__(LEON_THREADS, WORDS <= 8 ? 4 : 2) leonTrialsKe
 {
     constexpr int STRIDE = rowStride(WORDS);
     extern __shared__ uint64_t s_mem[];
-    const int k = launch.rows;
-    const int n = launch.cols;
+    const int k     = launch.rows;
+    const int n     = launch.cols;
     const int group = launch.gaussGroup;
 
     uint64_t* const scratch = launch.scratch ? launch.scratch + size_t(blockIdx.x) * launch.scratchWords : nullptr;

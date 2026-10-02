@@ -1,5 +1,4 @@
-#ifndef WORKER_H
-#define WORKER_H
+#pragma once
 
 #include <atomic>
 #include <chrono>
@@ -38,12 +37,12 @@ struct CodeGeometry
     // матрица, а не та, что ввёл пользователь.
     QStringList matrix;
 
-    quint64 numOfRows    = 0;
-    quint64 numOfCols    = 0;
+    quint64 rows    = 0;
+    quint64 cols    = 0;
     // Число 64-битных слов на одну строку
     quint64 wordsPerRow  = 0;
     quint64 matrixWords  = 0;
-    // Длина спектра: веса от 0 до numOfCols включительно
+    // Длина спектра: веса от 0 до cols включительно
     quint64 spectrumSize = 0;
     // Максимальное число складываемых строк при частичном переборе
     quint64 maxRows      = 0;
@@ -67,7 +66,7 @@ struct CodeGeometry
     int                   setCount        = 1;
     std::vector<int>      setOverlaps;
     std::vector<quint64>  setMasks;         // setCount x wordsPerRow
-    std::vector<quint64>  setRows;          // setCount x numOfRows x wordsPerRow
+    std::vector<quint64>  setRows;          // setCount x rows x wordsPerRow
     QVector<QVector<int>> setColumns;       // опорные столбцы — в автосохранение
     // Все слова веса меньше этого найдены. Ноль — не Брауэр–Циммерман.
     int                   guaranteedBelow = 0;
@@ -158,7 +157,7 @@ public slots:
     //
     // Останавливается снаружи, вызовом cancel() по таймеру.
     void measureUpdateRate();
-    void setSettings( const ComputationSettings& newSettings );
+    void setSettings(const ComputationSettings& settings);
     void initializeRunState(LoadMode lm);
 signals:
     // Сигнал для обновления progressbar-а
@@ -199,7 +198,7 @@ signals:
     void productPlanReady( const QString& text, int exactUpToWeight );
 private:
     /* Функции для работы с биноминальными коэффициентами */
-    quint64   totalCombinations(quint64 k, quint64 maxComb) const;
+    quint64   totalCombinations(quint64 k, quint64 maxRows) const;
     // Полное число операций расчёта: комбинации до maxRows по каждому из
     // множеств. В обычном расчёте множество одно.
     quint64   totalLayerOps(const CodeGeometry& g) const;
@@ -225,10 +224,11 @@ private:
     /* Функции для расчета спектра кода */
     // Общий цикл перебора по слоям и чанкам — см. ChunkPlan.
     void runChunks(const CodeGeometry& g, const ChunkPlan& plan);
-    void computeGrayGpu  (const CodeGeometry& g);
+    // Имя пути — алгоритм, устройство и, где вариантов два, длина кода.
+    void computeGrayGpu    (const CodeGeometry& g);
     void computeXorGpuShort(const CodeGeometry& g);
     void computeXorGpuLong (const CodeGeometry& g);
-    void computeGrayCpu  (const CodeGeometry& g);
+    void computeGrayCpu    (const CodeGeometry& g);
     void computeXorCpuShort(const CodeGeometry& g);
     void computeXorCpuLong (const CodeGeometry& g);
     // Перебор одного чанка на процессоре; false — прерван отменой.
@@ -236,31 +236,31 @@ private:
     bool xorChunkCpuShort(const CodeGeometry& g, quint64 r, const LayerSlice& s);
     bool xorChunkCpuLong (const CodeGeometry& g, quint64 r, const LayerSlice& s, quint64 masksPerThread);
     // Итоговая копия спектра с видеокарты в h_spectrum.
-    void copySpectrumFromDevice(int numOfCols);
+    void copySpectrumFromDevice(int cols);
     // Случайный поиск по информационным множествам, CPU и GPU.
-    void computeLeon          (const CodeGeometry& g);
+    void computeLeon   (const CodeGeometry& g);
     // Код произведения: низ спектра по компонентам.
-    void computeProduct       (const CodeGeometry& g);
-    // Компонента произведения: спектр до weightUpTo и слова до него же.
-    // Маленькую перебирает целиком; большую считает вложенный Worker —
-    // Брауэром–Циммерманом, если слова не нужны (сертификат, только счёт),
-    // или случайным поиском, если нужны (список слов, но без гарантии).
+    void computeProduct(const CodeGeometry& g);
     // Каким алгоритмом считать компоненту произведения: по оценке числа
     // слов перебора — полный перебор (Грей по k или дуальный по n − k),
     // Брауэр–Циммерман до предела или стохастический поиск, если нужны
     // списки слов. Возвращает алгоритм и оценку в словах.
     struct ComponentPlan { ComputationSettings::Algorithm algorithm; double words; QString what; };
     ComponentPlan planComponent(const QStringList& rows, int weightUpTo, bool wantWords) const;
+    // Компонента произведения: спектр до weightUpTo и слова до него же.
+    // Маленькую перебирает целиком; большую считает вложенный Worker —
+    // Брауэром–Циммерманом, если слова не нужны (сертификат, только счёт),
+    // или случайным поиском, если нужны (список слов, но без гарантии).
     Product::Component analyzeComponent(const QStringList& rows, int weightUpTo,
                                         const QString& label, bool wantWords);
     // Матрица-ключ автосохранения: у произведения обе компоненты подряд.
     QStringList autosaveKeyMatrix() const;
 
     /* Функции, посылающие сигнал для обновления интерфейса */
-    void updateSpectrum(int numOfCols);
+    void updateSpectrum(int cols);
     // Отправить в интерфейс спектр, лежащий по указателю: снимки для показа
     // берутся из кольца, а не из h_spectrum.
-    void updateSpectrumFrom(const quint64* spectrum, int numOfCols);
+    void updateSpectrumFrom(const quint64* spectrum, int cols);
     // Отправить спектр в окно; при замере потолка — только сосчитать.
     void publishSpectrum(const SpectrumCounts& shown);
 
@@ -268,10 +268,10 @@ private:
     /* Функции для работы с чекпоинтами */
     // finished — расчёт дошёл до конца. Такая запись не удаляется: по ней
     // потом можно досчитать спектр до большего числа строк, а не с нуля.
-    void    makeCheckpoint(int numOfCols, bool finished = false);
+    void    makeCheckpoint(int cols, bool finished = false);
     // Чекпоинт по ходу перебора. На видеокарте спектр сначала забирается
     // после потока ядер (plan.stream), на процессоре он уже в h_spectrum.
-    void    saveCheckpoint(const ChunkPlan& plan, int numOfCols,
+    void    saveCheckpoint(const ChunkPlan& plan, int cols,
                            quint64 rOffset, quint64 chunkOffset);
     // Останавливает расчёт, если задан порог из setCheckpointOpsPolicy.
     void    stopIfOpsLimitReached();
@@ -353,5 +353,3 @@ private:
     // Освобождает всё, что выделено под расчёт.
     void releaseResources();
 };
-
-#endif // WORKER_H

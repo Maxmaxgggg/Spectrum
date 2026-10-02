@@ -34,7 +34,7 @@ static LayerSlice sliceLayer(const CodeGeometry& g, quint64 perSet,
     const quint64 set = perSet ? layerOffset / perSet : 0;
     slice.offset        = layerOffset - set * perSet;
     slice.size          = std::min(chunkSize, perSet - slice.offset);
-    slice.slot.rowBase  = int(set * g.numOfRows);
+    slice.slot.rowBase  = int(set * g.rows);
     slice.slot.setIndex = int(set);
     slice.slot.setCount = g.setCount;
     return slice;
@@ -42,7 +42,7 @@ static LayerSlice sliceLayer(const CodeGeometry& g, quint64 perSet,
 
 quint64 Worker::totalLayerOps(const CodeGeometry& g) const
 {
-    const quint64 perSet = totalCombinations(g.numOfRows, g.maxRows);
+    const quint64 perSet = totalCombinations(g.rows, g.maxRows);
     if (g.setCount <= 1)
         return perSet;
     if (perSet > std::numeric_limits<quint64>::max() / quint64(g.setCount))
@@ -50,7 +50,7 @@ quint64 Worker::totalLayerOps(const CodeGeometry& g) const
     return perSet * quint64(g.setCount);
 }
 
-// Полное число кодовых слов при переборе до maxComb строк включительно.
+// Полное число кодовых слов при переборе до maxRows строк включительно.
 //
 // Раньше считалось инкрементально: comb = comb * (k - r + 1) / r. Формула
 // точная в математике, но промежуточное произведение вылезает за uint64 куда
@@ -61,14 +61,14 @@ quint64 Worker::totalLayerOps(const CodeGeometry& g) const
 // Теперь складываются готовые значения из BinomTable: она строится по
 // треугольнику Паскаля, без промежуточных произведений, и сама проверяет
 // переполнение.
-quint64 Worker::totalCombinations(quint64 k, quint64 maxComb) const
+quint64 Worker::totalCombinations(quint64 k, quint64 maxRows) const
 {
-    if (maxComb > k) maxComb = k;
+    if (maxRows > k) maxRows = k;
 
     quint64 sum = 0;
-    for (quint64 r = 0; r <= maxComb; ++r) {
+    for (quint64 r = 0; r <= maxRows; ++r) {
         const quint64 term = m_binomTable(k, r);
-        // Сама сумма тоже может не поместиться: при k = 66 и maxComb = 33
+        // Сама сумма тоже может не поместиться: при k = 66 и maxRows = 33
         // это уже больше 2^65. Такой расчёт всё равно занял бы столетия,
         // поэтому просто упираемся в потолок, а не выдаём мусор.
         if (sum > std::numeric_limits<quint64>::max() - term)
@@ -123,17 +123,17 @@ void Worker::reportProgress()
 // Ошибка CUDA здесь — исключение, как и везде: раньше чекпоинт сообщал о ней
 // сигналом и возвращал false, путь перебора выходил, и расчёт рапортовал об
 // успехе с недосчитанным спектром.
-void Worker::saveCheckpoint(const ChunkPlan& plan, int numOfCols, quint64 rOffset, quint64 chunkOffset)
+void Worker::saveCheckpoint(const ChunkPlan& plan, int cols, quint64 rOffset, quint64 chunkOffset)
 {
     m_progress.markCheckpoint();
     if (plan.stream) {
         CUDA_CALL(cudaStreamSynchronize(plan.stream));
-        CUDA_CALL(cudaMemcpy(m_buffers->h_spectrum.get(), m_buffers->d_spectrum.get(), size_t(numOfCols + 1) * sizeof(quint64),
+        CUDA_CALL(cudaMemcpy(m_buffers->h_spectrum.get(), m_buffers->d_spectrum.get(), size_t(cols + 1) * sizeof(quint64),
                              cudaMemcpyDeviceToHost));
     }
     m_runState.rOffset     = rOffset;
     m_runState.chunkOffset = chunkOffset;
-    makeCheckpoint(numOfCols);
+    makeCheckpoint(cols);
     stopIfOpsLimitReached();
 }
 
@@ -153,7 +153,7 @@ void Worker::runChunks(const CodeGeometry& g, const ChunkPlan& plan)
     if (!m_probeMode)
         emit progressChanged(m_progress.percent());
 
-    const int cols = int(g.numOfCols);
+    const int cols = int(g.cols);
     // У кода Грея слой один: rOffset там не используется (а проба потолка
     // обновления, наоборот, ставит его на последний слой).
     const quint64 firstLayer = plan.layered ? m_runState.rOffset : 0;
@@ -228,12 +228,12 @@ bool Worker::waitWhilePaused()
     return !m_cancelled.load();
 }
 
-void Worker::updateSpectrum(int numOfCols)
+void Worker::updateSpectrum(int cols)
 {
-    updateSpectrumFrom(m_buffers->h_spectrum.get(), numOfCols);
+    updateSpectrumFrom(m_buffers->h_spectrum.get(), cols);
 }
 
-void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
+void Worker::updateSpectrumFrom(const quint64* spectrum, int cols)
 {
     if (!spectrum)
         return;
@@ -246,9 +246,9 @@ void Worker::updateSpectrumFrom(const quint64* spectrum, int numOfCols)
 
     // Веса за пределом заказа не показываются вовсе: спектр остаётся той же
     // длины, но там нули.
-    const int shownUpTo = m_displayUpToWeight >= 0 ? std::min(numOfCols, m_displayUpToWeight) : numOfCols;
+    const int shownUpTo = m_displayUpToWeight >= 0 ? std::min(cols, m_displayUpToWeight) : cols;
     SpectrumCounts shown;
-    shown.counts.resize(numOfCols + 1);
+    shown.counts.resize(cols + 1);
     for (int w = 0; w <= shownUpTo; ++w)
         shown.counts[w] = spectrum[w];
     publishSpectrum(shown);
@@ -264,31 +264,31 @@ void Worker::publishSpectrum(const SpectrumCounts& shown)
         emit spectrumUpdated(shown);
 }
 
-void Worker::makeCheckpoint(int numOfCols, bool finished)
+void Worker::makeCheckpoint(int cols, bool finished)
 {
-    m_runState.spectrum.resize(numOfCols + 1);
-    for (int i = 0; i < numOfCols + 1; i++)
+    m_runState.spectrum.resize(cols + 1);
+    for (int i = 0; i < cols + 1; i++)
         m_runState.spectrum[i] = m_buffers->h_spectrum[i];
 
     AutosaveRecord record;
-    record.algorithm = m_settings.algorithmType;
+    record.algorithm = m_settings.algorithm;
     record.enumType  = m_settings.enumType;
     record.maxRows   = m_settings.maxRows;
     record.finished  = finished;
     // У Брауэра–Циммермана глубина перебора выведена из веса, а продолжать
     // расчёт можно только по тем же множествам — они уходят в запись.
-    if (m_settings.algorithmType == ComputationSettings::BrouwerZimmermann) {
+    if (m_settings.algorithm == ComputationSettings::BrouwerZimmermann) {
         record.maxRows  = m_activeMaxRows;
         record.bzWeight = m_settings.bzWeight;
         record.infoSets = m_activeInfoSets;
     }
-    if (m_settings.algorithmType == ComputationSettings::RandomInfoSets) {
+    if (m_settings.algorithm == ComputationSettings::RandomInfoSets) {
         record.maxRows          = m_activeMaxRows;
         record.leonWeight       = m_settings.leonWeight;
         record.leonMissExponent = m_settings.leonMissExponent;
         record.leonTrials       = m_activeTrials;
     }
-    if (m_settings.algorithmType == ComputationSettings::ProductCode) {
+    if (m_settings.algorithm == ComputationSettings::ProductCode) {
         record.productWeight    = m_settings.productWeight;
         record.productRank      = m_settings.productRank;
         record.productRows1     = m_settings.matrix.size();
@@ -313,7 +313,7 @@ void Worker::setAutosaveRoot(const QString& dir)
 
 QStringList Worker::autosaveKeyMatrix() const
 {
-    if (m_settings.algorithmType == ComputationSettings::ProductCode)
+    if (m_settings.algorithm == ComputationSettings::ProductCode)
         return m_settings.matrix + m_settings.matrix2;
     return m_settings.matrix;
 }
@@ -361,7 +361,7 @@ void Worker::measureUpdateRate()
         if (g.maxRows > 0)
             m_runState.rOffset = g.maxRows;
 
-        omp_set_num_threads(m_settings.compDevSet.threadsCpu);
+        omp_set_num_threads(m_settings.deviceSettings.threadsCpu);
         prepareBuffers(g);
         // Подбор сетки нужен и здесь: он выбирает сетку покрупнее, а от неё
         // напрямую зависит длина чанка и, значит, потолок. Замер без подбора
@@ -405,43 +405,43 @@ CodeGeometry Worker::describeTask() const
     g.matrix = m_settings.matrix;
     // Для дуального кода перебор идёт по проверочной матрице, а не по той,
     // что ввёл пользователь.
-    if (m_settings.algorithmType == ComputationSettings::DualCode)
+    if (m_settings.algorithm == ComputationSettings::DualCode)
         g.matrix = generatorToParity(g.matrix);
 
-    g.numOfRows    = quint64(g.matrix.length());
-    g.numOfCols    = quint64(g.matrix[0].length());
-    g.wordsPerRow  = (g.numOfCols + 63) / 64;
-    g.matrixWords  = g.numOfRows * g.wordsPerRow;
-    g.spectrumSize = g.numOfCols + 1;
+    g.rows         = quint64(g.matrix.length());
+    g.cols         = quint64(g.matrix[0].length());
+    g.wordsPerRow  = (g.cols + 63) / 64;
+    g.matrixWords  = g.rows * g.wordsPerRow;
+    g.spectrumSize = g.cols + 1;
     g.maxRows      = quint64(m_settings.maxRows);
 
-    g.blocksGpu  = m_settings.compDevSet.blocksGpu;
-    g.threadsGpu = m_settings.compDevSet.threadsGpu;
-    g.useGpu     = m_settings.compDev == ComputationSettings::ComputeDevice::Gpu;
-    g.isLongCode = g.numOfRows > Constants::MAX_SHORT_CODE_LENGTH;
+    g.blocksGpu  = m_settings.deviceSettings.blocksGpu;
+    g.threadsGpu = m_settings.deviceSettings.threadsGpu;
+    g.useGpu     = m_settings.device == ComputationSettings::ComputeDevice::Gpu;
+    g.isLongCode = g.rows > Constants::MAX_SHORT_CODE_LENGTH;
 
-    if (m_settings.algorithmType == ComputationSettings::BrouwerZimmermann)
+    if (m_settings.algorithm == ComputationSettings::BrouwerZimmermann)
         planInfoSets(g);
 
-    if (m_settings.algorithmType == ComputationSettings::ProductCode) {
+    if (m_settings.algorithm == ComputationSettings::ProductCode) {
         // Самого произведения в памяти нет — только его размеры, под спектр.
         if (m_settings.matrix2.isEmpty())
             throw std::invalid_argument("код-произведение: не задана вторая компонента");
         const quint64 n1 = quint64(m_settings.matrix.first().length());
         const quint64 n2 = quint64(m_settings.matrix2.first().length());
-        g.numOfRows    = quint64(m_settings.matrix.size()) * quint64(m_settings.matrix2.size());
-        g.numOfCols    = n1 * n2;
-        g.wordsPerRow  = (g.numOfCols + 63) / 64;
+        g.rows         = quint64(m_settings.matrix.size()) * quint64(m_settings.matrix2.size());
+        g.cols         = n1 * n2;
+        g.wordsPerRow  = (g.cols + 63) / 64;
         g.matrixWords  = 0;
-        g.spectrumSize = g.numOfCols + 1;
+        g.spectrumSize = g.cols + 1;
         g.useGpu       = false;
         g.isLongCode   = true;
     }
 
-    if (m_settings.algorithmType == ComputationSettings::RandomInfoSets) {
+    if (m_settings.algorithm == ComputationSettings::RandomInfoSets) {
         // На видеокарте короткая матрица живёт в разделяемой памяти блока,
         // длинная — в глобальной; ядро умеет строки до MAX_BLOCKWORDS слов.
-        if (g.useGpu && leonSharedBytes(int(g.numOfRows), int(g.numOfCols), int(g.wordsPerRow)) == 0)
+        if (g.useGpu && leonSharedBytes(int(g.rows), int(g.cols), int(g.wordsPerRow)) == 0)
             throw std::invalid_argument(
                 "стохастический поиск на видеокарте: строка длиннее, чем умеет ядро — выберите CPU");
         // Профиль ключей окна — по самой матрице, и только если окно
@@ -449,7 +449,7 @@ CodeGeometry Worker::describeTask() const
         const bool windowAllowed = g.useGpu ? m_windowPolicy.gpu : m_windowPolicy.cpu;
         const Leon::SternProfile profile = windowAllowed ? Leon::sternProfile(g.matrix)
                                                          : Leon::SternProfile();
-        const Leon::Plan plan = Leon::plan(int(g.numOfCols), int(g.numOfRows),
+        const Leon::Plan plan = Leon::plan(int(g.cols), int(g.rows),
                                            m_settings.leonWeight, m_settings.leonMissProbability(),
                                            g.useGpu, &profile, m_windowPolicy);
         g.maxRows           = quint64(plan.rows);
@@ -469,8 +469,8 @@ void Worker::planInfoSets(CodeGeometry& g) const
 {
     int words = 0;
     const std::vector<quint64> packed = InfoSets::packRows(g.matrix, words);
-    const int rows = int(g.numOfRows);
-    const int cols = int(g.numOfCols);
+    const int rows = int(g.rows);
+    const int cols = int(g.cols);
 
     // Все матрицы должны поместиться в константную память видеокарты: у
     // короткого пути другого места для них нет. Предел один для обоих
@@ -530,10 +530,10 @@ void Worker::prepareBuffers(const CodeGeometry& g)
         std::copy(g.setRows.begin(), g.setRows.end(), m_buffers->h_matrix.get());
     }
     else {
-        for (quint64 i = 0; i < g.numOfRows; ++i) {
+        for (quint64 i = 0; i < g.rows; ++i) {
             quint64* rowData = m_buffers->h_matrix.get() + i * g.wordsPerRow;
             const QString& row = g.matrix[int(i)];
-            for (quint64 j = 0; j < g.numOfCols; ++j)
+            for (quint64 j = 0; j < g.cols; ++j)
                 if (row.at(int(j)) == QLatin1Char('1'))
                     rowData[j / 64] |= (1ull << (j % 64));
         }
@@ -543,7 +543,7 @@ void Worker::prepareBuffers(const CodeGeometry& g)
     if (m_settings.layered()) {
         m_binomTable = g.isLongCode
             // Для длинных кодов строим только часть таблицы
-            ? BinomTable(g.numOfRows, g.maxRows)
+            ? BinomTable(g.rows, g.maxRows)
             // Для коротких — всю. Не оптимально, но работает.
             : BinomTable(Constants::MAX_SHORT_CODE_LENGTH, Constants::MAX_SHORT_CODE_LENGTH);
     }
@@ -605,12 +605,12 @@ void Worker::tuneGrid(CodeGeometry& g)
         return;
     // У случайного поиска своё ядро и своя сетка — блок на попытку; подбор
     // здесь мерил бы чужое ядро, да ещё по пустой таблице биномов.
-    if (m_settings.algorithmType == ComputationSettings::RandomInfoSets)
+    if (m_settings.algorithm == ComputationSettings::RandomInfoSets)
         return;
 
     GridTuneTask task;
-    task.numOfCols   = int(g.numOfCols);
-    task.numOfRows   = int(g.numOfRows);
+    task.cols        = int(g.cols);
+    task.rows        = int(g.rows);
     task.wordsPerRow = int(g.wordsPerRow);
     task.binomTable  = m_buffers->d_binomTable.get();
     task.chunkSize   = g.chunkSize;
@@ -634,18 +634,18 @@ void Worker::tuneGrid(CodeGeometry& g)
     // маски нумеруются сплошь.
     quint64 layerRank = 0;
     if (task.kernel == GridTuneTask::Kernel::Gray) {
-        task.availableMasks = 1ULL << g.numOfRows;
+        task.availableMasks = 1ULL << g.rows;
         task.totalMasks     = task.availableMasks;
     }
     else {
         // Меряем на самом населённом слое: там расчёт и проведёт почти всё
         // время, а стоимость маски зависит от числа складываемых строк.
         quint64 bestCount = 0;
-        for (quint64 r = 0; r <= g.maxRows && r <= g.numOfRows; ++r) {
-            const quint64 count = m_binomTable(g.numOfRows, r);
+        for (quint64 r = 0; r <= g.maxRows && r <= g.rows; ++r) {
+            const quint64 count = m_binomTable(g.rows, r);
             if (count > bestCount) {
-                bestCount      = count;
-                task.numOfOnes = r;
+                bestCount = count;
+                task.r    = r;
             }
         }
         task.availableMasks = bestCount;
@@ -681,8 +681,8 @@ void Worker::tuneGrid(CodeGeometry& g)
         d_tuneSlots.allocate(slotCount * Constants::MAX_POSITIONS);
 
         int16_t* const host = h_tuneSlots.get();
-        const int rows = int(g.numOfRows);
-        const int ones = int(task.numOfOnes);
+        const int rows = int(g.rows);
+        const int ones = int(task.r);
 
         #pragma omp parallel for schedule(static)
         for (long long i = 0; i < (long long)slotCount; ++i) {
@@ -715,7 +715,7 @@ void Worker::dispatchComputation(const CodeGeometry& g)
 {
     // Дуальный код считается по проверочной матрице тем же кодом Грея
     const bool gray = !m_settings.layered()
-                   && m_settings.algorithmType != ComputationSettings::RandomInfoSets;
+                   && m_settings.algorithm != ComputationSettings::RandomInfoSets;
 
     // Код Грея перебирает 2^k масок в одном 64-битном слове, поэтому длиннее
     // 63 строк не бывает. Раньше это проверял только диалог настроек, а прямой
@@ -724,7 +724,7 @@ void Worker::dispatchComputation(const CodeGeometry& g)
         throw std::invalid_argument(
             "код Грея неприменим: больше 63 строк не помещается в маску");
 
-    if (m_settings.algorithmType == ComputationSettings::RandomInfoSets)
+    if (m_settings.algorithm == ComputationSettings::RandomInfoSets)
         computeLeon(g);
     else if (gray)
         g.useGpu ? computeGrayGpu(g)
@@ -744,14 +744,14 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
         initializeRunState(LoadMode::Reset);
         emit finished(Constants::ERROR_OCCURRED);
         emit progressChanged(0);
-        updateSpectrum(int(g.numOfCols));
+        updateSpectrum(int(g.cols));
         releaseResources();
         return;
     }
 
     // Случайный поиск копит спектр на хосте, d_spectrum у него пустой —
     // забирать оттуда нечего, это затёрло бы найденное нулями.
-    if (g.useGpu && m_settings.algorithmType != ComputationSettings::RandomInfoSets) {
+    if (g.useGpu && m_settings.algorithm != ComputationSettings::RandomInfoSets) {
         CUDA_CALL(cudaDeviceSynchronize());
         CUDA_CALL(cudaMemcpy(m_buffers->h_spectrum.get(), m_buffers->d_spectrum.get(),
                              g.spectrumSize * sizeof(quint64), cudaMemcpyDeviceToHost));
@@ -766,8 +766,8 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
         m_runState.rOffset     = g.maxRows + 1;
         m_runState.chunkOffset = 0;
     }
-    else if (m_settings.algorithmType == ComputationSettings::RandomInfoSets
-             || m_settings.algorithmType == ComputationSettings::ProductCode) {
+    else if (m_settings.algorithm == ComputationSettings::RandomInfoSets
+             || m_settings.algorithm == ComputationSettings::ProductCode) {
         // Такая запись не продолжается — хранится только итог.
         m_runState.rOffset     = 0;
         m_runState.chunkOffset = 0;
@@ -775,35 +775,35 @@ void Worker::finishComputation(const CodeGeometry& g, steady_clock::time_point s
     else {
         // У кода Грея слоёв нет: пройденным считается весь диапазон масок.
         m_runState.rOffset     = 0;
-        m_runState.chunkOffset = 1ULL << g.numOfRows;
+        m_runState.chunkOffset = 1ULL << g.rows;
     }
     m_runState.doneOps    = m_progress.doneOps();
     m_runState.elapsedSec = duration_cast<seconds>(steady_clock::now() - startedAt).count();
 
     // Пишется до преобразования Мак-Вильямс: в записи должен лежать сырой
     // спектр перебираемой матрицы, с него и продолжают.
-    makeCheckpoint(int(g.numOfCols), true);
+    makeCheckpoint(int(g.cols), true);
 
     // Дуальный расчёт даёт спектр проверочной матрицы — исходный получается
     // из него преобразованием Мак-Вильямс. Считается один раз: из него и
     // итог, и то, что видит пользователь.
-    const bool dual = m_settings.algorithmType == ComputationSettings::Algorithm::DualCode;
+    const bool dual = m_settings.algorithm == ComputationSettings::Algorithm::DualCode;
     const std::vector<mpz_class> original = dual
-        ? macWilliams(m_runState.spectrum.constData(), int(g.numOfCols), int(g.numOfRows))
+        ? macWilliams(m_runState.spectrum.constData(), int(g.cols), int(g.rows))
         : std::vector<mpz_class>();
 
     // Итог — на случай, если этот расчёт вложенный (компонента произведения).
     m_finalSpectrum  = dual ? saturatedCounts(original) : m_runState.spectrum;
     m_finalExactUpTo = g.guaranteedBelow > 0 ? g.guaranteedBelow - 1
-                     : m_settings.algorithmType == ComputationSettings::ProductCode ? m_productExactUpTo
-                     : int(g.numOfCols);
+                     : m_settings.algorithm == ComputationSettings::ProductCode ? m_productExactUpTo
+                     : int(g.cols);
 
     initializeRunState(LoadMode::Reset);
 
     if (dual)
         publishSpectrum(spectrumCounts(original));
     else
-        updateSpectrum(int(g.numOfCols));
+        updateSpectrum(int(g.cols));
 
     // Последняя оценка — по итогу, а не по последнему промежуточному
     // замеру: иначе в панели остаётся «перебрано 47,6 из 48,0 млрд,
@@ -824,7 +824,7 @@ void Worker::computeSpectrumImpl()
     m_activeInfoSets = g.setColumns;
     m_activeMaxRows  = int(g.maxRows);
     m_activeTrials   = 0;
-    m_displayUpToWeight = m_settings.algorithmType == ComputationSettings::BrouwerZimmermann
+    m_displayUpToWeight = m_settings.algorithm == ComputationSettings::BrouwerZimmermann
                           ? m_settings.bzWeight : -1;
     if (g.guaranteedBelow > 0)
         emit planReady(g.setCount, int(g.maxRows), g.guaranteedBelow - 1);
@@ -833,20 +833,20 @@ void Worker::computeSpectrumImpl()
     if (quint64(m_runState.spectrum.size()) != g.spectrumSize)
         m_runState.spectrum.resize(int(g.spectrumSize));
 
-    omp_set_num_threads(m_settings.compDevSet.threadsCpu);
+    omp_set_num_threads(m_settings.deviceSettings.threadsCpu);
 
     // Частоты обновления из настроек. Сам отсчёт запускает вычислительная
     // функция: только она знает общее число операций.
     m_progress.setIntervals(
-        std::chrono::milliseconds{ m_settings.timeIntSet.updateSpectrumInterval },
-        std::chrono::seconds{ m_settings.timeIntSet.saveSpectrumInterval });
+        std::chrono::milliseconds{ m_settings.intervals.updateSpectrumInterval },
+        std::chrono::seconds{ m_settings.intervals.saveSpectrumInterval });
     m_progress.setOpsCheckpoint(m_checkpointEveryOps);
 
     const auto startedAt = steady_clock::now() - std::chrono::seconds(m_runState.elapsedSec);
 
     // Код произведения не перебирает собственную матрицу: ни буферов, ни
     // сетки ему не нужно, только спектр на хосте.
-    if (m_settings.algorithmType == ComputationSettings::ProductCode) {
+    if (m_settings.algorithm == ComputationSettings::ProductCode) {
         m_buffers->h_spectrum.allocate(g.spectrumSize, HostBuffer<quint64>::Kind::Paged);
         m_buffers->h_spectrum.fillZero();
         computeProduct(g);
@@ -928,8 +928,8 @@ void Worker::setCheckpointOpsPolicy(quint64 everyOps, quint64 stopAfter)
     m_stopAfterOps       = stopAfter;
 }
 
-void Worker::setSettings(const ComputationSettings& newSettings) {
-    m_settings = newSettings;
+void Worker::setSettings(const ComputationSettings& settings) {
+    m_settings = settings;
 }
 
 void Worker::initializeRunState(LoadMode lm)
@@ -947,7 +947,7 @@ void Worker::initializeRunState(LoadMode lm)
     }
     else {
         AutosaveRecord record;
-        if (!m_autosave.load(m_settings.matrix, m_settings.algorithmType, record)
+        if (!m_autosave.load(m_settings.matrix, m_settings.algorithm, record)
             || !canResume(record, m_settings)) {
             initializeRunState(LoadMode::Reset);
             return;

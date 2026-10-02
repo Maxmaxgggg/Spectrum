@@ -41,7 +41,7 @@
          </property>
          <layout class="QHBoxLayout" name="codeKindLayout">
           <item>
-           <widget class="QRadioButton" name="singleCodeRB">
+           <widget class="QRadioButton" name="singleCodeRBN">
             <property name="toolTip">
              <string>Код задан одной порождающей матрицей — панель «Матрица 1»</string>
             </property>
@@ -54,7 +54,7 @@
            </widget>
           </item>
           <item>
-           <widget class="QRadioButton" name="productCodeRB">
+           <widget class="QRadioButton" name="productCodeRBN">
             <property name="toolTip">
              <string>Код-произведение C1 ⊗ C2 по двум компонентам: «Матрица 1» и «Матрица 2». Низ спектра до границы Толхёйзена по спектрам компонент, без построения самого произведения</string>
             </property>
@@ -75,7 +75,7 @@
           <item>
            <layout class="QHBoxLayout" name="enumTypeRowLayout">
             <item>
-             <widget class="QRadioButton" name="fullEnumRB">
+             <widget class="QRadioButton" name="fullEnumRBN">
               <property name="toolTip">
                <string>Все 2^k слов — весь спектр целиком. Только для кодов до 63 строк</string>
               </property>
@@ -88,7 +88,7 @@
              </widget>
             </item>
             <item>
-             <widget class="QRadioButton" name="partialEnumRB">
+             <widget class="QRadioButton" name="partialEnumRBN">
               <property name="toolTip">
                <string>Только слова до заданного веса — низ спектра</string>
               </property>
@@ -155,7 +155,7 @@
           <item>
            <layout class="QHBoxLayout" name="fullAlgorithmLayout">
             <item>
-             <widget class="QRadioButton" name="grayCodeRB">
+             <widget class="QRadioButton" name="grayCodeRBN">
               <property name="toolTip">
                <string>Соседние слова отличаются одной строкой — один XOR на слово. До 63 строк</string>
               </property>
@@ -168,7 +168,7 @@
              </widget>
             </item>
             <item>
-             <widget class="QRadioButton" name="dualCodeRB">
+             <widget class="QRadioButton" name="dualCodeRBN">
               <property name="toolTip">
                <string>Перебирается проверочная матрица (n − k строк), спектр получается преобразованием Мак-Вильямс. Для кодов высокой скорости</string>
               </property>
@@ -182,7 +182,7 @@
           <item>
            <layout class="QHBoxLayout" name="partialAlgorithmLayout">
             <item>
-             <widget class="QRadioButton" name="brouwerZimmermannRB">
+             <widget class="QRadioButton" name="brouwerZimmermannRBN">
               <property name="toolTip">
                <string>Низ спектра с гарантией: все слова до заданного веса — точно. Время растёт экспоненциально с весом</string>
               </property>
@@ -192,7 +192,7 @@
              </widget>
             </item>
             <item>
-             <widget class="QRadioButton" name="randomInfoSetsRB">
+             <widget class="QRadioButton" name="randomInfoSetsRBN">
               <property name="toolTip">
                <string>Без гарантии, но на порядки глубже и быстрее: тысячи случайных информационных множеств с мелким перебором в каждом. Пропуск слова — событие заданной малой вероятности</string>
               </property>
@@ -361,7 +361,7 @@
          </property>
          <layout class="QHBoxLayout" name="horizontalLayout_2">
           <item>
-           <widget class="QRadioButton" name="cpuRB">
+           <widget class="QRadioButton" name="cpuRBN">
             <property name="text">
              <string>CPU</string>
             </property>
@@ -371,7 +371,7 @@
            </widget>
           </item>
           <item>
-           <widget class="QRadioButton" name="gpuRB">
+           <widget class="QRadioButton" name="gpuRBN">
             <property name="text">
              <string>GPU</string>
             </property>
@@ -495,7 +495,7 @@
           <item>
            <layout class="QHBoxLayout" name="horizontalLayout_4">
             <item>
-             <widget class="QLabel" name="saveSpectrumInteravlLBL">
+             <widget class="QLabel" name="saveSpectrumIntervalLBL">
               <property name="text">
                <string>Интервал сохранения спектра</string>
               </property>

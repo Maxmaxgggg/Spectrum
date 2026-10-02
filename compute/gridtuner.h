@@ -31,13 +31,13 @@ struct GridTuneTask
 
     Kernel kernel = Kernel::XorShort;
 
-    int numOfCols   = 0;
-    int numOfRows   = 0;
+    int cols        = 0;
+    int rows        = 0;
     int wordsPerRow = 0;
 
     // Число единиц в маске, на котором идёт замер. Для кода Грея не нужно:
     // он перебирает маски сплошь, без разбиения по весу.
-    uint64_t numOfOnes = 0;
+    uint64_t r = 0;
     // Сколько масок в этом слое (для Грея — всего). Замер не должен выйти
     // за границу: за ней ядро считает мусор.
     uint64_t availableMasks = 0;

@@ -41,8 +41,8 @@ void Worker::computeGrayCpu(const CodeGeometry& g)
 {
     ChunkPlan plan;
     plan.layered     = false;
-    plan.totalOps    = 1ULL << g.numOfRows;
-    plan.layerSize   = [&g](quint64) { return quint64(1) << g.numOfRows; };
+    plan.totalOps    = 1ULL << g.rows;
+    plan.layerSize   = [&g](quint64) { return quint64(1) << g.rows; };
     plan.chunkTarget = g.chunkSize;
     plan.run         = [this, &g](quint64, const LayerSlice& s) { return grayChunkCpu(g, s); };
     runChunks(g, plan);
@@ -53,11 +53,11 @@ void Worker::computeXorCpuShort(const CodeGeometry& g)
     ChunkPlan plan;
     plan.totalOps    = totalLayerOps(g);
     plan.lastLayer   = g.maxRows;
-    plan.layerSize   = [this, &g](quint64 r) { return m_binomTable(g.numOfRows, r); };
+    plan.layerSize   = [this, &g](quint64 r) { return m_binomTable(g.rows, r); };
     plan.chunkTarget = g.chunkSize;
     plan.run         = [this, &g](quint64 r, const LayerSlice& s) { return xorChunkCpuShort(g, r, s); };
     runChunks(g, plan);
-    updateSpectrum(int(g.numOfCols));
+    updateSpectrum(int(g.cols));
 }
 
 void Worker::computeXorCpuLong(const CodeGeometry& g)
@@ -68,20 +68,20 @@ void Worker::computeXorCpuLong(const CodeGeometry& g)
     ChunkPlan plan;
     plan.totalOps    = totalLayerOps(g);
     plan.lastLayer   = g.maxRows;
-    plan.layerSize   = [this, &g](quint64 r) { return m_binomTable(g.numOfRows, r); };
+    plan.layerSize   = [this, &g](quint64 r) { return m_binomTable(g.rows, r); };
     plan.chunkTarget = quint64(omp_get_max_threads()) * masksPerThread;
     plan.run         = [this, &g, masksPerThread](quint64 r, const LayerSlice& s) {
         return xorChunkCpuLong(g, r, s, masksPerThread);
     };
     runChunks(g, plan);
-    updateSpectrum(int(g.numOfCols));
+    updateSpectrum(int(g.cols));
 }
 
 // Код Грея: маски чанка [s.offset, s.offset + s.size) делятся между нитями
 // поровну, соседние маски отличаются одним битом — одна строка на шаг.
 bool Worker::grayChunkCpu(const CodeGeometry& g, const LayerSlice& s)
 {
-    const quint64 numOfCols   = g.numOfCols;
+    const quint64 cols        = g.cols;
     const quint64 wordsPerRow = g.wordsPerRow;
     const quint64 chunkStart  = s.offset;
     const quint64 chunkEnd    = s.offset + s.size;
@@ -89,7 +89,7 @@ bool Worker::grayChunkCpu(const CodeGeometry& g, const LayerSlice& s)
     // Код Грея номера i
     auto gray = [](quint64 i) -> quint64 { return i ^ (i >> 1); };
 
-    std::vector<quint64> chunkSpectrum(numOfCols + 1, 0);
+    std::vector<quint64> chunkSpectrum(cols + 1, 0);
 
     #pragma omp parallel
     {
@@ -103,7 +103,7 @@ bool Worker::grayChunkCpu(const CodeGeometry& g, const LayerSlice& s)
 
         if (startIdx < endIdx) {
             std::vector<quint64> localCodeword(wordsPerRow, 0);
-            std::vector<quint64> localSpectrum(numOfCols + 1, 0);
+            std::vector<quint64> localSpectrum(cols + 1, 0);
 
             // Первая маска нити: XOR всех её строк
             quint64 mask = gray(startIdx);
@@ -115,7 +115,7 @@ bool Worker::grayChunkCpu(const CodeGeometry& g, const LayerSlice& s)
             quint64 weight = 0;
             for (quint64 b = 0; b < wordsPerRow; ++b)
                 weight += BitOps::popcount64(localCodeword[b]);
-            if (weight <= numOfCols)
+            if (weight <= cols)
                 localSpectrum[weight]++;
 
             for (quint64 i = startIdx + 1; i < endIdx; ++i) {
@@ -137,13 +137,13 @@ bool Worker::grayChunkCpu(const CodeGeometry& g, const LayerSlice& s)
                 weight = 0;
                 for (quint64 b = 0; b < wordsPerRow; ++b)
                     weight += BitOps::popcount64(localCodeword[b]);
-                if (weight <= numOfCols)
+                if (weight <= cols)
                     localSpectrum[weight]++;
             }
 
             #pragma omp critical
             {
-                for (quint64 w = 0; w <= numOfCols; ++w)
+                for (quint64 w = 0; w <= cols; ++w)
                     chunkSpectrum[w] += localSpectrum[w];
             }
         }
@@ -155,7 +155,7 @@ bool Worker::grayChunkCpu(const CodeGeometry& g, const LayerSlice& s)
     // его видела хоть одна нить, видно и здесь.
     if (m_cancelled.load())
         return false;
-    for (quint64 w = 0; w <= numOfCols; ++w)
+    for (quint64 w = 0; w <= cols; ++w)
         m_buffers->h_spectrum[w] += chunkSpectrum[w];
     return true;
 }
@@ -175,11 +175,11 @@ bool Worker::grayChunkCpu(const CodeGeometry& g, const LayerSlice& s)
 // незаметна.
 bool Worker::xorChunkCpuShort(const CodeGeometry& g, quint64 r, const LayerSlice& s)
 {
-    const quint64 numOfRows   = g.numOfRows;
-    const quint64 numOfCols   = g.numOfCols;
+    const quint64 rows        = g.rows;
+    const quint64 cols        = g.cols;
     const quint64 wordsPerRow = g.wordsPerRow;
 
-    QVector<quint64> chunkSpectrum(numOfCols + 1, 0);
+    QVector<quint64> chunkSpectrum(cols + 1, 0);
 
     #pragma omp parallel
     {
@@ -191,20 +191,20 @@ bool Worker::xorChunkCpuShort(const CodeGeometry& g, quint64 r, const LayerSlice
         const quint64 endIdx    = std::min(startIdx + perThread, s.offset + s.size);
 
         if (startIdx < endIdx) {
-            QVector<quint64> localSpectrum(numOfCols + 1, 0);
+            QVector<quint64> localSpectrum(cols + 1, 0);
             QVector<quint64> localCodeword(wordsPerRow, 0);
 
             quint64 revMask = BitOps::reverseLowBits(
-                Combinations::unrankMask(unsigned(numOfRows), unsigned(r), endIdx - 1, m_binomTable),
-                int(numOfRows));
+                Combinations::unrankMask(unsigned(rows), unsigned(r), endIdx - 1, m_binomTable),
+                int(rows));
 
-            // Бит p развёрнутой маски отвечает строке numOfRows-1-p.
+            // Бит p развёрнутой маски отвечает строке rows-1-p.
             auto xorRows = [&](quint64 bits) {
                 while (bits) {
                     const int p = BitOps::lowestSetBit(bits);
                     bits &= (bits - 1);
                     const quint64* rowData =
-                        m_buffers->h_matrix.get() + (s.slot.rowBase + numOfRows - 1 - p) * wordsPerRow;
+                        m_buffers->h_matrix.get() + (s.slot.rowBase + rows - 1 - p) * wordsPerRow;
                     for (quint64 b = 0; b < wordsPerRow; ++b)
                         localCodeword[b] ^= rowData[b];
                 }
@@ -213,7 +213,7 @@ bool Worker::xorChunkCpuShort(const CodeGeometry& g, quint64 r, const LayerSlice
                 quint64 weight = 0;
                 for (quint64 b = 0; b < wordsPerRow; ++b)
                     weight += BitOps::popcount64(localCodeword[b]);
-                if (weight <= numOfCols
+                if (weight <= cols
                     && (g.setCount <= 1
                         || bzKeepHost(localCodeword.data(), g, int(r), s.slot.setIndex)))
                     localSpectrum[weight]++;
@@ -222,7 +222,7 @@ bool Worker::xorChunkCpuShort(const CodeGeometry& g, quint64 r, const LayerSlice
             xorRows(revMask);
             accumulate();
 
-            // При r = 0 и r = numOfRows сочетание одно, и цикл не выполняется —
+            // При r = 0 и r = rows сочетание одно, и цикл не выполняется —
             // gosperNext на нулевой маске звать нельзя.
             const quint64 count = endIdx - startIdx;
             for (quint64 i = 1; i < count; ++i) {
@@ -234,13 +234,13 @@ bool Worker::xorChunkCpuShort(const CodeGeometry& g, quint64 r, const LayerSlice
 
             #pragma omp critical
             {
-                for (quint64 w = 0; w <= numOfCols; ++w)
+                for (quint64 w = 0; w <= cols; ++w)
                     chunkSpectrum[w] += localSpectrum[w];
             }
         }
     }
 
-    for (quint64 w = 0; w <= numOfCols; ++w)
+    for (quint64 w = 0; w <= cols; ++w)
         m_buffers->h_spectrum[w] += chunkSpectrum[w];
     return true;
 }
@@ -252,8 +252,8 @@ bool Worker::xorChunkCpuShort(const CodeGeometry& g, quint64 r, const LayerSlice
 bool Worker::xorChunkCpuLong(const CodeGeometry& g, quint64 r, const LayerSlice& s,
                              quint64 masksPerThread)
 {
-    const quint64 numOfRows   = g.numOfRows;
-    const quint64 numOfCols   = g.numOfCols;
+    const quint64 rows        = g.rows;
+    const quint64 cols        = g.cols;
     const quint64 wordsPerRow = g.wordsPerRow;
     const quint64 chunkSize   = s.size;
     const int     numThreads  = omp_get_max_threads();
@@ -262,7 +262,7 @@ bool Worker::xorChunkCpuLong(const CodeGeometry& g, quint64 r, const LayerSlice&
     if (numStartMasks == 0)
         return true;
 
-    std::vector<std::vector<quint64>> threadSpectrum(numThreads, std::vector<quint64>(numOfCols + 1, 0ULL));
+    std::vector<std::vector<quint64>> threadSpectrum(numThreads, std::vector<quint64>(cols + 1, 0ULL));
 
     #pragma omp parallel
     {
@@ -290,7 +290,7 @@ bool Worker::xorChunkCpuLong(const CodeGeometry& g, quint64 r, const LayerSlice&
             quint64 weight = 0;
             for (size_t w = 0; w < size_t(wordsPerRow); ++w)
                 weight += BitOps::popcount64(codeword[w]);
-            if (weight <= numOfCols
+            if (weight <= cols
                 && (g.setCount <= 1 || bzKeepHost(codeword.data(), g, int(r), s.slot.setIndex)))
                 localSpectrum[size_t(weight)]++;
         };
@@ -310,7 +310,7 @@ bool Worker::xorChunkCpuLong(const CodeGeometry& g, quint64 r, const LayerSlice&
             const quint64 iters = std::min(masksPerThread, chunkSize - startRank);
 
             // Номер внутри своего множества
-            Combinations::unrankPositions(s.offset + startRank, int(numOfRows), int(r), a,
+            Combinations::unrankPositions(s.offset + startRank, int(rows), int(r), a,
                                           Constants::MAX_POSITIONS, m_binomTable);
             rebuild();
             accumulate();
@@ -327,7 +327,7 @@ bool Worker::xorChunkCpuLong(const CodeGeometry& g, quint64 r, const LayerSlice&
                     break;
 
                 std::copy(a, a + r, oldA);
-                if (!Combinations::nextPositions(a, int(r), int(numOfRows)))
+                if (!Combinations::nextPositions(a, int(r), int(rows)))
                     break;   // сочетания слоя кончились
 
                 int numChanged = 0;
@@ -353,7 +353,7 @@ bool Worker::xorChunkCpuLong(const CodeGeometry& g, quint64 r, const LayerSlice&
     if (m_cancelled.load())
         return false;
     for (int t = 0; t < numThreads; ++t)
-        for (quint64 w = 0; w <= numOfCols; ++w)
+        for (quint64 w = 0; w <= cols; ++w)
             m_buffers->h_spectrum[w] += threadSpectrum[size_t(t)][w];
     return true;
 }

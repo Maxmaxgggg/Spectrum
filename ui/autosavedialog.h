@@ -44,9 +44,9 @@ private:
 
     AutosaveStore* m_store = nullptr;
 
-    QTreeWidget* m_tree        = nullptr;
-    QLabel*      m_summary     = nullptr;
-    QPushButton* m_removeButton   = nullptr;
+    QTreeWidget* m_tree         = nullptr;
+    QLabel*      m_summary      = nullptr;
+    QPushButton* m_removeButton = nullptr;
     QPushButton* m_removeAllButton = nullptr;
     QPushButton* m_loadButton     = nullptr;
 };
