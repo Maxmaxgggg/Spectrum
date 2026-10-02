@@ -12,8 +12,6 @@
 
 namespace Product {
 
-int bruteForceMaxK = 28;
-
 namespace {
 
 // Ячейки профиля набора: для каждого ненулевого u — сколько позиций x, где
@@ -44,13 +42,13 @@ void cellsOf(const std::vector<const quint64*>& tuple, int words, std::vector<in
 // --------------------------------------------------------------- перебор
 
 Component bruteForce(const QStringList& rows, int wordsUpTo,
-                     const std::function<bool()>& cancelled, const Progress& progress)
+                     const std::function<bool()>& cancelled, const Progress& progress, int maxK)
 {
     Component c;
     c.k = rows.size();
     c.n = c.k > 0 ? rows.first().length() : 0;
     c.wordsUpTo = wordsUpTo;
-    if (c.k <= 0 || c.k > bruteForceMaxK || c.k > 62)
+    if (c.k <= 0 || c.k > maxK || c.k > 62)
         return c;
 
     const std::vector<quint64> packed = InfoSets::packRows(rows, c.wordsPerRow);

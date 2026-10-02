@@ -424,12 +424,7 @@ void MainWindow::setWorker()
         });
     }, Qt::QueuedConnection );
 
-    connect( this, static_cast<void (MainWindow::*)(const QJsonObject&)>( &MainWindow::sendSettingsToWorker ), workerPtr, &Worker::setSettings, Qt::QueuedConnection);
-
-
-    // DirectConnection для того, чтобы частоту обновления можно было изменять в реальном времени
-    //connect( this,            &MainWindow::refreshProgressbarValueChanged, workerPtr, &Worker::handleRefreshProgressbarValueChanged, Qt::DirectConnection );
-    //connect( this,            &MainWindow::refreshSpectrumValueChanged,    workerPtr, &Worker::handleRefreshSpectrumValueChanged,    Qt::DirectConnection );
+    connect( this,            &MainWindow::sendSettingsToWorker,       workerPtr, &Worker::setSettings,                           Qt::QueuedConnection );
 }
 
 void MainWindow::connectSettingsDialog()
@@ -446,7 +441,7 @@ void MainWindow::connectSettingsDialog()
     // Замер потолка обновления: короткий расчёт на настройках, которые сейчас
     // выставлены в диалоге, — не на тех, что подтверждены кнопкой.
     connect( settingsDialog, &SettingsDialog::measureUpdateRateRequested,
-        this, [this]( const QJsonObject& obj ) {
+        this, [this]( const ComputationSettings& requested ) {
             if (!workerPtr)
                 return;
             // Без матрицы пробе не с чем работать, а описание задачи на пустой
@@ -458,20 +453,20 @@ void MainWindow::connectSettingsDialog()
                 return;
             }
 
-            ComputationSettings probe = ComputationSettings::fromJson(obj);
+            ComputationSettings probe = requested;
             probe.matrix  = ui->matrixPTE->toStringList();
             probe.matrix2 = matrix2PTE->toStringList();
 
             workerThreadPtr->start();
             QMetaObject::invokeMethod(workerPtr, "setSettings", Qt::QueuedConnection,
-                                      Q_ARG(QJsonObject, probe.toJson()));
+                                      Q_ARG(ComputationSettings, probe));
             QMetaObject::invokeMethod(workerPtr, "measureUpdateRate", Qt::QueuedConnection);
         });
 
     connect( settingsDialog, &SettingsDialog::sendSettingsToWidget,
-        this, [this]( const QJsonObject& obj ) {
+        this, [this]( const ComputationSettings& fromDialog ) {
             const ComputationSettings::Algorithm before = settings.algorithmType;
-            settings = ComputationSettings::fromJson(obj);
+            settings = fromDialog;
             settings.matrix  = ui->matrixPTE->toStringList();
             settings.matrix2 = matrix2PTE->toStringList();
             spectrumPlot->setMaxBars(settings.maxPlotBars);
@@ -484,7 +479,7 @@ void MainWindow::connectSettingsDialog()
                 runState = RunState::Idle;
                 updateExecuteButton();
             }
-            MainWindow::sendSettingsToWorker(settings.toJson());
+            emit sendSettingsToWorker(settings);
 
             // Идущему расчёту настройки через очередь не доходят: воркер до
             // самого конца не возвращается в свой цикл событий. Живые интервалы
@@ -645,12 +640,6 @@ void MainWindow::on_exitPBN_clicked()
     qApp->exit();
 }
 
-void MainWindow::on_settingsPBN_clicked()
-{
-    settingsDialog->exec();
-    applySettings();
-}
-
 void MainWindow::on_cancelPBN_clicked()
 {
     if (workerPtr) {
@@ -677,11 +666,6 @@ void MainWindow::handleUpdateInfoPBR(int percent)
     ui->infoPBR->setValue(percent);
 
     taskbar->setPercent(percent);
-}
-
-void MainWindow::sendSettingsToWorker()
-{
-    MainWindow::sendSettingsToWorker(settings.toJson());
 }
 
 // Сетку показываем: иначе при включённом автоподборе непонятно, на чём

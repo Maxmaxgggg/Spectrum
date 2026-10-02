@@ -189,9 +189,6 @@ quint64 trialsForAll(int n, int k, int weight, int rows, double miss,
     return trialsForAll(n, k, weight, rows, 0, miss, foundByWeight);
 }
 
-bool windowEnabled    = true;
-bool gpuWindowEnabled = false;
-
 SternProfile sternProfile(const QStringList& matrix)
 {
     SternProfile profile;
@@ -248,7 +245,8 @@ SternProfile sternProfile(const QStringList& matrix)
     return profile;
 }
 
-Plan plan(int n, int k, int weight, double miss, bool gpu, const SternProfile* profile)
+Plan plan(int n, int k, int weight, double miss, bool gpu, const SternProfile* profile,
+          WindowPolicy window)
 {
     Plan best;
     double bestCost = 0.0;
@@ -269,7 +267,7 @@ Plan plan(int n, int k, int weight, double miss, bool gpu, const SternProfile* p
             bestCost           = cost;
         }
     }
-    if ((gpu && !gpuWindowEnabled) || !windowEnabled || !profile || profile->window <= 0)
+    if (!(gpu ? window.gpu : window.cpu) || !profile || profile->window <= 0)
         return best;
 
     // Окно Штерна–Дюмера (только процессор). Замер одного потока (мкс на

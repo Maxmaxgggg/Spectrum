@@ -171,6 +171,15 @@ public:
     // Печатать таблицу замеров подбора. Для режима --sweep в тестах.
     void setGridTuningVerbose(bool on);
 
+    // Где плану стохастического поиска можно брать окно Штерна–Дюмера
+    // (см. Leon::WindowPolicy). Тесты выключают его, чтобы сравнивать CPU и
+    // GPU слово в слово.
+    void setWindowPolicy(Leon::WindowPolicy policy) { windowPolicy = policy; }
+    // До какой размерности компоненту произведения перебирать целиком, а не
+    // вложенным расчётом. Тесты занижают порог, чтобы гонять вложенный
+    // расчёт на маленьких кодах.
+    void setProductBruteForceMaxK(int k) { productBruteForceMaxK = k; }
+
 public slots:
     void computeSpectrum( );
     // Замер потолка: сколько раз в секунду спектр реально успевает уйти в
@@ -184,7 +193,7 @@ public slots:
     //
     // Останавливается снаружи, вызовом cancel() по таймеру.
     void measureUpdateRate();
-    void setSettings( const QJsonObject& jsonSettings );
+    void setSettings( const ComputationSettings& newSettings );
     void initializeRunState(LoadMode lm);
 signals:
     // Сигнал для обновления progressbar-а
@@ -356,6 +365,8 @@ private:
     // См. setGridTuningThreshold
     double                      tuneThresholdSec   = 10.0;
     bool                        tuneVerbose        = false;
+    Leon::WindowPolicy          windowPolicy;
+    int                         productBruteForceMaxK = Product::kBruteForceMaxK;
 
     // Все ресурсы владеющие: освобождаются вместе с объектом, каким бы путём
     // ни завершился расчёт — успехом, отменой или исключением.

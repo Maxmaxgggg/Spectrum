@@ -67,13 +67,16 @@ struct Component
 // вызвавшего функцию, не чаще нескольких раз в секунду.
 using Progress = std::function<void(quint64 done, quint64 total)>;
 
+// До какой размерности компоненту выгодно перебирать целиком.
+constexpr int kBruteForceMaxK = 28;
+
 // Полный перебор компоненты кодом Грея: точный спектр и все ненулевые слова
-// веса не больше wordsUpTo. Годится при k до bruteForceMaxK.
+// веса не больше wordsUpTo. Годится при k до maxK (и не больше 62).
 // cancelled — опрос отмены; при отмене возвращает hasWords = false.
-extern int bruteForceMaxK;   // по умолчанию 28; тесты меняют
 Component bruteForce(const QStringList& rows, int wordsUpTo,
                      const std::function<bool()>& cancelled = {},
-                     const Progress& progress = {});
+                     const Progress& progress = {},
+                     int maxK = kBruteForceMaxK);
 
 // Спектр компоненты в объект без списка слов (для больших k, где спектр
 // посчитан другим способом).

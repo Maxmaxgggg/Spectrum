@@ -140,13 +140,13 @@ SettingsDialog::SettingsDialog(QWidget *parent)
         ui->measureRatePBN->setEnabled(false);
         ui->measureRatePBN->setText(tr("Замеряю…"));
         ui->updateRateHintLBL->setText(tr("Идёт пробный расчёт…"));
-        emit measureUpdateRateRequested(settings.toJson());
+        emit measureUpdateRateRequested(settings);
     });
 
     connect(ui->buttonBox, &QDialogButtonBox::accepted,
         this, [this]() {
             saveSettings();
-            emit sendSettingsToWidget(settings.toJson());
+            emit sendSettingsToWidget(settings);
             accept();
         });
     // Через QDialog::rejected, а не через кнопку: иначе закрытие крестиком или
@@ -155,7 +155,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     connect(ui->buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(this, &QDialog::rejected, this, [this]() {
         loadSettings();
-        emit sendSettingsToWidget(settings.toJson());
+        emit sendSettingsToWidget(settings);
     });
     applyUpdateRateLimit();
 
@@ -392,7 +392,7 @@ void SettingsDialog::applyMeasuredRate(double perSecond)
 
 void SettingsDialog::handleSettingsRequested()
 {
-    emit sendSettingsToWidget(settings.toJson());
+    emit sendSettingsToWidget(settings);
 }
 
 void SettingsDialog::setInterfaceEnabled( bool enabled )
@@ -456,7 +456,7 @@ void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int rank, in
 
     updateComputationControls();
     collectSettings();
-    emit sendSettingsToWidget(settings.toJson());
+    emit sendSettingsToWidget(settings);
 }
 
 void SettingsDialog::handleMatrixChanged(int rows, int cols) {
@@ -479,7 +479,7 @@ void SettingsDialog::handleMatrixChanged(int rows, int cols) {
     applyUpdateRateLimit();
 
     // Отправляем новые настройки в виджет
-    emit sendSettingsToWidget(settings.toJson());
+    emit sendSettingsToWidget(settings);
 }
 
 // ------------------------------------------------------------ вычислитель

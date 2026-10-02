@@ -30,17 +30,12 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
-    ComputationSettings settings;
 
 public: signals:
     void setInterfaceEnabled(bool enabled);
     void matrixChanged(int rows, int cols);
 
-    void refreshSpectrumValueChanged(int);
-    void refreshProgressbarValueChanged(int);
-    void sendInitialSettingsToWorker( QJsonObject& );
-    
-    void sendSettingsToWorker( const QJsonObject& );
+    void sendSettingsToWorker( const ComputationSettings& settings );
     void requestSettings();
     // Настройки расчёта из поднятого автосохранения.
     void applySettingsFromAutosave(int algorithm, int enumType, int rank, int weight,
@@ -50,10 +45,8 @@ private slots:
 
     void on_executePBN_clicked();
     void on_exitPBN_clicked();
-    void on_settingsPBN_clicked();
     void on_cancelPBN_clicked();
     void handleUpdateInfoPBR(int percent);
-    void sendSettingsToWorker();
     // Спектр от воркера: текст и график.
     void handleSpectrum(const SpectrumCounts& spectrum);
     void handleError(const QString& message);
@@ -79,6 +72,8 @@ private slots:
 private:
 
     Ui::MainWindow *ui;
+    // Настройки расчёта: из диалога, вместе с матрицами из редакторов.
+    ComputationSettings settings;
     QDockWidget    *matrixDock       = nullptr;
     // Обе матрицы — страницами одной панели; вкладки живут в заголовке
     // панели, в одной строке с её кнопками. У произвольного кода страница

@@ -34,10 +34,10 @@ public:
 
 public: signals:
     // Сигнал для отправки настроек виджету
-    void sendSettingsToWidget( const QJsonObject& settings );
+    void sendSettingsToWidget( const ComputationSettings& settings );
     // Просьба прогнать пробу: короткий расчёт, по которому видно, как часто
     // спектр успевает обновляться на этих настройках.
-    void measureUpdateRateRequested( const QJsonObject& settings );
+    void measureUpdateRateRequested( const ComputationSettings& settings );
 public slots:
     void handleMatrixChanged(int rows, int cols);
     void handleSettingsRequested();

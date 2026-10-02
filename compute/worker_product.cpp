@@ -70,14 +70,15 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     const int k = rows.size();
     const int n = rows.first().length();
 
-    if (k <= Product::bruteForceMaxK) {
+    if (k <= productBruteForceMaxK) {
         emit productPlan(tr("%1: полный перебор (2^%2 слов)…").arg(label).arg(k), -1);
         progress.begin(1ULL << k, 0, 0);
         Product::Component c = Product::bruteForce(rows, std::min(weightUpTo, n),
                                                    [this]() { return cancelled.load() != 0; },
                                                    [this](quint64 done, quint64 total) {
                                                        reportStageProgress(done, total);
-                                                   });
+                                                   },
+                                                   productBruteForceMaxK);
         if (cancelled.load())
             throw std::runtime_error("расчёт отменён");
         emit updateInfoPBR(100);
@@ -96,6 +97,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     sub.setAutosaveRoot(autosaveRootDir);
     sub.setGridTuningThreshold(tuneThresholdSec);
     sub.setKeepFoundWords(wantWords);
+    sub.setWindowPolicy(windowPolicy);
 
     ComputationSettings cs = settings;
     cs.matrix        = rows;
@@ -105,7 +107,7 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
                             : ComputationSettings::EnumerationType::Partial;
     cs.bzWeight      = std::min(std::max(weightUpTo, 1), n);
     cs.leonWeight    = std::min(std::max(weightUpTo, 1), n);
-    sub.setSettings(cs.toJson());
+    sub.setSettings(cs);
     sub.initializeRunState(LoadMode::Reset);
 
     QString error;
@@ -168,7 +170,7 @@ void Worker::computeSpectrumProduct(const CodeGeometry& g)
     // суммарно это не больше двух последних шагов.
     auto minWeight = [&](const QStringList& rows, const QString& label, Product::Component& out) {
         const int n = rows.first().length();
-        if (rows.size() <= Product::bruteForceMaxK) {
+        if (rows.size() <= productBruteForceMaxK) {
             out = analyzeComponent(rows, 0, label, wantWords);
             return;
         }

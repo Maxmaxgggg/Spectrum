@@ -13,8 +13,10 @@ using namespace std::chrono;
 Worker::Worker(QObject *parent)
     : QObject(parent)
 {
-    // Спектр уходит в окно через очередь событий.
+    // Спектр уходит в окно, а настройки приходят из него через очередь
+    // событий; вызов по имени (invokeMethod) ищет тип тоже по имени.
     qRegisterMetaType<SpectrumCounts>("SpectrumCounts");
+    qRegisterMetaType<ComputationSettings>("ComputationSettings");
 }
 
 Worker::~Worker()
@@ -443,12 +445,14 @@ CodeGeometry Worker::describeTask() const
         if (g.useGpu && leonSharedBytes(int(g.numOfRows), int(g.numOfCols), int(g.wordsPerRow)) == 0)
             throw std::invalid_argument(
                 "стохастический поиск на видеокарте: строка длиннее, чем умеет ядро — выберите CPU");
-        // Профиль ключей окна — по самой матрице.
-        const Leon::SternProfile profile = g.useGpu && !Leon::gpuWindowEnabled
-                                               ? Leon::SternProfile() : Leon::sternProfile(g.matrix);
+        // Профиль ключей окна — по самой матрице, и только если окно
+        // на этом устройстве вообще допустимо.
+        const bool windowAllowed = g.useGpu ? windowPolicy.gpu : windowPolicy.cpu;
+        const Leon::SternProfile profile = windowAllowed ? Leon::sternProfile(g.matrix)
+                                                         : Leon::SternProfile();
         const Leon::Plan plan = Leon::plan(int(g.numOfCols), int(g.numOfRows),
                                            settings.leonWeight, settings.leonMissProbability(),
-                                           g.useGpu, &profile);
+                                           g.useGpu, &profile, windowPolicy);
         g.maxRows           = quint64(plan.rows);
         g.leonWindow        = plan.window;
         g.leonPairs         = plan.window > 0 ? profile.pairs[plan.rows][plan.window] : 0.0;
@@ -925,8 +929,8 @@ void Worker::setCheckpointOpsPolicy(quint64 everyOps, quint64 stopAfter)
     stopAfterOps       = stopAfter;
 }
 
-void Worker::setSettings(const QJsonObject& jsonSettings) {
-    this->settings = ComputationSettings::fromJson(jsonSettings);
+void Worker::setSettings(const ComputationSettings& newSettings) {
+    settings = newSettings;
 }
 
 void Worker::initializeRunState(LoadMode lm)

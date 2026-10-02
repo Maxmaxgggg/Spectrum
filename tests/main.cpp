@@ -125,6 +125,10 @@ struct RunConfig
     int         productRank   = 2;
     // Чем считать большие компоненты; по умолчанию — случайным поиском.
     Algorithm   productAlgorithm = Algorithm::RandomInfoSets;
+    // До какой размерности компоненту произведения перебирать целиком.
+    int         productBruteForceMaxK = Product::kBruteForceMaxK;
+    // Где стохастическому поиску можно брать окно Штерна–Дюмера.
+    Leon::WindowPolicy window;
 };
 
 static ComputationSettings makeSettings(const RunConfig& cfg)
@@ -204,7 +208,9 @@ static Spectrum runWorker(const RunConfig& cfg,
                          g_searchMiss = miss; g_searchUnseen = unseen;
                      });
 
-    worker.setSettings(makeSettings(cfg).toJson());
+    worker.setSettings(makeSettings(cfg));
+    worker.setWindowPolicy(cfg.window);
+    worker.setProductBruteForceMaxK(cfg.productBruteForceMaxK);
     worker.setCheckpointOpsPolicy(checkpointEveryOps, stopAfterOps);
     // Тестовые матрицы мелкие, и в боевом режиме подбор на них не запустился
     // бы вовсе — тесты про подбор стали бы пустыми.
@@ -731,7 +737,7 @@ static void checkCancelMidChunk(const QString& name, const RunConfig& cfg)
 
     Worker worker;
     worker.setAutosaveRoot(autosaveRoot());
-    worker.setSettings(makeSettings(cfg).toJson());
+    worker.setSettings(makeSettings(cfg));
     worker.setCheckpointOpsPolicy(1, 0);
     worker.setGridTuningThreshold(0.0);
     worker.initializeRunState(LoadMode::Reset);
@@ -866,7 +872,7 @@ static QPair<int, int> tunedGridFor(const RunConfig& cfg, bool verbose = false)
 
     RunConfig tuned = cfg;
     tuned.autoTune = true;
-    worker.setSettings(makeSettings(tuned).toJson());
+    worker.setSettings(makeSettings(tuned));
     worker.setGridTuningThreshold(0.0);
     worker.setGridTuningVerbose(verbose);
     worker.initializeRunState(LoadMode::Reset);
@@ -1419,7 +1425,7 @@ static void testOversizedMatrixRejected()
     QObject::connect(&worker, &Worker::errorOccurred,
                      [&errored](const QString&) { errored = true; });
 
-    worker.setSettings(makeSettings(cfg).toJson());
+    worker.setSettings(makeSettings(cfg));
     worker.initializeRunState(LoadMode::Reset);
     worker.computeSpectrum();
 
@@ -1445,7 +1451,7 @@ static void testOversizedMatrixRejected()
         Worker w;
         bool err = false;
         QObject::connect(&w, &Worker::errorOccurred, [&err](const QString&) { err = true; });
-        w.setSettings(makeSettings(gray).toJson());
+        w.setSettings(makeSettings(gray));
         w.initializeRunState(LoadMode::Reset);
         w.computeSpectrum();
 
@@ -1805,7 +1811,7 @@ static int probeOnly(const QString& which, int rows)
         });
     });
 
-    worker.setSettings(makeSettings(cfg).toJson());
+    worker.setSettings(makeSettings(cfg));
     worker.measureUpdateRate();
     if (stopper.joinable())
         stopper.join();
@@ -1881,7 +1887,7 @@ static int updateRate(const QString& which, int intervalMs, int rows)
                           std::chrono::steady_clock::now() - started).count());
     });
 
-    worker.setSettings(settings.toJson());
+    worker.setSettings(settings);
     worker.setGridTuningThreshold(0.0);
     worker.initializeRunState(LoadMode::Reset);
     worker.computeSpectrum();
@@ -2281,7 +2287,7 @@ static void testProbeLeavesNoTrace()
     QObject::connect(&worker, &Worker::updateRateProbeStarted,
                      [&worker]() { worker.cancel(); });
 
-    worker.setSettings(makeSettings(cfg).toJson());
+    worker.setSettings(makeSettings(cfg));
     worker.measureUpdateRate();
 
     if (measured >= 0.0) { ++g_passed; out << "  ok       " << QStringLiteral("замер отдал результат") << Qt::endl; }
@@ -2763,9 +2769,7 @@ static void testLeonModel()
                        .arg(dp.window).arg(dp.pairs[2][20], 0, 'g', 4).arg(uniform2, 0, 'g', 4),
                    dp.window == Leon::MAX_STERN_WINDOW && dp.pairs[2][20] > 0.5 * uniform2 && dp.pairs[2][20] < 2.0 * uniform2);
         const Leon::Plan wide = Leon::plan(1000, 500, 40, 1e-9, false, &dp);
-        Leon::windowEnabled = false;
-        const Leon::Plan widePlain = Leon::plan(1000, 500, 40, 1e-9, false, &dp);
-        Leon::windowEnabled = true;
+        const Leon::Plan widePlain = Leon::plan(1000, 500, 40, 1e-9, false, &dp, Leon::WindowPolicy::none());
         expectLeon(QStringLiteral("план [1000,500] для веса 40: p=%1 l=%2, %3 попыток по %4 слов (без окна p=%5, %6 попыток по %7)")
                        .arg(wide.rows).arg(wide.window).arg(wide.trials).arg(wide.costPerTrial, 0, 'g', 3)
                        .arg(widePlain.rows).arg(widePlain.trials).arg(widePlain.costPerTrial, 0, 'g', 3),
@@ -3019,9 +3023,8 @@ static void testLeonWorker()
             { QStringLiteral("[700,40] строка в 11 слов"),  sparseCode(40, 700, 5, 23),                         12 },
             { QStringLiteral("[600,300] строка в 10 слов"), sparseCode(300, 600, 5, 29),                         8 },
         };
-        // Окно Штерна–Дюмера есть только у процессора — на время сравнения
-        // слово в слово оно выключается.
-        Leon::windowEnabled = false;
+        // Окно Штерна–Дюмера есть только у процессора — для сравнения слово
+        // в слово оно выключается.
         for (const Twin& t : twins) {
             const int n = t.rows.first().length(), k = t.rows.size();
             const int tier = leonSharedTier(k, n, (n + 63) / 64, 0);
@@ -3039,6 +3042,7 @@ static void testLeonWorker()
             cfg.algorithm  = Algorithm::RandomInfoSets;
             cfg.leonWeight = t.weight;
             cfg.device     = ComputeDevice::CPU;
+            cfg.window     = Leon::WindowPolicy::none();
             clearCheckpoints();
             const Spectrum cpu = runWorker(cfg);
             const quint64 cpuTrials = g_searchDone;
@@ -3054,7 +3058,6 @@ static void testLeonWorker()
                        !cpu.isEmpty() && cpu == gpu && cpuTrials == gpuTrials,
                        QStringLiteral("CPU: %1\n      GPU: %2").arg(formatSpectrum(cpu), formatSpectrum(gpu)));
         }
-        Leon::windowEnabled = true;
     }
 
     // Окно Штерна–Дюмера на процессоре. Произведение двух кодов Хэмминга
@@ -3093,9 +3096,8 @@ static void testLeonWorker()
             const int n = c.rows.first().length(), k = c.rows.size();
             const Leon::SternProfile profile = Leon::sternProfile(c.rows);
             const Leon::Plan withWindow = Leon::plan(n, k, c.weight, 1e-12, false, &profile);
-            Leon::windowEnabled = false;
-            const Leon::Plan plain = Leon::plan(n, k, c.weight, 1e-12, false, &profile);
-            Leon::windowEnabled = true;
+            const Leon::Plan plain = Leon::plan(n, k, c.weight, 1e-12, false, &profile,
+                                                Leon::WindowPolicy::none());
 
             RunConfig cfg;
             cfg.matrix     = c.rows;
@@ -3109,12 +3111,12 @@ static void testLeonWorker()
             const double withSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
             const quint64 done = g_searchDone;
             // Без окна — тот же код, тот же предел: спектры обязаны совпасть.
-            Leon::windowEnabled = false;
+            RunConfig plainCfg = cfg;
+            plainCfg.window = Leon::WindowPolicy::none();
             clearCheckpoints();
             t0 = std::chrono::steady_clock::now();
-            const Spectrum plainFound = runWorker(cfg);
+            const Spectrum plainFound = runWorker(plainCfg);
             const double plainSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-            Leon::windowEnabled = true;
             clearCheckpoints();
 
             bool ok = !found.isEmpty() && found == plainFound;
@@ -3158,14 +3160,14 @@ static int leonRun(const QString& path, int weight, int missExponent, const QStr
     cfg.threadsCpu       = omp_get_num_procs();
     // «cpu-plain» — процессор без окна Штерна–Дюмера, для сравнения;
     // «gpu-window» — видеокарта с окном.
-    Leon::windowEnabled    = device != QStringLiteral("cpu-plain");
-    Leon::gpuWindowEnabled = device == QStringLiteral("gpu-window");
+    cfg.window.cpu = device != QStringLiteral("cpu-plain");
+    cfg.window.gpu = device == QStringLiteral("gpu-window");
 
     const int k = cfg.matrix.size();
     const int n = cfg.matrix.first().length();
     const Leon::SternProfile profile = Leon::sternProfile(cfg.matrix);
     const Leon::Plan plan = Leon::plan(n, k, weight, std::pow(10.0, -missExponent),
-                                       cfg.device == ComputeDevice::GPU, &profile);
+                                       cfg.device == ComputeDevice::GPU, &profile, cfg.window);
     out << QStringLiteral("[%1,%2], все слова до веса %3, пропуск 10^-%4, %8: %5 строк за попытку%9, попыток %6, слов %7")
                .arg(n).arg(k).arg(weight).arg(missExponent)
                .arg(plan.rows).arg(plan.trials).arg(double(plan.trials) * plan.wordsPerTrial, 0, 'g', 3)
@@ -3431,18 +3433,16 @@ static void testProductCode()
     // считались вложенным Брауэром–Циммерманом; тогда доступен только ранг 1,
     // и спектр точен до границы Толхёйзена.
     {
-        const int savedLimit = Product::bruteForceMaxK;
-        Product::bruteForceMaxK = 3;
         RunConfig cfg;
         cfg.matrix      = Reference::golay24_12();
         cfg.matrix2     = Reference::hamming7_4();
         cfg.algorithm   = Algorithm::ProductCode;
         cfg.productRank = 1;
         cfg.device      = ComputeDevice::CPU;
+        cfg.productBruteForceMaxK = 3;
         clearCheckpoints();
         const Spectrum got = runWorker(cfg);
         clearCheckpoints();
-        Product::bruteForceMaxK = savedLimit;
 
         // Ранг 1 по точным спектрам компонент — независимая сверка.
         const Spectrum sg = Reference::analyticGolay24_12();
@@ -3476,13 +3476,12 @@ static void testProductCode()
         const Spectrum exact = runWorker(cfg);
         const int exactUpTo = g_productExactUpTo;
 
-        const int savedLimit = Product::bruteForceMaxK;
-        Product::bruteForceMaxK = 6;
+        RunConfig leonCfg = cfg;
+        leonCfg.productBruteForceMaxK = 6;
         clearCheckpoints();
-        const Spectrum viaLeon = runWorker(cfg);
+        const Spectrum viaLeon = runWorker(leonCfg);
         const QVector<AutosaveEntry> entries = testStore().list();
         clearCheckpoints();
-        Product::bruteForceMaxK = savedLimit;
 
         // Записей несколько: вложенный поиск пишет и свою, по компоненте.
         int recordedMiss = -1;
@@ -3663,9 +3662,7 @@ int main(int argc, char* argv[])
                            .arg(profile.pairs[p][l], 0, 'g', 4).arg(uniform, 0, 'g', 4) << Qt::endl;
             }
         const Leon::Plan plan = Leon::plan(n, k, W, 1e-6, false, &profile);
-        Leon::windowEnabled = false;
-        const Leon::Plan plain = Leon::plan(n, k, W, 1e-6, false);
-        Leon::windowEnabled = true;
+        const Leon::Plan plain = Leon::plan(n, k, W, 1e-6, false, nullptr, Leon::WindowPolicy::none());
         out << QStringLiteral("  план (пропуск 10^-6): p=%1 l=%2, попыток %3, цена %4 слов; без окна p=%5, попыток %6, цена %7 слов")
                    .arg(plan.rows).arg(plan.window).arg(plan.trials).arg(double(plan.trials) * plan.costPerTrial, 0, 'g', 3)
                    .arg(plain.rows).arg(plain.trials).arg(double(plain.trials) * plain.costPerTrial, 0, 'g', 3) << Qt::endl;

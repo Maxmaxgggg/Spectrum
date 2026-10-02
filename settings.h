@@ -2,6 +2,7 @@
 #include <qjsonobject.h>
 #include <qjsonarray.h>
 #include <qhash.h>
+#include <QMetaType>
 
 // Счётчики до 2^64 в JSON автосохранения.
 //
@@ -293,6 +294,8 @@ struct ComputationSettings
         return seed;
     }
 };
+// Настройки уходят воркеру через очередь событий — как есть, без JSON.
+Q_DECLARE_METATYPE(ComputationSettings)
 
 struct RunState {
     // Текущее перебираемое число строк
