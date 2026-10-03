@@ -18,8 +18,9 @@ using ComputeDevice   = ComputationSettings::ComputeDevice;
 
 namespace {
 
-// Идентификаторы группы «Тип кода».
-enum CodeKind { SingleCode = 0, ProductCode = 1 };
+// Идентификаторы группы «Структура кода». Код-произведение — отдельный
+// алгоритм, БЧХ — флаг cyclic при обычных алгоритмах.
+enum CodeStructure { NoStructure = 0, ProductStructure = 1, BchStructure = 2 };
 
 } // namespace
 
@@ -28,9 +29,10 @@ SettingsDialog::SettingsDialog(QWidget *parent)
 {
     m_ui->setupUi(this);
 
-    m_codeKindBGP = new QButtonGroup(this);
-    m_codeKindBGP->addButton( m_ui->singleCodeRBN,  SingleCode  );
-    m_codeKindBGP->addButton( m_ui->productCodeRBN, ProductCode );
+    m_codeStructureBGP = new QButtonGroup(this);
+    m_codeStructureBGP->addButton( m_ui->noStructureRBN, NoStructure      );
+    m_codeStructureBGP->addButton( m_ui->productCodeRBN, ProductStructure );
+    m_codeStructureBGP->addButton( m_ui->bchCodeRBN,     BchStructure     );
 
     m_enumeratorBGP = new QButtonGroup(this);
     m_enumeratorBGP->addButton( m_ui->fullEnumRBN,    EnumerationType::Full    );
@@ -83,7 +85,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
            "Если весов больше, соседние сливаются в один столбец,\n"
            "а их значения складываются — форма распределения сохраняется."));
 
-    connect(m_codeKindBGP, &QButtonGroup::idClicked,
+    connect(m_codeStructureBGP, &QButtonGroup::idClicked,
         this, [this](int) { updateComputationControls(); });
     connect(m_enumeratorBGP, &QButtonGroup::idClicked,
         this, [this](int id) {
@@ -127,7 +129,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     // Потолок обновления зависит от кода, вычислителя, алгоритма и сетки.
     // Меняется любое из них — прежний замер больше не про эту конфигурацию,
     // и список снова закрывается.
-    connect(m_codeKindBGP,      &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
+    connect(m_codeStructureBGP, &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
     connect(m_enumeratorBGP,    &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
     connect(m_algorithmBGP,     &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
     connect(m_computeDeviceBGP, &QButtonGroup::idClicked, this, [this](int) { applyUpdateRateLimit(); });
@@ -173,7 +175,7 @@ SettingsDialog::~SettingsDialog()
 
 Algorithm SettingsDialog::currentAlgorithm() const
 {
-    if (m_codeKindBGP->checkedId() == ProductCode)
+    if (m_codeStructureBGP->checkedId() == ProductStructure)
         return Algorithm::ProductCode;
     return m_enumeratorBGP->checkedId() == EnumerationType::Full ? m_fullAlgorithm : m_partialAlgorithm;
 }
@@ -191,7 +193,7 @@ void SettingsDialog::updateComputationControls()
 {
     m_updatingControls = true;
 
-    const bool product = m_codeKindBGP->checkedId() == ProductCode;
+    const bool product = m_codeStructureBGP->checkedId() == ProductStructure;
 
     // Тип перебора. У произведения он всегда частичный — по рангам; у
     // произвольного кода полный перебор возможен, пока хотя бы одна из
@@ -271,7 +273,7 @@ void SettingsDialog::updateComputationControls()
 
 void SettingsDialog::applyMemoryCap()
 {
-    const bool product = m_codeKindBGP->checkedId() == ProductCode;
+    const bool product = m_codeStructureBGP->checkedId() == ProductStructure;
     const bool full    = m_enumeratorBGP->checkedId() == EnumerationType::Full;
     const bool leon    = !product && !full && m_partialAlgorithm == Algorithm::RandomInfoSets;
     if (!leon || m_matrixCols <= 0 || m_matrixRows <= 0) {
@@ -282,7 +284,10 @@ void SettingsDialog::applyMemoryCap()
     const quint64 limit = m_ui->leonMemorySPB->value() > 0
         ? quint64(m_ui->leonMemorySPB->value()) << 20
         : std::max<quint64>(256ULL << 20, Leon::physicalMemoryBytes() / 2);
-    const int cap = Leon::maxWeightForMemory(n, k, limit);
+    // У БЧХ таблица хранит по слову на орбиту сдвигов. Длины круга диалог не
+    // знает: n у циклического кода, n − 1 у расширенного — берётся меньшая.
+    const int orbit = m_codeStructureBGP->checkedId() == BchStructure ? std::max(1, n - 1) : 1;
+    const int cap = Leon::maxWeightForMemory(n, k, limit, orbit);
 
     // Потолок поля — по памяти; текущее значение подрезается, если вылезло.
     const bool wasUpdating = m_updatingControls;
@@ -296,7 +301,7 @@ void SettingsDialog::applyMemoryCap()
 
     // Ожидаемый размер таблицы при этом весе.
     const double bytes = Leon::expectedWordsUpTo(n, k, m_ui->weightSPB->value())
-                       * Leon::tableBytesPerWord((n + 63) / 64);
+                       * Leon::tableBytesPerWord((n + 63) / 64) / orbit;
     QString size;
     if (bytes < (1 << 20))
         size = tr("< 1 МБ");
@@ -307,10 +312,11 @@ void SettingsDialog::applyMemoryCap()
     m_ui->weightMemoryLBL->setText(size);
     m_ui->weightMemoryLBL->setVisible(true);
     m_ui->weightMemoryLBL->setToolTip(
-        tr("Ожидаемый размер таблицы найденных слов, как у случайного [%1,%2]-кода; "
+        tr("Ожидаемый размер таблицы найденных слов, как у случайного [%1,%2]-кода%3; "
            "предел веса — по памяти в настройках поиска. У кода со структурой лёгких слов "
            "больше, и таблица может не поместиться раньше")
-            .arg(n).arg(k));
+            .arg(n).arg(k)
+            .arg(orbit > 1 ? tr(", по слову на орбиту сдвигов") : QString()));
 }
 
 // ------------------------------------------------------------ замер потолка
@@ -321,7 +327,7 @@ QString SettingsDialog::updateRateKey() const
     // определяется шириной строки и числом строк, а не тем, какие в матрице
     // биты.
     const Algorithm algorithm = currentAlgorithm();
-    return QStringLiteral("%1|%2|%3x%4|%5|%6x%7|%8|%9|%10")
+    return QStringLiteral("%1|%2|%3x%4|%5|%6x%7|%8|%9|%10|%11")
         .arg(m_computeDeviceBGP->checkedId())
         .arg(int(algorithm))
         .arg(m_matrixCols).arg(m_matrixRows)
@@ -329,7 +335,8 @@ QString SettingsDialog::updateRateKey() const
         .arg(m_ui->blocksGpuSPB->value()).arg(m_ui->threadsGpuSPB->value())
         .arg(m_ui->threadsCpuSPB->value())
         .arg(m_ui->autoTuneGridCHB->isChecked() ? 1 : 0)
-        .arg(algorithm == Algorithm::ProductCode ? int(m_partialAlgorithm) * 10 + m_ui->productRankSPB->value() : 0);
+        .arg(algorithm == Algorithm::ProductCode ? int(m_partialAlgorithm) * 10 + m_ui->productRankSPB->value() : 0)
+        .arg(m_codeStructureBGP->checkedId());
 }
 
 void SettingsDialog::applyUpdateRateLimit()
@@ -418,28 +425,30 @@ void SettingsDialog::setInterfaceEnabled( bool enabled )
 }
 
 void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int rank, int weight,
-                                       int componentAlgorithm)
+                                       int componentAlgorithm, bool cyclic)
 {
     Q_UNUSED(enumType);
     const Algorithm a = static_cast<Algorithm>(algorithm);
+    // Структура «Нет» или «БЧХ» — как шёл расчёт записи.
+    const int single = cyclic ? BchStructure : NoStructure;
 
     switch (a) {
         case Algorithm::GrayCode:
         case Algorithm::DualCode:
-            m_codeKindBGP->button(SingleCode)->setChecked(true);
+            m_codeStructureBGP->button(single)->setChecked(true);
             m_singleEnumType = EnumerationType::Full;
             m_fullAlgorithm  = a;
             break;
         case Algorithm::BrouwerZimmermann:
         case Algorithm::RandomInfoSets:
-            m_codeKindBGP->button(SingleCode)->setChecked(true);
+            m_codeStructureBGP->button(single)->setChecked(true);
             m_singleEnumType   = EnumerationType::Partial;
             m_partialAlgorithm = a;
             if (weight > 0)
                 weightFor(a) = weight;
             break;
         case Algorithm::ProductCode:
-            m_codeKindBGP->button(ProductCode)->setChecked(true);
+            m_codeStructureBGP->button(ProductStructure)->setChecked(true);
             m_partialAlgorithm = componentAlgorithm == int(Algorithm::RandomInfoSets)
                                  ? Algorithm::RandomInfoSets : Algorithm::BrouwerZimmermann;
             m_settings.productWeight = qMax(0, weight);
@@ -449,7 +458,7 @@ void SettingsDialog::applyFromAutosave(int algorithm, int enumType, int rank, in
         default:
             // Простой XOR из интерфейса убран; запись показывается, а продолжать
             // её нечем — расчёт пойдёт Брауэром–Циммерманом заново.
-            m_codeKindBGP->button(SingleCode)->setChecked(true);
+            m_codeStructureBGP->button(single)->setChecked(true);
             m_singleEnumType   = EnumerationType::Partial;
             m_partialAlgorithm = Algorithm::BrouwerZimmermann;
             break;
@@ -581,6 +590,7 @@ void SettingsDialog::collectSettings()
 {
     const Algorithm algorithm = currentAlgorithm();
     m_settings.algorithm = algorithm;
+    m_settings.cyclic    = m_codeStructureBGP->checkedId() == BchStructure;
     m_settings.enumType = m_enumeratorBGP->checkedId() == EnumerationType::Full
                           ? EnumerationType::Full : EnumerationType::Partial;
     // Число строк простого XOR больше не задаётся: всё, сколько есть.
@@ -634,28 +644,29 @@ void SettingsDialog::loadSettings() {
     if (m_partialAlgorithm != Algorithm::BrouwerZimmermann && m_partialAlgorithm != Algorithm::RandomInfoSets)
         m_partialAlgorithm = Algorithm::BrouwerZimmermann;
 
+    const int single = m_settings.cyclic ? BchStructure : NoStructure;
     switch (m_settings.algorithm) {
         case Algorithm::GrayCode:
         case Algorithm::DualCode:
-            m_codeKindBGP->button(SingleCode)->setChecked(true);
+            m_codeStructureBGP->button(single)->setChecked(true);
             m_singleEnumType = EnumerationType::Full;
             m_fullAlgorithm  = m_settings.algorithm;
             break;
         case Algorithm::BrouwerZimmermann:
         case Algorithm::RandomInfoSets:
-            m_codeKindBGP->button(SingleCode)->setChecked(true);
+            m_codeStructureBGP->button(single)->setChecked(true);
             m_singleEnumType   = EnumerationType::Partial;
             m_partialAlgorithm = m_settings.algorithm;
             break;
         case Algorithm::ProductCode:
-            m_codeKindBGP->button(ProductCode)->setChecked(true);
+            m_codeStructureBGP->button(ProductStructure)->setChecked(true);
             if (m_settings.productAlgorithm == Algorithm::RandomInfoSets
                 || m_settings.productAlgorithm == Algorithm::BrouwerZimmermann)
                 m_partialAlgorithm = static_cast<Algorithm>(m_settings.productAlgorithm);
             break;
         default:
             // Простой XOR: в новом интерфейсе его нет — ближайшее по смыслу.
-            m_codeKindBGP->button(SingleCode)->setChecked(true);
+            m_codeStructureBGP->button(single)->setChecked(true);
             m_singleEnumType   = EnumerationType::Partial;
             m_partialAlgorithm = Algorithm::BrouwerZimmermann;
             break;

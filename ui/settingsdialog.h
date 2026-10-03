@@ -10,13 +10,16 @@
 namespace Ui { class SettingsDialog; }
 enum class Length { Short, Long };
 
-// Вкладка «Расчёт» устроена как три вопроса подряд: какой код, сколько
-// перебирать, каким алгоритмом. Ответы на первые два сужают третий:
+// Вкладка «Расчёт» устроена как три вопроса подряд: какая структура у кода,
+// сколько перебирать, каким алгоритмом. Ответы на первые два сужают третий:
 //
 //   Полный перебор   → код Грея | дуальный код   (весь спектр, до 63 строк)
 //   Частичный        → Брауэр–Циммерман | Леон   (низ спектра до веса)
 //   Код-произведение → всегда частичный по рангам; алгоритм выбирает, чем
 //                      считать большие компоненты
+//
+// Структура «БЧХ» алгоритмов не меняет: те же, что у кода без структуры, но
+// частичный перебор идёт по циклическим сдвигам (ComputationSettings::cyclic).
 //
 // Простой XOR из интерфейса убран: всё, что он умел, Брауэр–Циммерман делает
 // быстрее и с гарантией. Сам путь в расчёте остался — старые записи с ним
@@ -42,9 +45,10 @@ public slots:
     // Ставит настройки расчёта из поднятого автосохранения: иначе кнопка
     // «Продолжить» искала бы запись другого алгоритма и не нашла бы её.
     // weight — вес записи (у произведения — его вес, rank — ранг);
-    // componentAlgorithm — чем считались компоненты произведения.
+    // componentAlgorithm — чем считались компоненты произведения; cyclic —
+    // структура «БЧХ».
     void applyFromAutosave(int algorithm, int enumType, int rank, int weight,
-                           int componentAlgorithm);
+                           int componentAlgorithm, bool cyclic);
     // Результат пробы, отправок в секунду.
     void applyMeasuredRate(double perSecond);
 private:
@@ -80,7 +84,7 @@ private:
     Length m_codeLength     = Length::Short;
     Length m_dualCodeLength = Length::Short;
     Ui::SettingsDialog *m_ui;
-    QButtonGroup* m_codeKindBGP;
+    QButtonGroup* m_codeStructureBGP;
     QButtonGroup* m_enumeratorBGP;
     QButtonGroup* m_algorithmBGP;
     QButtonGroup* m_computeDeviceBGP;

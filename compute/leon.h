@@ -84,8 +84,9 @@ double expectedWordsUpTo(int n, int k, int weight);
 double tableBytesPerWord(int wordsPerRow);
 
 // Наибольший вес, при котором таблица ожидаемо помещается в limitBytes;
-// не меньше единицы и не больше n.
-int maxWeightForMemory(int n, int k, quint64 limitBytes);
+// не меньше единицы и не больше n. orbitSize — сколько слов приходится на
+// одну запись таблицы: у поиска по орбитам сдвигов это длина круга.
+int maxWeightForMemory(int n, int k, quint64 limitBytes, int orbitSize = 1);
 
 // Физическая память машины, байт; ноль — не узнать.
 quint64 physicalMemoryBytes();

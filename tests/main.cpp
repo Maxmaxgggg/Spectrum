@@ -136,8 +136,8 @@ struct RunConfig
     int         productBruteForceMaxK = Product::BRUTE_FORCE_MAX_K;
     // Где стохастическому поиску можно брать окно Штерна–Дюмера.
     Leon::WindowPolicy window;
-    // Поиск по орбитам сдвигов у циклического кода.
-    bool        cyclicSearch = true;
+    // Структура «БЧХ»: частичный перебор по циклическим сдвигам.
+    bool        cyclic = false;
 };
 
 static ComputationSettings makeSettings(const RunConfig& cfg)
@@ -155,6 +155,7 @@ static ComputationSettings makeSettings(const RunConfig& cfg)
     s.productRank   = cfg.productRank;
     s.productAlgorithm = int(cfg.productAlgorithm);
     s.device       = cfg.device;
+    s.cyclic       = cfg.cyclic;
     s.deviceSettings.threadsCpu = cfg.threadsCpu;
     s.deviceSettings.blocksGpu  = cfg.blocksGpu;
     s.deviceSettings.threadsGpu = cfg.threadsGpu;
@@ -218,7 +219,6 @@ static Spectrum runWorker(const RunConfig& cfg,
     worker.setSettings(makeSettings(cfg));
     worker.setWindowPolicy(cfg.window);
     worker.setProductBruteForceMaxK(cfg.productBruteForceMaxK);
-    worker.setCyclicSearch(cfg.cyclicSearch);
     worker.setCheckpointOpsPolicy(checkpointEveryOps, stopAfterOps);
     // Тестовые матрицы мелкие, и в боевом режиме подбор на них не запустился
     // бы вовсе — тесты про подбор стали бы пустыми.
@@ -275,8 +275,8 @@ static quint64 expectedTotalOps(const RunConfig& cfg)
 
         // У циклического кода воркер берёт перебор по сдвигам, если он не
         // дороже (planInfoSets): одно множество до своей глубины.
-        const Cyclic::Symmetry orbit = cfg.cyclicSearch ? Cyclic::find(packed.data(), rows, cols, words)
-                                                        : Cyclic::Symmetry();
+        const Cyclic::Symmetry orbit = cfg.cyclic ? Cyclic::find(packed.data(), rows, cols, words)
+                                                  : Cyclic::Symmetry();
         InfoSets::InfoSet orbitSet;
         if (orbit.active() && rows <= orbit.length
             && InfoSets::systematize(packed.data(), rows, cols, words, Cyclic::orbitInfoSet(orbit, rows),
@@ -2880,9 +2880,8 @@ static void testBzPartialLayer()
 
 // Расчёт по Брауэру–Циммерману на матрице из файла: план, время, спектр.
 //
-// Запуск: SpectrumTests.exe --bz-run <файл матрицы> <вес> [cpu|gpu][-words]
-// «-words» в конце — без перебора по сдвигам у циклического кода, для
-// сравнения.
+// Запуск: SpectrumTests.exe --bz-run <файл матрицы> <вес> [cpu|gpu][-bch]
+// «-bch» в конце — структура «БЧХ»: перебор по циклическим сдвигам.
 static int bzRun(const QString& path, int weight, const QString& device)
 {
     RunConfig cfg;
@@ -2891,7 +2890,7 @@ static int bzRun(const QString& path, int weight, const QString& device)
     cfg.algorithm = Algorithm::BrouwerZimmermann;
     cfg.bzWeight  = weight;
     cfg.device    = device.startsWith(QStringLiteral("cpu")) ? ComputeDevice::Cpu : ComputeDevice::Gpu;
-    cfg.cyclicSearch = !device.endsWith(QStringLiteral("-words"));
+    cfg.cyclic    = device.endsWith(QStringLiteral("-bch"));
     cfg.threadsCpu = omp_get_num_procs();
     cfg.autoTune   = cfg.device == ComputeDevice::Gpu;
 
@@ -3573,14 +3572,14 @@ static void testLeonCyclic()
             cfg.threadsCpu = std::max(4, omp_get_num_procs());
             cfg.window     = Leon::WindowPolicy::none();
 
-            cfg.cyclicSearch = false;
+            cfg.cyclic = false;
             clearCheckpoints();
             const auto t0 = std::chrono::steady_clock::now();
             const Spectrum plain = runWorker(cfg);
             const double plainSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
             const quint64 plainTrials = g_searchTotal;
 
-            cfg.cyclicSearch = true;
+            cfg.cyclic = true;
             clearCheckpoints();
             const auto t1 = std::chrono::steady_clock::now();
             const Spectrum orbits = runWorker(cfg);
@@ -3633,6 +3632,7 @@ static void testLeonCyclic()
         cfg.algorithm  = Algorithm::RandomInfoSets;
         cfg.leonWeight = 8;
         cfg.device     = ComputeDevice::Cpu;
+        cfg.cyclic     = true;
         worker.setSettings(makeSettings(cfg));
         worker.setAutosaveRoot(autosaveRoot());
         worker.setKeepFoundWords(true);
@@ -3668,6 +3668,19 @@ static Spectrum exactByWorker(const QStringList& rows)
     const Spectrum exact = runWorker(cfg);
     clearCheckpoints();
     return exact;
+}
+
+// Ошибка, с которой Worker отказался считать; пусто — посчитал.
+static QString workerError(const RunConfig& cfg)
+{
+    Worker worker;
+    worker.setAutosaveRoot(autosaveRoot());
+    QString message;
+    QObject::connect(&worker, &Worker::errorOccurred, [&message](const QString& m) { message = m; });
+    worker.setSettings(makeSettings(cfg));
+    worker.initializeRunState(LoadMode::Reset);
+    worker.computeSpectrum();
+    return message;
 }
 
 // Брауэр–Циммерман по сдвигам у циклического кода (cyclicorbit.h): правило
@@ -3787,6 +3800,7 @@ static void testBzCyclic()
             cfg.bzWeight   = weight;
             cfg.device     = ComputeDevice::Cpu;
             cfg.threadsCpu = std::max(4, omp_get_num_procs());
+            cfg.cyclic     = true;
             clearCheckpoints();
             const Spectrum got = runWorker(cfg);
             const QVector<AutosaveEntry> saved = testStore().list();
@@ -3847,8 +3861,9 @@ static void testBzCyclic()
         cfg.algorithm  = Algorithm::BrouwerZimmermann;
         cfg.bzWeight   = c.weight;
         cfg.threadsCpu = std::max(4, omp_get_num_procs());
+        cfg.cyclic     = true;
         RunConfig plainCfg = cfg;
-        plainCfg.cyclicSearch = false;
+        plainCfg.cyclic = false;
         const quint64 orbitOps = expectedTotalOps(cfg);
         const quint64 plainOps = expectedTotalOps(plainCfg);
 
@@ -3870,7 +3885,7 @@ static void testBzCyclic()
         else { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl; }
     }
 
-    // Без поиска симметрии — обычный план, и спектр тот же.
+    // Структура «Нет» у того же кода — обычный план, и спектр тот же.
     {
         const QStringList rows = Bch::build(5, 3, false, 0).rows;
         RunConfig cfg;
@@ -3878,7 +3893,6 @@ static void testBzCyclic()
         cfg.algorithm    = Algorithm::BrouwerZimmermann;
         cfg.bzWeight     = 10;
         cfg.device       = ComputeDevice::Cpu;
-        cfg.cyclicSearch = false;
         checkBzExact(QStringLiteral("БЧХ [31,16] CPU, вес 10, по множествам"), cfg, exactByWorker(rows));
     }
 
@@ -3892,6 +3906,7 @@ static void testBzCyclic()
         cfg.algorithm = Algorithm::BrouwerZimmermann;
         cfg.bzWeight  = 8;
         cfg.device    = ComputeDevice::Cpu;
+        cfg.cyclic    = true;
         RunConfig gpuCfg = cfg; gpuCfg.device = ComputeDevice::Gpu;
         checkResume(QStringLiteral("CPU БЧХ [63,45], вес 8, обрыв посреди слоя"), cfg, cfg, 100000, 800000);
         checkResume(QStringLiteral("GPU БЧХ [63,45], вес 8, обрыв посреди слоя"), gpuCfg, gpuCfg, 100000, 800000);
@@ -3905,6 +3920,7 @@ static void testBzCyclic()
         lng.algorithm  = Algorithm::BrouwerZimmermann;
         lng.bzWeight   = 5;
         lng.device     = ComputeDevice::Cpu;
+        lng.cyclic     = true;
         lng.blocksGpu  = 8;
         lng.threadsGpu = 32;
         RunConfig lngGpu = lng; lngGpu.device = ComputeDevice::Gpu;
@@ -3922,6 +3938,7 @@ static void testBzCyclic()
         cfg.algorithm = Algorithm::BrouwerZimmermann;
         cfg.bzWeight  = 7;
         cfg.device    = ComputeDevice::Cpu;
+        cfg.cyclic    = true;
         clearCheckpoints();
         runWorker(cfg);
         const QVector<AutosaveEntry> saved = testStore().list();
@@ -3936,14 +3953,18 @@ static void testBzCyclic()
             expectStore(QStringLiteral("запись по сдвигам: круг [%1, %2), одно множество, глубина %3, версия %4")
                             .arg(record.cyclicStart).arg(record.cyclicStart + record.cyclicLength)
                             .arg(record.maxRows).arg(record.toJson()["version"].toInt()),
-                        record.cyclicStart == 0 && record.cyclicLength == n && record.infoSets.size() == 1
-                            && record.maxRows == depth && record.toJson()["version"].toInt() == 2);
+                        record.cyclic && record.cyclicStart == 0 && record.cyclicLength == n
+                            && record.infoSets.size() == 1 && record.maxRows == depth
+                            && record.toJson()["version"].toInt() == 2);
             const AutosaveRecord back = AutosaveRecord::fromJson(record.toJson());
             AutosaveRecord plain = record;
             plain.cyclicStart = plain.cyclicLength = 0;
-            expectStore(QStringLiteral("круг переживает JSON, обычная запись — версии 1"),
-                        back.cyclicStart == record.cyclicStart && back.cyclicLength == record.cyclicLength
-                            && plain.toJson()["version"].toInt() == 1 && !plain.toJson().contains("cyclicLength"));
+            plain.cyclic = false;
+            expectStore(QStringLiteral("круг и структура переживают JSON, обычная запись — версии 1"),
+                        back.cyclic && back.cyclicStart == record.cyclicStart
+                            && back.cyclicLength == record.cyclicLength
+                            && plain.toJson()["version"].toInt() == 1 && !plain.toJson().contains("cyclicLength")
+                            && !AutosaveRecord::fromJson(plain.toJson()).cyclic);
 
             // Веса с той же глубиной — продолжать можно, с другой — нет.
             ComputationSettings settings = makeSettings(cfg);
@@ -3963,6 +3984,14 @@ static void testBzCyclic()
             expectStore(QStringLiteral("продолжать по сдвигам: вес %1 (та же глубина) — да, вес %2 (глубже) — нет, "
                                        "мельче — нет").arg(sameWeight).arg(deeperWeight),
                         sameOk && deeperNo && shallowerNo);
+            // Структура в настройках сменилась — запись другого способа не
+            // продолжается ни в ту, ни в другую сторону.
+            settings.bzWeight = 7;
+            settings.cyclic   = false;
+            const bool toPlainNo = !canResume(record, settings);
+            settings.cyclic   = true;
+            const bool toBchNo = !canResume(plain, settings);
+            expectStore(QStringLiteral("структура сменилась — запись не продолжается"), toPlainNo && toBchNo);
 
             RunConfig deeper = cfg;
             deeper.bzWeight = deeperWeight;
@@ -3975,6 +4004,52 @@ static void testBzCyclic()
             expectStore(QStringLiteral("досчёт на вес %1 начат заново и точен").arg(deeperWeight), ok);
         }
         clearCheckpoints();
+    }
+
+    // 5. Структура «БЧХ» у кода без циклического сдвига — отказ с понятной
+    //    ошибкой, а не тихий обычный перебор. С «Нет» тот же код считается.
+    g_out << Qt::endl << QStringLiteral("Структура кода «БЧХ» в настройках") << Qt::endl;
+    {
+        struct Case { QString name; QStringList rows; };
+        const QVector<Case> cases = {
+            { QStringLiteral("случайный [40,16]"),       Bz::scramble(Bz::systematicRandom(16, 40, 7), 11) },
+            { QStringLiteral("укороченный БЧХ [60,33]"), Bch::build(6, 5, false, 3).rows },
+        };
+        for (const Case& c : cases) {
+            for (Algorithm algorithm : { Algorithm::BrouwerZimmermann, Algorithm::RandomInfoSets }) {
+                RunConfig cfg;
+                cfg.matrix     = c.rows;
+                cfg.algorithm  = algorithm;
+                cfg.bzWeight   = 6;
+                cfg.leonWeight = 8;
+                cfg.leonMissExponent = 6;
+                cfg.device     = ComputeDevice::Cpu;
+                cfg.cyclic     = true;
+                const QString bch = workerError(cfg);
+                cfg.cyclic = false;
+                const QString none = workerError(cfg);
+                clearCheckpoints();
+                const QString what = QStringLiteral("%1, %2: «БЧХ» — отказ, «Нет» — считается")
+                                         .arg(c.name, algorithm == Algorithm::BrouwerZimmermann
+                                                          ? QStringLiteral("Брауэр–Циммерман")
+                                                          : QStringLiteral("стохастический"));
+                const bool ok = bch.contains(QStringLiteral("БЧХ")) && none.isEmpty();
+                expectStore(what, ok);
+                if (!ok)
+                    g_out << QStringLiteral("      «БЧХ»: ") << bch << Qt::endl
+                          << QStringLiteral("      «Нет»: ") << none << Qt::endl;
+            }
+        }
+
+        // Флаг в настройках переживает JSON; старые настройки без него —
+        // структура «Нет».
+        ComputationSettings settings;
+        settings.cyclic = true;
+        const bool kept = ComputationSettings::fromJson(settings.toJson()).cyclic;
+        QJsonObject old = settings.toJson();
+        old.remove(QStringLiteral("cyclic"));
+        expectStore(QStringLiteral("структура «БЧХ» в настройках переживает JSON, без ключа — «Нет»"),
+                    kept && !ComputationSettings::fromJson(old).cyclic);
     }
 }
 
@@ -4015,18 +4090,18 @@ static int leonRun(const QString& path, int weight, int missExponent, const QStr
     cfg.device           = device.startsWith(QStringLiteral("gpu")) ? ComputeDevice::Gpu : ComputeDevice::Cpu;
     cfg.threadsCpu       = omp_get_num_procs();
     // «cpu-plain» — процессор без окна Штерна–Дюмера, для сравнения;
-    // «gpu-window» — видеокарта с окном; «-words» в конце — без поиска по
-    // орбитам у циклического кода.
+    // «gpu-window» — видеокарта с окном; «-bch» в конце — структура «БЧХ»,
+    // поиск по орбитам сдвигов.
     cfg.window.cpu    = !device.startsWith(QStringLiteral("cpu-plain"));
     cfg.window.gpu    = device.startsWith(QStringLiteral("gpu-window"));
-    cfg.cyclicSearch  = !device.endsWith(QStringLiteral("-words"));
+    cfg.cyclic        = device.endsWith(QStringLiteral("-bch"));
 
     const int k = cfg.matrix.size();
     const int n = cfg.matrix.first().length();
     int words = 0;
     const std::vector<quint64> packed = InfoSets::packRows(cfg.matrix, words);
-    const Cyclic::Symmetry symmetry = cfg.cyclicSearch ? Cyclic::find(packed.data(), k, n, words)
-                                                       : Cyclic::Symmetry();
+    const Cyclic::Symmetry symmetry = cfg.cyclic ? Cyclic::find(packed.data(), k, n, words)
+                                                 : Cyclic::Symmetry();
     if (symmetry.active())
         g_out << QStringLiteral("циклический код: сдвиг столбцов [%1, %2), поиск по орбитам")
                      .arg(symmetry.start).arg(symmetry.start + symmetry.length) << Qt::endl;

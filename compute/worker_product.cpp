@@ -7,6 +7,31 @@
 #include <cmath>
 #include <limits>
 
+// Круг сдвига у циклической компоненты (БЧХ, Хэмминг, в том числе
+// расширенные); пустой — сдвига нет. Структура в настройках описывает код
+// целиком — у произведения это само произведение, — поэтому компоненты
+// проверяются по матрице: сдвиг либо переводит код в себя, либо нет.
+static Cyclic::Symmetry componentSymmetry(const QStringList& rows)
+{
+    int words = 0;
+    const std::vector<quint64> packed = InfoSets::packRows(rows, words);
+    return Cyclic::find(packed.data(), rows.size(), rows.first().length(), words);
+}
+
+// Перебирается ли компонента Брауэром–Циммерманом по сдвигам: первые k
+// столбцов круга должны быть информационным множеством (cyclicorbit.h).
+static bool orbitSetFits(const QStringList& rows, const Cyclic::Symmetry& symmetry)
+{
+    const int k = rows.size();
+    if (!symmetry.active() || k > symmetry.length)
+        return false;
+    int words = 0;
+    const std::vector<quint64> packed = InfoSets::packRows(rows, words);
+    InfoSets::InfoSet set;
+    return InfoSets::systematize(packed.data(), k, rows.first().length(), words,
+                                 Cyclic::orbitInfoSet(symmetry, k), nullptr, set);
+}
+
 // Компонента произведения: точный спектр до weightUpTo и — если размерность
 // мала — все слова до этого веса. Маленькая компонента перебирается целиком
 // (код Грея), большая — Брауэром–Циммерманом во вложенном Worker: он
@@ -26,13 +51,8 @@ Worker::ComponentPlan Worker::planComponent(const QStringList& rows, int weightU
     // собирает только стохастический поиск; маленькую компоненту перебирает
     // Product::bruteForce сам, до planComponent дело не доходит.
     if (wantWords) {
-        // У циклической компоненты (БЧХ, Хэмминг) поиск пойдёт по орбитам.
-        Cyclic::Symmetry symmetry;
-        if (m_cyclicSearch) {
-            int packedWords = 0;
-            const std::vector<quint64> packed = InfoSets::packRows(rows, packedWords);
-            symmetry = Cyclic::find(packed.data(), k, n, packedWords);
-        }
+        // У циклической компоненты поиск пойдёт по орбитам.
+        const Cyclic::Symmetry symmetry = componentSymmetry(rows);
         const Leon::Plan p = Leon::plan(n, k, limit, m_settings.leonMissProbability(),
                                        m_settings.device == ComputationSettings::ComputeDevice::Gpu,
                                        nullptr, Leon::WindowPolicy::none(), symmetry);
@@ -67,6 +87,17 @@ Worker::ComponentPlan Worker::planComponent(const QStringList& rows, int weightU
                 const double cost = InfoSets::combinationsFor(depth, m, k);
                 consider(ComputationSettings::BrouwerZimmermann, cost * 1.001,   // при равенстве — полный
                          tr("Брауэр–Циммерман до веса %1 (%2 множ., до %3 строк)").arg(limit).arg(m).arg(r));
+            }
+        }
+        // Циклическая компонента — ещё и по сдвигам одного множества; из двух
+        // планов вложенный расчёт возьмёт тот же, что здесь, — дешёвый.
+        const Cyclic::Symmetry symmetry = componentSymmetry(rows);
+        if (orbitSetFits(rows, symmetry)) {
+            const int r = Cyclic::orbitDepthForWeight(symmetry, k, limit, n);
+            if (r < k) {
+                const double cost = InfoSets::combinationsFor(InfoSets::Depth{ r, 1 }, 1, k);
+                consider(ComputationSettings::BrouwerZimmermann, cost * 1.001,
+                         tr("Брауэр–Циммерман по сдвигам до веса %1 (до %2 строк)").arg(limit).arg(r));
             }
         }
     }
@@ -108,12 +139,17 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
     sub.setGridTuningThreshold(m_tuneThresholdSec);
     sub.setKeepFoundWords(wantWords);
     sub.setWindowPolicy(m_windowPolicy);
-    sub.setCyclicSearch(m_cyclicSearch);
 
     ComputationSettings cs = m_settings;
     cs.matrix        = rows;
     cs.matrix2.clear();
     cs.algorithm = plan.algorithm;
+    // Сдвиги — если компонента циклическая и способ расчёта их умеет:
+    // стохастическому поиску хватает круга, Брауэру–Циммерману нужно ещё
+    // множество на круге.
+    const Cyclic::Symmetry symmetry = componentSymmetry(rows);
+    cs.cyclic = plan.algorithm == ComputationSettings::RandomInfoSets ? symmetry.active()
+              : plan.algorithm == ComputationSettings::BrouwerZimmermann && orbitSetFits(rows, symmetry);
     cs.enumType      = full ? ComputationSettings::EnumerationType::Full
                             : ComputationSettings::EnumerationType::Partial;
     cs.bzWeight      = std::min(std::max(weightUpTo, 1), n);

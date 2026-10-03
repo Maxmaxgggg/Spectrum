@@ -177,7 +177,8 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
                          product ? (record.productMissExponent > 0
                                                   ? int(ComputationSettings::RandomInfoSets)
                                                   : int(ComputationSettings::BrouwerZimmermann))
-                                           : 0);
+                                           : 0,
+                         record.cyclic);
 
     m_unseenByWeight.clear();
     // Как и по ходу расчёта: Брауэр–Циммерман — только до заказанного веса.

@@ -53,6 +53,8 @@ QJsonObject AutosaveRecord::toJson() const
     QJsonObject obj;
     obj["version"]   = cyclicLength > 0 ? FORMAT_VERSION_ORBIT : FORMAT_VERSION;
     obj["algorithm"] = int(algorithm);
+    if (cyclic)
+        obj["cyclic"] = true;
     obj["enumType"]  = int(enumType);
     obj["maxRows"]   = maxRows;
     obj["finished"]  = finished;
@@ -106,6 +108,7 @@ AutosaveRecord AutosaveRecord::fromJson(const QJsonObject& obj)
     }
     r.cyclicStart  = obj["cyclicStart"].toInt();
     r.cyclicLength = obj["cyclicLength"].toInt();
+    r.cyclic       = obj["cyclic"].toBool() || r.cyclicLength > 0;
     r.leonWeight       = obj["leonWeight"].toInt();
     r.leonMissExponent = obj["leonMissExponent"].toInt();
     r.leonTrials       = JsonU64::read(obj["leonTrials"]);
@@ -143,6 +146,10 @@ bool canResume(const AutosaveRecord& record, const ComputationSettings& settings
         // Без множеств запись не продолжить: неизвестно, по каким матрицам
         // шёл перебор и какое множество засчитывало какое слово.
         if (record.infoSets.isEmpty() || settings.matrix.isEmpty())
+            return false;
+        // Структура «БЧХ» — другой способ перебора и счёта: продолжать можно
+        // только запись с той же структурой, что выбрана сейчас.
+        if (record.cyclic != settings.cyclic)
             return false;
         maxRows = quint64(resumeDepth(record, settings.bzWeight,
                                       settings.matrix.size(),

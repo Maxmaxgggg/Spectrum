@@ -71,6 +71,14 @@ struct ComputationSettings
     Algorithm       algorithm = SimpleXor;
     EnumerationType enumType  = Full;
     ComputeDevice   device    = Cpu;
+    // Структура кода — поле «Структура кода» в настройках: нет,
+    // код-произведение или БЧХ. Произведение задаётся алгоритмом ProductCode,
+    // БЧХ — этим флагом: код циклический (БЧХ, Хэмминг, Голей) или
+    // расширенный циклический, и частичный перебор идёт по сдвигам —
+    // Брауэр–Циммерман по сдвигам одного множества, стохастический поиск по
+    // орбитам (cyclic.h). Матрица проверяется: без сдвига, переводящего код
+    // в себя, расчёт не начнётся.
+    bool            cyclic = false;
     // Максимальное число перебираемых строк
     int             maxRows = 0;
     // Брауэр–Циммерман: до какого веса спектр нужен точно. Число строк
@@ -163,6 +171,7 @@ struct ComputationSettings
         obj["productWeight"] = productWeight;
         obj["productRank"] = productRank;
         obj["productAlgorithm"] = productAlgorithm;
+        obj["cyclic"] = cyclic;
         obj["compDev"] = static_cast<int>(device);
         obj["maxPlotBars"] = maxPlotBars;
         obj["autoTuneGrid"] = autoTuneGrid;
@@ -222,6 +231,7 @@ struct ComputationSettings
             s.productRank = obj["productRank"].toInt();
         if (obj.contains("productAlgorithm"))
             s.productAlgorithm = obj["productAlgorithm"].toInt();
+        s.cyclic = obj["cyclic"].toBool();
         s.device = static_cast<ComputeDevice>(obj["compDev"].toInt());
         // Ноль означает «ключа не было» — остаётся значение по умолчанию.
         if (obj["maxPlotBars"].toInt() > 0)

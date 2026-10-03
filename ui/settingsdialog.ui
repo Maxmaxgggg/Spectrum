@@ -35,18 +35,18 @@
       </attribute>
       <layout class="QVBoxLayout" name="computationTabLayout">
        <item>
-        <widget class="QGroupBox" name="codeKindGBX">
+        <widget class="QGroupBox" name="codeStructureGBX">
          <property name="title">
-          <string>Тип кода:</string>
+          <string>Структура кода:</string>
          </property>
-         <layout class="QHBoxLayout" name="codeKindLayout">
+         <layout class="QHBoxLayout" name="codeStructureLayout">
           <item>
-           <widget class="QRadioButton" name="singleCodeRBN">
+           <widget class="QRadioButton" name="noStructureRBN">
             <property name="toolTip">
-             <string>Код задан одной порождающей матрицей — панель «Матрица 1»</string>
+             <string>Структура не используется: код задан одной порождающей матрицей (панель «Матрица 1»), перебор и поиск идут по ней как есть</string>
             </property>
             <property name="text">
-             <string>Произвольный код</string>
+             <string>Нет</string>
             </property>
             <property name="checked">
              <bool>true</bool>
@@ -60,6 +60,16 @@
             </property>
             <property name="text">
              <string>Код-произведение</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QRadioButton" name="bchCodeRBN">
+            <property name="toolTip">
+             <string>Циклический код — БЧХ, Хэмминг, Голей, в том числе расширенные проверкой чётности (панель «Матрица 1»). Частичный перебор идёт по циклическим сдвигам: Брауэр–Циммерман перебирает одно информационное множество вместо нескольких, стохастический поиск ищет орбиты сдвигов — в разы быстрее и с меньшей памятью. Перед расчётом матрица проверяется: укороченный код не циклический</string>
+            </property>
+            <property name="text">
+             <string>БЧХ</string>
             </property>
            </widget>
           </item>

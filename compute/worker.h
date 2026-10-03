@@ -155,11 +155,6 @@ public:
     // расчёт на маленьких кодах.
     void setProductBruteForceMaxK(int k) { m_productBruteForceMaxK = k; }
 
-    // Случайный поиск по орбитам сдвигов у циклического кода (cyclic.h). По
-    // умолчанию включён; выключить нужно тестам — сравнить с поиском по
-    // отдельным словам.
-    void setCyclicSearch(bool on) { m_cyclicSearch = on; }
-
 public slots:
     void computeSpectrum( );
     // Замер потолка: сколько раз в секунду спектр реально успевает уйти в
@@ -353,7 +348,6 @@ private:
     bool                        m_tuneVerbose        = false;
     Leon::WindowPolicy          m_windowPolicy;
     int                         m_productBruteForceMaxK = Product::BRUTE_FORCE_MAX_K;
-    bool                        m_cyclicSearch = true;
 
     // Память расчёта на хосте и на видеокарте, поток ядер и кольцо снимков
     // (worker_p.h). Владеющая: освобождается вместе с объектом, каким бы

@@ -262,11 +262,11 @@ double tableBytesPerWord(int wordsPerRow)
     return 1.5 * (8.0 * std::max(1, wordsPerRow) + 6.0) + 12.0;
 }
 
-int maxWeightForMemory(int n, int k, quint64 limitBytes)
+int maxWeightForMemory(int n, int k, quint64 limitBytes, int orbitSize)
 {
     if (n <= 0)
         return 1;
-    const double perWord = tableBytesPerWord((n + 63) / 64);
+    const double perWord = tableBytesPerWord((n + 63) / 64) / double(std::max(1, orbitSize));
     int best = 1;
     for (int w = 1; w <= n; ++w) {
         if (expectedWordsUpTo(n, k, w) * perWord > double(limitBytes))

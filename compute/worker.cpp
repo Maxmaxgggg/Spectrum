@@ -25,6 +25,22 @@ Worker::~Worker()
 {
 }
 
+// Круг сдвига у кода со структурой «БЧХ». Сдвига, переводящего код в себя,
+// нет — структура выбрана не та. Это ошибка, а не тихий обычный перебор:
+// иначе выбор в настройках ничего бы не значил.
+static Cyclic::Symmetry cyclicSymmetryOf(const QStringList& matrix)
+{
+    int words = 0;
+    const std::vector<quint64> packed = InfoSets::packRows(matrix, words);
+    const Cyclic::Symmetry symmetry =
+        Cyclic::find(packed.data(), matrix.size(), matrix.first().length(), words);
+    if (!symmetry.active())
+        throw std::invalid_argument(
+            "структура «БЧХ»: у матрицы нет циклического сдвига столбцов, переводящего код в себя "
+            "(укороченный код, например, не циклический) — выберите структуру «Нет»");
+    return symmetry;
+}
+
 // Брауэр–Циммерман по сдвигам: круг, глубина и предел счёта — в слот ядра.
 static void setOrbitSlot(const CodeGeometry& g, MatrixSlot& slot)
 {
@@ -305,6 +321,11 @@ void Worker::makeCheckpoint(int cols, bool finished)
         record.cyclicStart  = m_activeOrbit.start;
         record.cyclicLength = m_activeOrbit.length;
     }
+    // Выбранная структура — чтобы «Продолжить» и подъём записи знали, с
+    // какой структурой шёл расчёт.
+    record.cyclic = m_settings.cyclic
+                    && (m_settings.algorithm == ComputationSettings::BrouwerZimmermann
+                        || m_settings.algorithm == ComputationSettings::RandomInfoSets);
     if (m_settings.algorithm == ComputationSettings::RandomInfoSets) {
         record.maxRows          = m_activeMaxRows;
         record.leonWeight       = m_settings.leonWeight;
@@ -472,13 +493,10 @@ CodeGeometry Worker::describeTask() const
         const bool windowAllowed = g.useGpu ? m_windowPolicy.gpu : m_windowPolicy.cpu;
         const Leon::SternProfile profile = windowAllowed ? Leon::sternProfile(g.matrix)
                                                          : Leon::SternProfile();
-        // Циклический код (БЧХ, Хэмминг, в том числе расширенные) ищется по
-        // орбитам: попыток и памяти во много раз меньше.
-        if (m_cyclicSearch) {
-            int words = 0;
-            const std::vector<quint64> packed = InfoSets::packRows(g.matrix, words);
-            g.leonSymmetry = Cyclic::find(packed.data(), int(g.rows), int(g.cols), words);
-        }
+        // Структура «БЧХ»: поиск по орбитам сдвигов — попыток и памяти во
+        // много раз меньше.
+        if (m_settings.cyclic)
+            g.leonSymmetry = cyclicSymmetryOf(g.matrix);
         const Leon::Plan plan = Leon::plan(int(g.cols), int(g.rows),
                                            m_settings.leonWeight, m_settings.leonMissProbability(),
                                            g.useGpu, &profile, m_windowPolicy, g.leonSymmetry);
@@ -503,11 +521,11 @@ void Worker::planInfoSets(CodeGeometry& g) const
     const int cols = int(g.cols);
     const bool resumed = !m_resumedInfoSets.isEmpty();
 
-    // Циклический код можно перебирать по сдвигам одного множества
-    // (cyclicorbit.h). Продолжается запись тем же способом, каким шла.
+    // Структура «БЧХ»: перебор по сдвигам одного множества (cyclicorbit.h).
+    // Продолжается запись тем же способом, каким шла.
     Cyclic::Symmetry orbit = resumed ? m_resumedOrbit
-                           : m_cyclicSearch ? Cyclic::find(packed.data(), rows, cols, words)
-                                            : Cyclic::Symmetry();
+                           : m_settings.cyclic ? cyclicSymmetryOf(g.matrix)
+                                               : Cyclic::Symmetry();
     InfoSets::InfoSet orbitSet;
     int    orbitDepth = -1;
     double orbitCost  = std::numeric_limits<double>::infinity();
@@ -517,6 +535,10 @@ void Worker::planInfoSets(CodeGeometry& g) const
         orbitDepth = Cyclic::orbitDepthForWeight(orbit, rows, m_settings.bzWeight, cols);
         orbitCost  = InfoSets::combinationsFor(InfoSets::Depth{ orbitDepth, 1 }, 1, rows);
     }
+    if (!resumed && orbit.active() && orbitDepth < 0)
+        throw std::invalid_argument(
+            "структура «БЧХ»: первые k столбцов круга сдвига не информационное множество — "
+            "по сдвигам этот код не перебрать, выберите структуру «Нет»");
     if (resumed && orbit.active()) {
         // Круг из записи должен быть тем же, что находится у матрицы.
         const Cyclic::Symmetry found = Cyclic::find(packed.data(), rows, cols, words);

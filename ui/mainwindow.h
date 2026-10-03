@@ -37,7 +37,7 @@ signals:
     void settingsRequested();
     // Настройки расчёта из поднятого автосохранения.
     void autosaveApplied(int algorithm, int enumType, int rank, int weight,
-                         int componentAlgorithm);
+                         int componentAlgorithm, bool cyclic);
 
 private slots:
 

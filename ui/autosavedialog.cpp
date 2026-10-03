@@ -90,13 +90,17 @@ AutosaveDialog::AutosaveDialog(AutosaveStore* store, QWidget* parent)
 
 QString AutosaveDialog::describeAlgorithm(const AutosaveRecord& record)
 {
+    // Структура «БЧХ» — частичный перебор шёл по циклическим сдвигам.
+    const QString bch = record.cyclic ? tr(", БЧХ") : QString();
     switch (record.algorithm) {
         case ComputationSettings::GrayCode:          return tr("код Грея");
         case ComputationSettings::DualCode:          return tr("дуальный код");
-        case ComputationSettings::BrouwerZimmermann: return tr("Брауэр–Циммерман, до веса %1").arg(record.bzWeight);
-        case ComputationSettings::RandomInfoSets:    return tr("стохастический, до веса %1, в-ть пропуска %2")
+        case ComputationSettings::BrouwerZimmermann: return tr("Брауэр–Циммерман, до веса %1%2")
+                                                                .arg(record.bzWeight).arg(bch);
+        case ComputationSettings::RandomInfoSets:    return tr("стохастический, до веса %1, в-ть пропуска %2%3")
                                                                 .arg(record.leonWeight)
-                                                                .arg(Format::powerOfTen(-record.leonMissExponent));
+                                                                .arg(Format::powerOfTen(-record.leonMissExponent))
+                                                                .arg(bch);
         case ComputationSettings::ProductCode:       return tr("код-произведение");
         default:                                     return tr("простой XOR");
     }
