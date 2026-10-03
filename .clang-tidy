@@ -28,7 +28,7 @@ CheckOptions:
   # Переменные; приставки памяти CUDA: d_ — устройство, h_ — копия на
   # хосте, s_ — разделяемая, c_ — константная
   readability-identifier-naming.ParameterCase: camelBack
-  readability-identifier-naming.ParameterIgnoredRegexp: '^[hd]_[a-z][A-Za-z0-9]*$'
+  readability-identifier-naming.ParameterIgnoredRegexp: '^[hds]_[a-z][A-Za-z0-9]*$'
   readability-identifier-naming.LocalVariableCase: camelBack
   readability-identifier-naming.LocalVariableIgnoredRegexp: '^[hds]_[a-z][A-Za-z0-9]*$'
   readability-identifier-naming.StaticVariableCase: camelBack

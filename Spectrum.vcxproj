@@ -53,6 +53,7 @@
     <ClInclude Include="compute\infosets.h" />
     <ClInclude Include="compute\leon.h" />
     <ClInclude Include="compute\cyclic.h" />
+    <ClInclude Include="compute\cyclicorbit.h" />
     <ClInclude Include="compute\product.h" />
     <ClInclude Include="compute\leonkernel.cuh" />
     <ClInclude Include="compute\spectrumring.h" />

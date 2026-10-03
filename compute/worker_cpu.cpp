@@ -9,6 +9,7 @@
 #include "worker_p.h"
 #include "bitops.h"
 #include "combinations.h"
+#include "cyclicorbit.h"
 
 #include <algorithm>
 #include <chrono>
@@ -33,6 +34,16 @@ inline bool bzKeepHost(const quint64* codeword, const CodeGeometry& g, int r, in
             return false;
     }
     return true;
+}
+
+// Сколько добавить к спектру за слово по Брауэру–Циммерману по сдвигам: ноль
+// для тяжёлого и незасчитываемого, иначе размер орбиты (cyclicorbit.h).
+inline quint64 orbitCount(const quint64* codeword, const CodeGeometry& g, quint64 weight)
+{
+    if (weight > quint64(g.countUpTo))
+        return 0;
+    return quint64(CyclicOrbit::designatedOrbit<Constants::MAX_BLOCKWORDS>(
+        codeword, int(g.wordsPerRow), g.bzOrbit.start, g.bzOrbit.length, int(g.rows), int(g.maxRows)));
 }
 
 } // namespace
@@ -213,9 +224,11 @@ bool Worker::xorChunkCpuShort(const CodeGeometry& g, quint64 r, const LayerSlice
                 quint64 weight = 0;
                 for (quint64 b = 0; b < wordsPerRow; ++b)
                     weight += BitOps::popcount64(localCodeword[b]);
-                if (weight <= cols
-                    && (g.setCount <= 1
-                        || bzKeepHost(localCodeword.data(), g, int(r), s.slot.setIndex)))
+                if (weight > cols)
+                    return;
+                if (g.bzOrbit.active())
+                    localSpectrum[weight] += orbitCount(localCodeword.data(), g, weight);
+                else if (g.setCount <= 1 || bzKeepHost(localCodeword.data(), g, int(r), s.slot.setIndex))
                     localSpectrum[weight]++;
             };
 
@@ -290,8 +303,11 @@ bool Worker::xorChunkCpuLong(const CodeGeometry& g, quint64 r, const LayerSlice&
             quint64 weight = 0;
             for (size_t w = 0; w < size_t(wordsPerRow); ++w)
                 weight += BitOps::popcount64(codeword[w]);
-            if (weight <= cols
-                && (g.setCount <= 1 || bzKeepHost(codeword.data(), g, int(r), s.slot.setIndex)))
+            if (weight > cols)
+                return;
+            if (g.bzOrbit.active())
+                localSpectrum[size_t(weight)] += orbitCount(codeword.data(), g, weight);
+            else if (g.setCount <= 1 || bzKeepHost(codeword.data(), g, int(r), s.slot.setIndex))
                 localSpectrum[size_t(weight)]++;
         };
 

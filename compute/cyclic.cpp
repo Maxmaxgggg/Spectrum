@@ -224,4 +224,33 @@ std::vector<int> orbitSizes(const Symmetry& symmetry, int cyclicWeight)
     return sizes;
 }
 
+std::vector<int> orbitInfoSet(const Symmetry& symmetry, int rows)
+{
+    std::vector<int> columns;
+    for (int i = 0; i < rows && i < symmetry.length; ++i)
+        columns.push_back(symmetry.start + i);
+    return columns;
+}
+
+int orbitGuaranteedBelow(const Symmetry& symmetry, int rows, int depth, int cols)
+{
+    if (!symmetry.active() || rows <= 0)
+        return 0;
+    if (depth >= rows)
+        return cols + 1;
+    // Слово, не найденное ни на одном сдвиге, несёт в каждом из L окон не
+    // меньше depth + 1 единиц, а каждый столбец круга — ровно в rows окнах.
+    const long long total = (long long)symmetry.length * (depth + 1);
+    const long long bound = (total + rows - 1) / rows;
+    return int(std::min<long long>(bound, cols + 1));
+}
+
+int orbitDepthForWeight(const Symmetry& symmetry, int rows, int weight, int cols)
+{
+    for (int depth = 0; depth < rows; ++depth)
+        if (orbitGuaranteedBelow(symmetry, rows, depth, cols) > weight)
+            return depth;
+    return rows;
+}
+
 } // namespace Cyclic

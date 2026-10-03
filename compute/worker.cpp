@@ -25,6 +25,17 @@ Worker::~Worker()
 {
 }
 
+// Брауэр–Циммерман по сдвигам: круг, глубина и предел счёта — в слот ядра.
+static void setOrbitSlot(const CodeGeometry& g, MatrixSlot& slot)
+{
+    if (!g.bzOrbit.active())
+        return;
+    slot.circleStart  = g.bzOrbit.start;
+    slot.circleLength = g.bzOrbit.length;
+    slot.orbitDepth   = int(g.maxRows);
+    slot.countUpTo    = g.countUpTo;
+}
+
 // Кусок слоя с номера layerOffset (сквозного по множествам) длиной до
 // chunkSize, не пересекающий границу множества. См. LayerSlice.
 static LayerSlice sliceLayer(const CodeGeometry& g, quint64 perSet,
@@ -37,6 +48,7 @@ static LayerSlice sliceLayer(const CodeGeometry& g, quint64 perSet,
     slice.slot.rowBase  = int(set * g.rows);
     slice.slot.setIndex = int(set);
     slice.slot.setCount = g.setCount;
+    setOrbitSlot(g, slice.slot);
     return slice;
 }
 
@@ -290,6 +302,8 @@ void Worker::makeCheckpoint(int cols, bool finished)
         record.maxRows  = m_activeMaxRows;
         record.bzWeight = m_settings.bzWeight;
         record.infoSets = m_activeInfoSets;
+        record.cyclicStart  = m_activeOrbit.start;
+        record.cyclicLength = m_activeOrbit.length;
     }
     if (m_settings.algorithm == ComputationSettings::RandomInfoSets) {
         record.maxRows          = m_activeMaxRows;
@@ -487,6 +501,28 @@ void Worker::planInfoSets(CodeGeometry& g) const
     const std::vector<quint64> packed = InfoSets::packRows(g.matrix, words);
     const int rows = int(g.rows);
     const int cols = int(g.cols);
+    const bool resumed = !m_resumedInfoSets.isEmpty();
+
+    // Циклический код можно перебирать по сдвигам одного множества
+    // (cyclicorbit.h). Продолжается запись тем же способом, каким шла.
+    Cyclic::Symmetry orbit = resumed ? m_resumedOrbit
+                           : m_cyclicSearch ? Cyclic::find(packed.data(), rows, cols, words)
+                                            : Cyclic::Symmetry();
+    InfoSets::InfoSet orbitSet;
+    int    orbitDepth = -1;
+    double orbitCost  = std::numeric_limits<double>::infinity();
+    if (orbit.active() && rows <= orbit.length
+        && InfoSets::systematize(packed.data(), rows, cols, words, Cyclic::orbitInfoSet(orbit, rows),
+                                 nullptr, orbitSet)) {
+        orbitDepth = Cyclic::orbitDepthForWeight(orbit, rows, m_settings.bzWeight, cols);
+        orbitCost  = InfoSets::combinationsFor(InfoSets::Depth{ orbitDepth, 1 }, 1, rows);
+    }
+    if (resumed && orbit.active()) {
+        // Круг из записи должен быть тем же, что находится у матрицы.
+        const Cyclic::Symmetry found = Cyclic::find(packed.data(), rows, cols, words);
+        if (orbitDepth < 0 || found.start != orbit.start || found.length != orbit.length)
+            throw std::invalid_argument("круг симметрии из сохранения не подходит к матрице");
+    }
 
     // Все матрицы должны поместиться в константную память видеокарты: у
     // короткого пути другого места для них нет. Предел один для обоих
@@ -495,12 +531,12 @@ void Worker::planInfoSets(CodeGeometry& g) const
     const int maxSets = std::min(Constants::MAX_INFO_SETS, fit);
 
     std::vector<InfoSets::InfoSet> sets;
-    if (!m_resumedInfoSets.isEmpty()) {
+    if (resumed && !orbit.active()) {
         if (!InfoSets::rebuild(packed.data(), rows, cols, words, m_resumedInfoSets, sets))
             throw std::invalid_argument(
                 "множества из сохранения не подходят к матрице");
     }
-    else {
+    else if (!resumed) {
         sets = InfoSets::find(packed.data(), rows, cols, words, maxSets);
         if (sets.empty())
             throw std::invalid_argument(
@@ -510,14 +546,45 @@ void Worker::planInfoSets(CodeGeometry& g) const
             overlaps.push_back(set.overlap);
         sets.resize(size_t(InfoSets::setsForWeight(overlaps, m_settings.bzWeight, rows, cols)));
     }
-    if (int(sets.size()) > maxSets)
-        throw std::invalid_argument("множеств больше, чем помещается в память видеокарты");
 
-    g.setCount = int(sets.size());
+    // Обычный план и его цена — для сравнения с перебором по сдвигам.
+    std::vector<int> overlaps;
+    for (const InfoSets::InfoSet& set : sets)
+        overlaps.push_back(set.overlap);
+    const InfoSets::Depth depth = sets.empty() ? InfoSets::Depth()
+                                : InfoSets::depthForWeight(overlaps, m_settings.bzWeight, rows, cols);
+    const double plainCost = sets.empty() ? std::numeric_limits<double>::infinity()
+                           : InfoSets::combinationsFor(depth, int(sets.size()), rows);
+
     g.setOverlaps.clear();
     g.setMasks.clear();
     g.setRows.clear();
     g.setColumns.clear();
+    g.bzOrbit = Cyclic::Symmetry();
+
+    // По сдвигам — если дешевле. Почти всегда так: множество одно, а граница
+    // не хуже, чем у нескольких, — у [127,92] она в 1,38 раза выше на слой.
+    // При равной цене — обычный план: так бывает при полном переборе, и там
+    // проверка орбиты досталась бы каждому слову.
+    if (orbitDepth >= 0 && (resumed || orbitCost < plainCost)) {
+        g.setCount        = 1;
+        g.lastLayerSets   = 1;
+        g.setOverlaps.push_back(0);
+        g.setMasks        = orbitSet.mask;
+        g.setRows         = orbitSet.rows;
+        g.setColumns.append(QVector<int>(orbitSet.columns.begin(), orbitSet.columns.end()));
+        g.matrixWords     = quint64(g.setRows.size());
+        g.maxRows         = quint64(orbitDepth);
+        g.guaranteedBelow = Cyclic::orbitGuaranteedBelow(orbit, rows, orbitDepth, cols);
+        g.bzOrbit         = orbit;
+        g.countUpTo       = g.guaranteedBelow - 1;
+        return;
+    }
+
+    if (int(sets.size()) > maxSets)
+        throw std::invalid_argument("множеств больше, чем помещается в память видеокарты");
+
+    g.setCount = int(sets.size());
     for (const InfoSets::InfoSet& set : sets) {
         g.setOverlaps.push_back(set.overlap);
         g.setMasks.insert(g.setMasks.end(), set.mask.begin(), set.mask.end());
@@ -525,7 +592,6 @@ void Worker::planInfoSets(CodeGeometry& g) const
         g.setColumns.append(QVector<int>(set.columns.begin(), set.columns.end()));
     }
     g.matrixWords     = quint64(g.setRows.size());
-    const InfoSets::Depth depth = InfoSets::depthForWeight(g.setOverlaps, m_settings.bzWeight, rows, cols);
     g.maxRows         = quint64(depth.maxRows);
     g.lastLayerSets   = depth.lastLayerSets;
     g.guaranteedBelow = InfoSets::guaranteedBelow(g.setOverlaps, depth, rows, cols);
@@ -636,6 +702,7 @@ void Worker::tuneGrid(CodeGeometry& g)
     task.userGrid    = { g.blocksGpu, g.threadsGpu };
     task.verbose     = m_tuneVerbose;
     task.slot.setCount = g.setCount;
+    setOrbitSlot(g, task.slot);
 
     const bool gray = !m_settings.layered();
     task.kernel = g.isLongCode ? GridTuneTask::Kernel::XorLong
@@ -852,6 +919,7 @@ void Worker::computeSpectrumImpl()
     // перебора и множества он не задавал, они выведены из веса и матрицы.
     m_activeInfoSets = g.setColumns;
     m_activeMaxRows  = int(g.maxRows);
+    m_activeOrbit    = g.bzOrbit;
     m_activeTrials   = 0;
     m_displayUpToWeight = m_settings.algorithm == ComputationSettings::BrouwerZimmermann
                           ? m_settings.bzWeight : -1;
@@ -972,6 +1040,7 @@ void Worker::initializeRunState(LoadMode lm)
         m_runState.spectrum.clear();
         m_resumeSpectrum = false;
         m_resumedInfoSets.clear();
+        m_resumedOrbit = Cyclic::Symmetry();
         return;
     }
     else {
@@ -984,7 +1053,9 @@ void Worker::initializeRunState(LoadMode lm)
 
         m_runState = record.state;
         // Продолжать Брауэра–Циммермана можно только по множествам записи
+        // и тем же способом счёта.
         m_resumedInfoSets = record.infoSets;
+        m_resumedOrbit    = Cyclic::Symmetry{ record.cyclicStart, record.cyclicLength };
         // Накопленный спектр перенесётся в буферы расчёта (prepareBuffers)
         m_resumeSpectrum = true;
     }

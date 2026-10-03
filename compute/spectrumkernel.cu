@@ -5,6 +5,7 @@
 #include "spectrumkernel.cuh"
 #include "bitops.h"
 #include "combinations.h"
+#include "cyclicorbit.h"
 #include "wordvariants.h"
 
 // Порождающая матрица в константной памяти.
@@ -59,6 +60,24 @@ __device__ __forceinline__ bool bzKeep(const quint64* codeword, int words, int r
             return false;
     }
     return true;
+}
+
+// Брауэр–Циммерман по сдвигам у циклического кода (cyclicorbit.h): слово тяжелее
+// slot.countUpTo не считается вовсе, лёгкое — размером своей орбиты, если оно
+// у орбиты засчитываемое. Лёгких слов единицы на миллионы перебранных, поэтому
+// сама проверка вынесена в невстраиваемую функцию и горячий цикл не трогает.
+// Множество S₀ — первые k столбцов круга, k — строк матрицы.
+template <int WORDS>
+__device__ __forceinline__ void countOrbit(quint64* s_spectrum, const quint64* codeword, int words,
+                                           int weight, int k, MatrixSlot slot)
+{
+    if (weight > slot.countUpTo)
+        return;
+    constexpr int MAXW = WORDS > 0 ? WORDS : Constants::MAX_BLOCKWORDS;
+    const int orbit = CyclicOrbit::designatedOrbit<MAXW>(codeword, words, slot.circleStart,
+                                                         slot.circleLength, k, slot.orbitDepth);
+    if (orbit > 0)
+        atomicAdd(&s_spectrum[weight], quint64(orbit));
 }
 
 // Таблица биномов в памяти устройства: C(n, m) лежит в строке n с шагом
@@ -176,7 +195,7 @@ __device__ __forceinline__ void xorRowFromShared(quint64* codeword,
 
 
 // Определение ниже; здесь оно нужно обёртке запуска.
-template <int WORDS>
+template <int WORDS, bool CYCLIC>
 __global__ void xorKernelShort(
     quint64* d_spectrum, const quint64* d_binomTable,
     int n, int k, int wordsPerRow,
@@ -215,10 +234,16 @@ __host__ void launchXorShort(
     const size_t sharedBytes =
         (size_t)(((n + 2) & ~1) + k * (words > 0 ? words : wordsPerRow)) * sizeof(quint64);
 
+    // Режим орбит у циклического кода — отдельные варианты ядра: обычный
+    // перебор остаётся тем же кодом, что и был.
     auto launch = [&](auto w) {
         constexpr int W = decltype(w)::value;
-        xorKernelShort<W><<<blocks, threadsPerBlock, sharedBytes, stream>>>(
-            d_spectrum, d_binomTable, n, k, wordsPerRow, chunkOffset, chunkSize, r, slot);
+        if (slot.circleLength > 0)
+            xorKernelShort<W, true><<<blocks, threadsPerBlock, sharedBytes, stream>>>(
+                d_spectrum, d_binomTable, n, k, wordsPerRow, chunkOffset, chunkSize, r, slot);
+        else
+            xorKernelShort<W, false><<<blocks, threadsPerBlock, sharedBytes, stream>>>(
+                d_spectrum, d_binomTable, n, k, wordsPerRow, chunkOffset, chunkSize, r, slot);
     };
     // Запасной путь: размер берётся из аргумента, кодовое слово живёт в
     // локальной памяти. Сюда попасть не должно.
@@ -240,7 +265,10 @@ __host__ void launchXorShort(
 //
 // При известном WORDS цикл разворачивается, массив живёт в регистрах, и
 // обращений к памяти не остаётся вовсе.
-template <int WORDS>
+//
+// CYCLIC — Брауэр–Циммерман по сдвигам у циклического кода (countOrbit): слова
+// считаются не сериями, а по одному, и только лёгкие.
+template <int WORDS, bool CYCLIC>
 __global__ void xorKernelShort(
     quint64* d_spectrum,
     const quint64* d_binomTable,
@@ -339,7 +367,11 @@ __global__ void xorKernelShort(
         int     runWeight = 0;
         #pragma unroll
             for (int w = 0; w < words; ++w) runWeight += __popcll(codeword[w]);
-        if (slot.setCount > 1 && !bzKeep<WORDS>(codeword, words, int(r), slot))
+        if (CYCLIC) {
+            countOrbit<WORDS>(s_spectrum, codeword, words, runWeight, k, slot);
+            runWeight = -1;
+        }
+        else if (slot.setCount > 1 && !bzKeep<WORDS>(codeword, words, int(r), slot))
             runWeight = -1;
         quint64 runLength = 1;
 
@@ -360,7 +392,11 @@ __global__ void xorKernelShort(
             int weight = 0;
             #pragma unroll
             for (int w = 0; w < words; ++w) weight += __popcll(codeword[w]);
-            if (slot.setCount > 1 && !bzKeep<WORDS>(codeword, words, int(r), slot))
+            if (CYCLIC) {
+                countOrbit<WORDS>(s_spectrum, codeword, words, weight, k, slot);
+                weight = -1;
+            }
+            else if (slot.setCount > 1 && !bzKeep<WORDS>(codeword, words, int(r), slot))
                 weight = -1;
 
             if (weight == runWeight) {
@@ -388,7 +424,7 @@ __global__ void xorKernelShort(
     }
 }
 // Обертка для ядра для расчета частичных спектров длинных кодов
-template <int WORDS>
+template <int WORDS, bool CYCLIC>
 __global__ void xorKernelLong(
     uint64_t* d_spectrum, const uint64_t* matrixGlobal,
     int n, int k, int wordsPerRow, uint64_t chunkSize,
@@ -437,9 +473,14 @@ __host__ void launchXorLong(
 
     auto launch = [&](auto w) {
         constexpr int W = decltype(w)::value;
-        xorKernelLong<W><<<blocks, threadsPerBlock, sharedBytes, stream>>>(
-            d_spectrum, matrixGlobal, n, k, wordsPerRow, chunkSize, d_startPositions,
-            masksPerThread, numStartMasks, r, d_maskCounter, stageMatrix, slot);
+        if (slot.circleLength > 0)
+            xorKernelLong<W, true><<<blocks, threadsPerBlock, sharedBytes, stream>>>(
+                d_spectrum, matrixGlobal, n, k, wordsPerRow, chunkSize, d_startPositions,
+                masksPerThread, numStartMasks, r, d_maskCounter, stageMatrix, slot);
+        else
+            xorKernelLong<W, false><<<blocks, threadsPerBlock, sharedBytes, stream>>>(
+                d_spectrum, matrixGlobal, n, k, wordsPerRow, chunkSize, d_startPositions,
+                masksPerThread, numStartMasks, r, d_maskCounter, stageMatrix, slot);
     };
     if (!dispatchWords(words, launch))
         launch(std::integral_constant<int, 0>());
@@ -453,7 +494,8 @@ __host__ void launchXorLong(
 // зависит от числа единиц в маске, известного только в рантайме, да и
 // nextPositions принимает указатель. Но горячие данные здесь именно codeword —
 // его XOR-ят на каждой изменившейся позиции и считают popcount на каждой маске.
-template <int WORDS>
+// CYCLIC — как у коротких ядер.
+template <int WORDS, bool CYCLIC>
 __global__ void xorKernelLong(
     uint64_t* d_spectrum,
     const uint64_t* matrixGlobal,
@@ -542,7 +584,9 @@ __global__ void xorKernelLong(
         for (int w = 0; w < words; ++w)
             weight += __popcll(codeword[w]);
 
-        if (matrixSlot.setCount <= 1 || bzKeep<WORDS>(codeword, words, int(r), matrixSlot))
+        if (CYCLIC)
+            countOrbit<WORDS>(s_spectrum, codeword, words, weight, k, matrixSlot);
+        else if (matrixSlot.setCount <= 1 || bzKeep<WORDS>(codeword, words, int(r), matrixSlot))
             atomicAdd(&s_spectrum[weight], 1ULL);
         #ifdef _DEBUG
         atomicAdd(d_maskCounter, 1ULL);
@@ -596,7 +640,9 @@ __global__ void xorKernelLong(
         for (int w = 0; w < words; ++w)
                 weight += __popcll(codeword[w]);
 
-            if (matrixSlot.setCount <= 1 || bzKeep<WORDS>(codeword, words, int(r), matrixSlot))
+            if (CYCLIC)
+                countOrbit<WORDS>(s_spectrum, codeword, words, weight, k, matrixSlot);
+            else if (matrixSlot.setCount <= 1 || bzKeep<WORDS>(codeword, words, int(r), matrixSlot))
                 atomicAdd(&s_spectrum[weight], 1ULL);
             #ifdef _DEBUG
             atomicAdd(d_maskCounter, 1ULL);

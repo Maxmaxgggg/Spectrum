@@ -1,6 +1,7 @@
 #include "autosavestore.h"
 
 #include "constants.h"
+#include "cyclic.h"
 #include "infosets.h"
 
 #include <QCryptographicHash>
@@ -21,10 +22,22 @@ namespace {
 
 const QLatin1String MATRIX_FILE("matrix.txt");
 
-// Версия формата записи. Пока одна, но читать чужую версию вслепую нельзя:
-// в спектре лежат числа, и молча принять чужую раскладку — это тихо неверный
+// Версия формата записи. Читать чужую версию вслепую нельзя: в спектре
+// лежат числа, и молча принять чужую раскладку — это тихо неверный
 // результат, а не ошибка.
-constexpr int FORMAT_VERSION = 1;
+//
+// Версия 2 — только у записей Брауэра–Циммермана по сдвигам (cyclicorbit.h):
+// их спектр считан правилом орбит, и сборка, которая о нём не знает, обязана
+// такую запись пропустить, а не продолжить как обычную. Остальные записи
+// пишутся версией 1 — их читают и прежние сборки.
+constexpr int FORMAT_VERSION       = 1;
+constexpr int FORMAT_VERSION_ORBIT = 2;
+
+bool knownVersion(const QJsonObject& obj)
+{
+    const int version = obj["version"].toInt();
+    return version == FORMAT_VERSION || version == FORMAT_VERSION_ORBIT;
+}
 
 QString matrixText(const Matrix& matrix)
 {
@@ -38,7 +51,7 @@ QString matrixText(const Matrix& matrix)
 QJsonObject AutosaveRecord::toJson() const
 {
     QJsonObject obj;
-    obj["version"]   = FORMAT_VERSION;
+    obj["version"]   = cyclicLength > 0 ? FORMAT_VERSION_ORBIT : FORMAT_VERSION;
     obj["algorithm"] = int(algorithm);
     obj["enumType"]  = int(enumType);
     obj["maxRows"]   = maxRows;
@@ -55,6 +68,10 @@ QJsonObject AutosaveRecord::toJson() const
             sets.append(columns);
         }
         obj["infoSets"] = sets;
+        if (cyclicLength > 0) {
+            obj["cyclicStart"]  = cyclicStart;
+            obj["cyclicLength"] = cyclicLength;
+        }
     }
     if (algorithm == ComputationSettings::RandomInfoSets) {
         obj["leonWeight"]       = leonWeight;
@@ -87,6 +104,8 @@ AutosaveRecord AutosaveRecord::fromJson(const QJsonObject& obj)
             columns.append(c.toInt());
         r.infoSets.append(columns);
     }
+    r.cyclicStart  = obj["cyclicStart"].toInt();
+    r.cyclicLength = obj["cyclicLength"].toInt();
     r.leonWeight       = obj["leonWeight"].toInt();
     r.leonMissExponent = obj["leonMissExponent"].toInt();
     r.leonTrials       = JsonU64::read(obj["leonTrials"]);
@@ -102,6 +121,10 @@ InfoSets::Depth resumeDepth(const AutosaveRecord& record, int weight, int rows, 
 {
     if (record.infoSets.isEmpty())
         return InfoSets::Depth{ 0, 1 };
+    if (record.cyclicLength > 0)
+        return InfoSets::Depth{ Cyclic::orbitDepthForWeight(
+                                    Cyclic::Symmetry{ record.cyclicStart, record.cyclicLength },
+                                    rows, weight, cols), 1 };
     return InfoSets::depthForWeight(InfoSets::overlapsOf(record.infoSets), weight, rows, cols);
 }
 
@@ -124,6 +147,11 @@ bool canResume(const AutosaveRecord& record, const ComputationSettings& settings
         maxRows = quint64(resumeDepth(record, settings.bzWeight,
                                       settings.matrix.size(),
                                       settings.matrix.first().length()).maxRows);
+        // Перебор по сдвигам: какое слово засчитывать, решает глубина, и до
+        // какого веса считать — тоже. Другая глубина — другой счёт, начинать
+        // заново.
+        if (record.cyclicLength > 0 && int(maxRows) != record.maxRows)
+            return false;
     }
 
     // Слой rOffset пройден частично: его вклад уже лежит в спектре, поэтому
@@ -150,6 +178,10 @@ double totalOperations(const AutosaveRecord& record, int rows)
 
     // У Брауэра–Циммермана слои до последнего — по всем множествам, последний
     // — по части (см. infosets.h); глубина выводится из веса, как в расчёте.
+    // По сдвигам — одно множество до глубины записи.
+    // Глубина в записи своя и может быть нулевой.
+    if (record.algorithm == ComputationSettings::BrouwerZimmermann && record.cyclicLength > 0)
+        return InfoSets::combinationsFor(InfoSets::Depth{ qMin(record.maxRows, rows), 1 }, 1, rows);
     if (record.algorithm == ComputationSettings::BrouwerZimmermann
         && !record.infoSets.isEmpty() && !record.state.spectrum.isEmpty()) {
         const int cols = record.state.spectrum.size() - 1;
@@ -258,7 +290,7 @@ bool AutosaveStore::load(const Matrix& matrix, ComputationSettings::Algorithm al
         return false;
 
     const QJsonObject obj = doc.object();
-    if (obj["version"].toInt() != FORMAT_VERSION)
+    if (!knownVersion(obj))
         return false;
 
     out = AutosaveRecord::fromJson(obj);
@@ -347,7 +379,7 @@ QVector<AutosaveEntry> AutosaveStore::list() const
                 continue;
 
             const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-            if (!doc.isObject() || doc.object()["version"].toInt() != FORMAT_VERSION)
+            if (!doc.isObject() || !knownVersion(doc.object()))
                 continue;
 
             AutosaveEntry entry;

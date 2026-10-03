@@ -42,6 +42,7 @@
 #include "isd.h"
 #include "leonkernel.cuh"
 #include "leon.h"
+#include "cyclicorbit.h"
 #include "mixing.h"
 #include "product.h"
 #include "bch.h"
@@ -270,7 +271,24 @@ static quint64 expectedTotalOps(const RunConfig& cfg)
         quint64 below = 0;
         for (quint64 r = 0; r + 1 <= quint64(depth.maxRows); ++r)
             below += Reference::binom(k, r);
-        return below * sets + Reference::binom(k, quint64(depth.maxRows)) * quint64(depth.lastLayerSets);
+        const quint64 plain = below * sets + Reference::binom(k, quint64(depth.maxRows)) * quint64(depth.lastLayerSets);
+
+        // У циклического кода воркер берёт перебор по сдвигам, если он не
+        // дороже (planInfoSets): одно множество до своей глубины.
+        const Cyclic::Symmetry orbit = cfg.cyclicSearch ? Cyclic::find(packed.data(), rows, cols, words)
+                                                        : Cyclic::Symmetry();
+        InfoSets::InfoSet orbitSet;
+        if (orbit.active() && rows <= orbit.length
+            && InfoSets::systematize(packed.data(), rows, cols, words, Cyclic::orbitInfoSet(orbit, rows),
+                                     nullptr, orbitSet)) {
+            const int orbitDepth = Cyclic::orbitDepthForWeight(orbit, rows, weight, cols);
+            quint64 orbitTotal = 0;
+            for (quint64 r = 0; r <= quint64(orbitDepth); ++r)
+                orbitTotal += Reference::binom(k, r);
+            if (orbitTotal < plain)
+                return orbitTotal;
+        }
+        return plain;
     }
     quint64 total = 0;
     for (quint64 r = 0; r <= maxRows; ++r)
@@ -2862,7 +2880,9 @@ static void testBzPartialLayer()
 
 // Расчёт по Брауэру–Циммерману на матрице из файла: план, время, спектр.
 //
-// Запуск: SpectrumTests.exe --bz-run <файл матрицы> <вес> [cpu|gpu]
+// Запуск: SpectrumTests.exe --bz-run <файл матрицы> <вес> [cpu|gpu][-words]
+// «-words» в конце — без перебора по сдвигам у циклического кода, для
+// сравнения.
 static int bzRun(const QString& path, int weight, const QString& device)
 {
     RunConfig cfg;
@@ -2870,7 +2890,8 @@ static int bzRun(const QString& path, int weight, const QString& device)
         return 2;
     cfg.algorithm = Algorithm::BrouwerZimmermann;
     cfg.bzWeight  = weight;
-    cfg.device    = device == QStringLiteral("cpu") ? ComputeDevice::Cpu : ComputeDevice::Gpu;
+    cfg.device    = device.startsWith(QStringLiteral("cpu")) ? ComputeDevice::Cpu : ComputeDevice::Gpu;
+    cfg.cyclicSearch = !device.endsWith(QStringLiteral("-words"));
     cfg.threadsCpu = omp_get_num_procs();
     cfg.autoTune   = cfg.device == ComputeDevice::Gpu;
 
@@ -2885,10 +2906,15 @@ static int bzRun(const QString& path, int weight, const QString& device)
     const auto t = std::chrono::steady_clock::now();
     const Spectrum spectrum = runWorker(cfg);
     const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
+    const QVector<AutosaveEntry> saved = testStore().list();
+    const bool byShifts = !saved.isEmpty() && saved.first().record.cyclicLength > 0;
     clearCheckpoints();
 
-    g_out << QStringLiteral("множеств %1, до %2 строк, точно до веса %3; %4 с")
-                 .arg(g_planSets).arg(g_planRows).arg(g_planExactUpTo).arg(sec, 0, 'f', 1) << Qt::endl;
+    const QString sets = byShifts ? QStringLiteral("по сдвигам одного множества")
+                                  : QStringLiteral("множеств %1").arg(g_planSets);
+    g_out << QStringLiteral("%1, до %2 строк, точно до веса %3; комбинаций %4; %5 с")
+                 .arg(sets).arg(g_planRows).arg(g_planExactUpTo).arg(expectedTotalOps(cfg))
+                 .arg(sec, 0, 'f', 1) << Qt::endl;
     int shown = 0;
     for (auto it = spectrum.cbegin(); it != spectrum.cend() && shown < 16; ++it, ++shown)
         g_out << QStringLiteral("   %1  %2%3").arg(it.key(), 3).arg(it.value(), 12)
@@ -3625,6 +3651,330 @@ static void testLeonCyclic()
                        .arg(listed.size()).arg(expected.size()),
                    listed == expected && worker.foundWeights().size() == listed.size(),
                    QStringLiteral("списки разные"));
+    }
+}
+
+// Точный спектр для сверки: полный перебор или дуальный код, смотря что
+// короче.
+static Spectrum exactByWorker(const QStringList& rows)
+{
+    const int k = rows.size(), n = rows.first().length();
+    RunConfig cfg;
+    cfg.matrix     = rows;
+    cfg.algorithm  = k <= n - k ? Algorithm::GrayCode : Algorithm::DualCode;
+    cfg.device     = ComputeDevice::Cpu;
+    cfg.threadsCpu = std::max(4, omp_get_num_procs());
+    clearCheckpoints();
+    const Spectrum exact = runWorker(cfg);
+    clearCheckpoints();
+    return exact;
+}
+
+// Брауэр–Циммерман по сдвигам у циклического кода (cyclicorbit.h): правило
+// подсчёта само по себе, спектр расчёта против точного, сохранение.
+static void testBzCyclic()
+{
+    g_out << Qt::endl << QStringLiteral("Брауэр–Циммерман по сдвигам у циклических кодов") << Qt::endl;
+
+    // 1. Правило на случайных словах (кодовыми им быть не нужно). У орбиты,
+    //    где хоть одно окно из k столбцов круга несёт не больше depth единиц,
+    //    засчитывается ровно одно слово — с размером орбиты и с не больше
+    //    depth единицами на S₀, то есть такое, какое перебор S₀ находит. У
+    //    остальных орбит — ни одного. Длины — любые и на границах слов.
+    {
+        Mixing::Xorshift64 rng{ 0x0B17ULL };
+        const int edges[] = { 63, 64, 65, 127, 128, 129, 191, 192 };
+        int bad = 0, counted = 0, skipped = 0, periodicCounted = 0;
+        for (int trial = 0; trial < 1500; ++trial) {
+            const int n = trial % 4 == 0 ? edges[rng.next() % 8] : 3 + int(rng.next() % 200);
+            const Cyclic::Symmetry sym{ int(rng.next() % 2), n - int(rng.next() % 2) };
+            if (sym.start + sym.length > n || !sym.active())
+                continue;
+            const int circleLength = sym.length;
+            const int window = 1 + int(rng.next() % quint64(circleLength));
+            const int depth  = int(rng.next() % quint64(std::min(window, 6) + 1));
+            const int words  = (n + 63) / 64;
+
+            // Плотность — около depth единиц на окно, чтобы орбиты были и те,
+            // и другие. Каждое третье слово — с периодом.
+            const double density = std::min(1.0, (depth + 0.5 + double(rng.next() % 100) / 50.0) / window);
+            const int p = trial % 3 == 0 ? std::max(1, circleLength / std::max(1, 1 + int(rng.next() % 6)))
+                                         : circleLength;
+            const bool periodic = p < circleLength && circleLength % p == 0;
+            std::vector<quint64> word(static_cast<size_t>(words), 0ULL);
+            for (int c = 0; c < n; ++c) {
+                bool bit = double(rng.next() % 1000000) < density * 1e6;
+                if (periodic && c >= sym.start && c < sym.start + circleLength && c - sym.start >= p) {
+                    const int src = sym.start + (c - sym.start) % p;
+                    bit = (word[size_t(src >> 6)] >> (src & 63)) & 1ULL;
+                }
+                if (bit) word[size_t(c >> 6)] |= 1ULL << (c & 63);
+            }
+            auto circleBit = [&](const std::vector<quint64>& v, int j) {
+                const int c = sym.start + j;
+                return int((v[size_t(c >> 6)] >> (c & 63)) & 1ULL);
+            };
+
+            // Наименьшее число единиц в окне — перебором всех окон.
+            int minWindow = window + 1;
+            for (int t = 0; t < circleLength; ++t) {
+                int ones = 0;
+                for (int j = 0; j < window; ++j) ones += circleBit(word, (t + j) % circleLength);
+                minWindow = std::min(minWindow, ones);
+            }
+            std::vector<quint64> canon(static_cast<size_t>(words)), turned(canon);
+            const int orbit = Cyclic::canonical(word.data(), words, sym, canon.data());
+
+            std::set<std::vector<quint64>> designated;
+            bool sizeOk = true, foundOk = true;
+            for (int t = 0; t < circleLength; ++t) {
+                Cyclic::rotate(word.data(), words, sym, t, turned.data());
+                const int o = CyclicOrbit::designatedOrbit<Constants::MAX_BLOCKWORDS>(
+                    turned.data(), words, sym.start, circleLength, window, depth);
+                if (o == 0)
+                    continue;
+                designated.insert(turned);
+                if (o != orbit) sizeOk = false;
+                int onS0 = 0;
+                for (int j = 0; j < window; ++j) onS0 += circleBit(turned, j);
+                if (onS0 > depth) foundOk = false;
+            }
+            const bool expectOne = minWindow <= depth;
+            if (int(designated.size()) != (expectOne ? 1 : 0) || !sizeOk || !foundOk) {
+                if (++bad <= 5)
+                    g_out << QStringLiteral("      n=%1 круг [%2, %3) окно %4 глубина %5: засчитано %6 слов, "
+                                            "ожидалось %7, размер %8, на S₀ %9")
+                                 .arg(n).arg(sym.start).arg(sym.start + circleLength).arg(window).arg(depth)
+                                 .arg(designated.size()).arg(expectOne ? 1 : 0)
+                                 .arg(sizeOk ? QStringLiteral("верен") : QStringLiteral("НЕВЕРЕН"))
+                                 .arg(foundOk ? QStringLiteral("не больше глубины") : QStringLiteral("БОЛЬШЕ"))
+                          << Qt::endl;
+            }
+            if (expectOne) { ++counted; if (orbit < circleLength) ++periodicCounted; }
+            else           { ++skipped; }
+        }
+        const QString what = QStringLiteral("правило орбит: засчитано по слову у %1 орбит (из них с периодом %2), "
+                                            "не засчитано ни одного у %3")
+                                 .arg(counted).arg(periodicCounted).arg(skipped);
+        if (bad == 0 && counted > 200 && skipped > 200 && periodicCounted > 20) {
+            ++g_passed; g_out << "  ok       " << what << Qt::endl;
+        }
+        else { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl; }
+    }
+
+    // 2. Граница ⌈L(r + 1)/k⌉ — на каждом весе маленьких кодов: спектр до
+    //    веса заказа обязан совпасть с точным. Заказ на каждом весе подряд
+    //    проверяет и те, где гарантия ровно на единицу выше заказа.
+    struct SweepCase { QString name; QStringList rows; };
+    const QVector<SweepCase> sweep = {
+        { QStringLiteral("Хэмминг [15,11]"),             Hamming::build(4, false, 0).rows },
+        { QStringLiteral("расширенный Хэмминг [16,11]"), Hamming::build(4, true, 0).rows },
+        { QStringLiteral("БЧХ [15,7]"),                  Bch::build(4, 2, false, 0).rows },
+        { QStringLiteral("расширенный БЧХ [16,7]"),      Bch::build(4, 2, true, 0).rows },
+        { QStringLiteral("БЧХ [31,16]"),                 Bch::build(5, 3, false, 0).rows },
+        { QStringLiteral("БЧХ [31,21]"),                 Bch::build(5, 2, false, 0).rows },
+        { QStringLiteral("расширенный БЧХ [32,21]"),     Bch::build(5, 2, true, 0).rows },
+    };
+    for (const SweepCase& c : sweep) {
+        const Spectrum exact = exactByWorker(c.rows);
+        const int k = c.rows.size(), n = c.rows.first().length();
+        QStringList problems;
+        int runs = 0, maxDepth = 0;
+        for (int weight = 1; weight <= n; ++weight) {
+            RunConfig cfg;
+            cfg.matrix     = c.rows;
+            cfg.algorithm  = Algorithm::BrouwerZimmermann;
+            cfg.bzWeight   = weight;
+            cfg.device     = ComputeDevice::Cpu;
+            cfg.threadsCpu = std::max(4, omp_get_num_procs());
+            clearCheckpoints();
+            const Spectrum got = runWorker(cfg);
+            const QVector<AutosaveEntry> saved = testStore().list();
+            clearCheckpoints();
+            ++runs;
+            // Полный перебор — обычным планом: цена та же, а проверка орбит
+            // досталась бы каждому слову.
+            const bool full = g_planRows >= k;
+            const bool byShifts = !saved.isEmpty() && saved.first().record.cyclicLength > 0 && g_planSets == 1;
+            if (byShifts == full) {
+                problems << QStringLiteral("вес %1: %2").arg(weight)
+                                .arg(full ? QStringLiteral("полный перебор по сдвигам")
+                                          : QStringLiteral("перебор не по сдвигам"));
+                continue;
+            }
+            if (byShifts)
+                maxDepth = std::max(maxDepth, g_planRows);
+            if (g_planExactUpTo < weight)
+                problems << QStringLiteral("вес %1: точно лишь до %2").arg(weight).arg(g_planExactUpTo);
+            for (int w = 0; w <= n; ++w) {
+                const quint64 want = w <= weight ? exact.value(w, 0) : 0;
+                if (got.value(w, 0) != want)
+                    problems << QStringLiteral("заказ %1, вес %2: точно %3, получено %4")
+                                    .arg(weight).arg(w).arg(want).arg(got.value(w, 0));
+            }
+            if (g_planRows >= k)
+                break;   // дальше перебор полный — спектр уже сверен целиком
+        }
+        const QString what = QStringLiteral("%1: %2 заказов, точно на каждом, по сдвигам до глубины %3 из %4")
+                                 .arg(c.name).arg(runs).arg(maxDepth).arg(k);
+        if (problems.isEmpty()) { ++g_passed; g_out << "  ok       " << what << Qt::endl; }
+        else {
+            ++g_failed;
+            g_out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl;
+            for (int i = 0; i < problems.size() && i < 8; ++i)
+                g_out << QStringLiteral("      ") << problems.at(i) << Qt::endl;
+        }
+    }
+
+    // 3. Коды покрупнее, короткий и длинный пути, CPU и GPU: спектр до веса
+    //    заказа против точного, перебора — меньше, чем по нескольким
+    //    множествам. Длинный путь — k > 63, круг в двух словах.
+    struct Case { QString name; QStringList rows; int weight; };
+    const QVector<Case> cases = {
+        { QStringLiteral("БЧХ [63,45]"),                   Bch::build(6, 3, false, 0).rows, 10 },
+        { QStringLiteral("расширенный БЧХ [64,45]"),       Bch::build(6, 3, true, 0).rows,  10 },
+        { QStringLiteral("БЧХ [63,36]"),                   Bch::build(6, 5, false, 0).rows, 12 },
+        { QStringLiteral("Хэмминг [63,57]"),               Hamming::build(6, false, 0).rows, 6 },
+        { QStringLiteral("расширенный Хэмминг [64,57]"),   Hamming::build(6, true, 0).rows,  6 },
+        { QStringLiteral("Хэмминг [127,120]"),             Hamming::build(7, false, 0).rows, 5 },
+        { QStringLiteral("расширенный Хэмминг [128,120]"), Hamming::build(7, true, 0).rows,  5 },
+        { QStringLiteral("БЧХ [127,113]"),                 Bch::build(7, 2, false, 0).rows,  5 },
+    };
+    for (const Case& c : cases) {
+        const Spectrum exact = exactByWorker(c.rows);
+        RunConfig cfg;
+        cfg.matrix     = c.rows;
+        cfg.algorithm  = Algorithm::BrouwerZimmermann;
+        cfg.bzWeight   = c.weight;
+        cfg.threadsCpu = std::max(4, omp_get_num_procs());
+        RunConfig plainCfg = cfg;
+        plainCfg.cyclicSearch = false;
+        const quint64 orbitOps = expectedTotalOps(cfg);
+        const quint64 plainOps = expectedTotalOps(plainCfg);
+
+        cfg.device = ComputeDevice::Cpu;
+        const auto t0 = std::chrono::steady_clock::now();
+        const Spectrum cpu = checkBzExact(QStringLiteral("%1 CPU, вес %2").arg(c.name).arg(c.weight), cfg, exact);
+        const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        cfg.device = ComputeDevice::Gpu;
+        const Spectrum gpu = checkBzExact(QStringLiteral("%1 GPU, вес %2").arg(c.name).arg(c.weight), cfg, exact);
+        if (g_gpuAvailable)
+            expectSame(c.name + QStringLiteral(": CPU и GPU совпадают"), cpu, gpu);
+
+        const QString what = QStringLiteral("%1: комбинаций по сдвигам %2, по множествам %3 (в %4 раза больше), "
+                                            "CPU %5 с")
+                                 .arg(c.name).arg(orbitOps).arg(plainOps)
+                                 .arg(double(plainOps) / double(std::max<quint64>(1, orbitOps)), 0, 'f', 1)
+                                 .arg(sec, 0, 'f', 2);
+        if (orbitOps < plainOps) { ++g_passed; g_out << "  ok       " << what << Qt::endl; }
+        else { ++g_failed; g_out << QStringLiteral("  ПРОВАЛ   ") << what << Qt::endl; }
+    }
+
+    // Без поиска симметрии — обычный план, и спектр тот же.
+    {
+        const QStringList rows = Bch::build(5, 3, false, 0).rows;
+        RunConfig cfg;
+        cfg.matrix       = rows;
+        cfg.algorithm    = Algorithm::BrouwerZimmermann;
+        cfg.bzWeight     = 10;
+        cfg.device       = ComputeDevice::Cpu;
+        cfg.cyclicSearch = false;
+        checkBzExact(QStringLiteral("БЧХ [31,16] CPU, вес 10, по множествам"), cfg, exactByWorker(rows));
+    }
+
+    // 4. Сохранение. Обрыв посреди слоя, на коротком и длинном путях.
+    g_out << Qt::endl << QStringLiteral("Брауэр–Циммерман по сдвигам: сохранение") << Qt::endl;
+    {
+        // [63,45], вес 8: глубина 5, слой из пяти строк — 1,2 млн комбинаций,
+        // больше чанка CPU.
+        RunConfig cfg;
+        cfg.matrix    = Bch::build(6, 3, false, 0).rows;
+        cfg.algorithm = Algorithm::BrouwerZimmermann;
+        cfg.bzWeight  = 8;
+        cfg.device    = ComputeDevice::Cpu;
+        RunConfig gpuCfg = cfg; gpuCfg.device = ComputeDevice::Gpu;
+        checkResume(QStringLiteral("CPU БЧХ [63,45], вес 8, обрыв посреди слоя"), cfg, cfg, 100000, 800000);
+        checkResume(QStringLiteral("GPU БЧХ [63,45], вес 8, обрыв посреди слоя"), gpuCfg, gpuCfg, 100000, 800000);
+        checkResume(QStringLiteral("CPU -> GPU БЧХ [63,45], перенос записи"), cfg, gpuCfg, 100000, 800000);
+
+        // Длинный путь: [127,120], вес 5 — глубина 4, слой в 8,2 млн масок.
+        // Чанк CPU здесь — по 2^20 масок на нить, при четырёх нитях слой
+        // уходит в два чанка: стоп после первого.
+        RunConfig lng;
+        lng.matrix     = Hamming::build(7, false, 0).rows;
+        lng.algorithm  = Algorithm::BrouwerZimmermann;
+        lng.bzWeight   = 5;
+        lng.device     = ComputeDevice::Cpu;
+        lng.blocksGpu  = 8;
+        lng.threadsGpu = 32;
+        RunConfig lngGpu = lng; lngGpu.device = ComputeDevice::Gpu;
+        checkResume(QStringLiteral("CPU Хэмминг [127,120] длинный, обрыв посреди слоя"), lng, lng, 1000000, 3000000);
+        checkResume(QStringLiteral("GPU Хэмминг [127,120] длинный, обрыв посреди слоя"), lngGpu, lngGpu, 1000000, 3000000);
+    }
+
+    // Запись: версия 2 и круг; продолжать — только на той же глубине.
+    // Досчёт на большую глубину начинается заново и даёт точный спектр.
+    {
+        const QStringList rows = Bch::build(5, 3, false, 0).rows;   // [31,16], d = 7
+        const int k = rows.size(), n = rows.first().length();
+        RunConfig cfg;
+        cfg.matrix    = rows;
+        cfg.algorithm = Algorithm::BrouwerZimmermann;
+        cfg.bzWeight  = 7;
+        cfg.device    = ComputeDevice::Cpu;
+        clearCheckpoints();
+        runWorker(cfg);
+        const QVector<AutosaveEntry> saved = testStore().list();
+        if (saved.isEmpty()) {
+            ++g_failed;
+            g_out << QStringLiteral("  ПРОВАЛ   запись после расчёта по сдвигам не осталась") << Qt::endl;
+        }
+        else {
+            const AutosaveRecord& record = saved.first().record;
+            const Cyclic::Symmetry sym{ record.cyclicStart, record.cyclicLength };
+            const int depth = Cyclic::orbitDepthForWeight(sym, k, 7, n);
+            expectStore(QStringLiteral("запись по сдвигам: круг [%1, %2), одно множество, глубина %3, версия %4")
+                            .arg(record.cyclicStart).arg(record.cyclicStart + record.cyclicLength)
+                            .arg(record.maxRows).arg(record.toJson()["version"].toInt()),
+                        record.cyclicStart == 0 && record.cyclicLength == n && record.infoSets.size() == 1
+                            && record.maxRows == depth && record.toJson()["version"].toInt() == 2);
+            const AutosaveRecord back = AutosaveRecord::fromJson(record.toJson());
+            AutosaveRecord plain = record;
+            plain.cyclicStart = plain.cyclicLength = 0;
+            expectStore(QStringLiteral("круг переживает JSON, обычная запись — версии 1"),
+                        back.cyclicStart == record.cyclicStart && back.cyclicLength == record.cyclicLength
+                            && plain.toJson()["version"].toInt() == 1 && !plain.toJson().contains("cyclicLength"));
+
+            // Веса с той же глубиной — продолжать можно, с другой — нет.
+            ComputationSettings settings = makeSettings(cfg);
+            int sameWeight = -1, deeperWeight = -1;
+            for (int w = 1; w <= n; ++w) {
+                const int d = Cyclic::orbitDepthForWeight(sym, k, w, n);
+                if (d == depth && w != 7 && sameWeight < 0) sameWeight = w;
+                if (d > depth && deeperWeight < 0) deeperWeight = w;
+            }
+            settings.bzWeight = sameWeight;
+            const bool sameOk = sameWeight > 0 && canResume(record, settings);
+            settings.bzWeight = deeperWeight;
+            const bool deeperNo = deeperWeight > 0 && !canResume(record, settings);
+            settings.bzWeight = 1;
+            const bool shallowerNo = Cyclic::orbitDepthForWeight(sym, k, 1, n) == depth
+                                     || !canResume(record, settings);
+            expectStore(QStringLiteral("продолжать по сдвигам: вес %1 (та же глубина) — да, вес %2 (глубже) — нет, "
+                                       "мельче — нет").arg(sameWeight).arg(deeperWeight),
+                        sameOk && deeperNo && shallowerNo);
+
+            RunConfig deeper = cfg;
+            deeper.bzWeight = deeperWeight;
+            const Spectrum extended = runWorker(deeper, LoadMode::FromCheckpoint);
+            clearCheckpoints();
+            const Spectrum exact = exactByWorker(rows);
+            bool ok = !extended.isEmpty();
+            for (int w = 0; w <= deeperWeight; ++w)
+                if (extended.value(w, 0) != exact.value(w, 0)) ok = false;
+            expectStore(QStringLiteral("досчёт на вес %1 начат заново и точен").arg(deeperWeight), ok);
+        }
+        clearCheckpoints();
     }
 }
 
@@ -4421,6 +4771,7 @@ int main(int argc, char* argv[])
     testLeonWorker();
     testCyclicSymmetry();
     testLeonCyclic();
+    testBzCyclic();
     testBchCode();
     testHammingCode();
     testProductCode();

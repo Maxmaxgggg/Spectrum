@@ -74,6 +74,11 @@ struct CodeGeometry
     QVector<QVector<int>> setColumns;       // опорные столбцы — в автосохранение
     // Все слова веса меньше этого найдены. Ноль — не Брауэр–Циммерман.
     int                   guaranteedBelow = 0;
+    // Брауэр–Циммерман по сдвигам у циклического кода (cyclicorbit.h): круг
+    // столбцов; множество тогда одно, а слова до countUpTo считаются правилом
+    // орбит, тяжелее — не считаются. Пустой круг — обычный перебор.
+    Cyclic::Symmetry      bzOrbit;
+    int                   countUpTo       = 0;
 
     // Случайный поиск: сколько попыток и сколько слов в каждой; глубина
     // перебора в попытке лежит в maxRows.
@@ -308,9 +313,11 @@ private:
     // Множества из поднятого сохранения: продолжать расчёт можно только по
     // ним. Пусто — искать заново.
     QVector<QVector<int>>       m_resumedInfoSets;
+    Cyclic::Symmetry            m_resumedOrbit;
     // Множества и глубина идущего расчёта — для записи в автосохранение.
     QVector<QVector<int>>       m_activeInfoSets;
     int                         m_activeMaxRows = 0;
+    Cyclic::Symmetry            m_activeOrbit;
     // Сделано попыток случайного поиска — тоже в запись.
     quint64                     m_activeTrials  = 0;
     // Код произведения: до какого веса спектр точен — в запись.

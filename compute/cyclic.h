@@ -54,4 +54,18 @@ int canonical(const quint64* word, int wordsPerRow, const Symmetry& symmetry, qu
 // делит L, и L / p делит cyclicWeight — на периоде единиц поровну.
 std::vector<int> orbitSizes(const Symmetry& symmetry, int cyclicWeight);
 
+// Брауэр–Циммерман по сдвигам (подход Чена, см. cyclicorbit.h). Перебирается
+// одно информационное множество — первые rows столбцов круга, — а гарантия
+// та, что дали бы все его сдвиги вместе.
+
+// Столбцы этого множества.
+std::vector<int> orbitInfoSet(const Symmetry& symmetry, int rows);
+
+// Все слова веса меньше этого найдены перебором до depth строк:
+// ⌈L(depth + 1)/rows⌉; при depth >= rows — всё, cols + 1.
+int orbitGuaranteedBelow(const Symmetry& symmetry, int rows, int depth, int cols);
+
+// Наименьшая глубина, при которой найдены все слова веса <= weight.
+int orbitDepthForWeight(const Symmetry& symmetry, int rows, int weight, int cols);
+
 } // namespace Cyclic
