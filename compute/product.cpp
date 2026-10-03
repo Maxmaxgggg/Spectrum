@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <numeric>
 
 namespace Product {
@@ -40,6 +41,116 @@ void cellsOf(const std::vector<const quint64*>& tuple, int words, std::vector<in
 } // namespace
 
 // --------------------------------------------------------------- перебор
+
+QStringList kronecker(const QStringList& first, const QStringList& second)
+{
+    QStringList out;
+    if (first.isEmpty() || second.isEmpty())
+        return out;
+    const int     n2    = second.first().length();
+    const QString zeros(n2, QLatin1Char('0'));
+    out.reserve(first.size() * second.size());
+    for (const QString& a : first) {
+        for (const QString& b : second) {
+            QString row;
+            row.reserve(a.length() * n2);
+            for (const QChar bit : a)
+                row += bit == QLatin1Char('1') ? b : zeros;
+            out.append(row);
+        }
+    }
+    return out;
+}
+
+namespace {
+
+// Раскладывает matrix как first (k1 x n1) ⊗ second (k2 x n2). second — первый
+// ненулевой блок k2 x n2; каждый блок обязан быть либо им, либо нулевым, и
+// это его бит в first.
+bool splitAs(const QStringList& matrix, int k1, int n1, int k2, int n2,
+             QStringList& first, QStringList& second)
+{
+    const QString zeros(n2, QLatin1Char('0'));
+    auto blockIsZero = [&](int i, int j) {
+        for (int r = 0; r < k2; ++r)
+            if (matrix.at(i * k2 + r).midRef(j * n2, n2) != zeros)
+                return false;
+        return true;
+    };
+
+    int bi = -1, bj = -1;
+    for (int i = 0; i < k1 && bi < 0; ++i)
+        for (int j = 0; j < n1 && bi < 0; ++j)
+            if (!blockIsZero(i, j)) { bi = i; bj = j; }
+    if (bi < 0)
+        return false;
+
+    QStringList b;
+    for (int r = 0; r < k2; ++r)
+        b.append(matrix.at(bi * k2 + r).mid(bj * n2, n2));
+    auto blockIsB = [&](int i, int j) {
+        for (int r = 0; r < k2; ++r)
+            if (matrix.at(i * k2 + r).midRef(j * n2, n2) != b.at(r))
+                return false;
+        return true;
+    };
+
+    QStringList a;
+    for (int i = 0; i < k1; ++i) {
+        QString row(n1, QLatin1Char('0'));
+        for (int j = 0; j < n1; ++j) {
+            if (blockIsB(i, j))
+                row[j] = QLatin1Char('1');
+            else if (!blockIsZero(i, j))
+                return false;
+        }
+        a.append(row);
+    }
+    first  = a;
+    second = b;
+    return true;
+}
+
+} // namespace
+
+bool factor(const QStringList& matrix, QStringList& first, QStringList& second)
+{
+    if (matrix.isEmpty())
+        return false;
+    const int k = matrix.size();
+    const int n = matrix.first().length();
+    for (const QString& row : matrix)
+        if (row.length() != n)
+            return false;
+
+    // Лучшее разложение: меньше компонент «всё пространство», потом длины
+    // ближе друг к другу.
+    int bestTrivial = 3, bestGap = n + 1;
+    for (int k2 = 1; k2 <= k; ++k2) {
+        if (k % k2 != 0)
+            continue;
+        const int k1 = k / k2;
+        for (int n2 = 2; n2 <= n / 2; ++n2) {
+            if (n % n2 != 0)
+                continue;
+            const int n1 = n / n2;
+            if (k1 > n1 || k2 > n2)
+                continue;
+            const int trivial = (k1 == n1 ? 1 : 0) + (k2 == n2 ? 1 : 0);
+            const int gap     = std::abs(n1 - n2);
+            if (trivial > bestTrivial || (trivial == bestTrivial && gap >= bestGap))
+                continue;
+            QStringList a, b;
+            if (!splitAs(matrix, k1, n1, k2, n2, a, b))
+                continue;
+            first = a;
+            second = b;
+            bestTrivial = trivial;
+            bestGap     = gap;
+        }
+    }
+    return bestTrivial < 3;
+}
 
 Component bruteForce(const QStringList& rows, int wordsUpTo,
                      const std::function<bool()>& cancelled, const Progress& progress, int maxK)

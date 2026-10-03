@@ -9,16 +9,15 @@
 #include "infosets.h"
 #include "matrixlibrary.h"
 #include "matrixmenu.h"
+#include "product.h"
 #include "spectrumplot.h"
 #include "spectrumtextedit.h"
 #include "statspanel.h"
-#include "tabswapbutton.h"
 
 #include <QApplication>
 #include <QDockWidget>
 #include <QHeaderView>
-#include <QStackedWidget>
-#include <QTabBar>
+#include <QJsonDocument>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
@@ -69,8 +68,9 @@ MainWindow::MainWindow(QWidget* parent)
     setupWorker();
     setupMatrixMenu();
     setupToolTips();
-    // Настройки диалога нужны окну сразу: от алгоритма зависит, показывать ли
-    // панель второй матрицы. Пустая матрица сигнала о смене не даёт.
+    // Настройки диалога нужны окну сразу: от алгоритма зависит заголовок
+    // панели матрицы (у кода-произведения — с компонентами). Пустая матрица
+    // сигнала о смене не даёт.
     emit settingsRequested();
     handleMatrixChanged();
     // Старые чекпоинты лежали в реестре, по мегабайту с матрицей на запись.
@@ -101,15 +101,9 @@ void MainWindow::setupMatrixMenu()
 {
 
     m_matrixMenu = new MatrixMenu(m_ui->loadMatrixACN, m_ui->saveMatrixACN, m_ui->createMatrixACN, this);
-    // Загрузка и сохранение — в ту матрицу, чья вкладка открыта: у кода
-    // произведения их две.
-    auto currentEditor = [this]() -> QPlainTextEdit* {
-        return (m_matrixPages && m_matrixPages->currentIndex() == 1) ? static_cast<QPlainTextEdit*>(m_matrix2PTE)
-                                                                  : static_cast<QPlainTextEdit*>(m_ui->matrixPTE);
-    };
-    m_matrixMenu->setMatrixSource([currentEditor]() { return currentEditor()->toPlainText(); });
-    connect(m_matrixMenu, &MatrixMenu::matrixChosen, this, [currentEditor](const QString& text) {
-        currentEditor()->setPlainText(text);
+    m_matrixMenu->setMatrixSource([this]() { return m_ui->matrixPTE->toPlainText(); });
+    connect(m_matrixMenu, &MatrixMenu::matrixChosen, this, [this](const QString& text) {
+        m_ui->matrixPTE->setPlainText(text);
     });
 }
 
@@ -156,9 +150,11 @@ void MainWindow::applyAutosaveNow(const Matrix& matrix, const AutosaveRecord& re
     m_applyingAutosave = true;
     if (record.algorithm == ComputationSettings::ProductCode
         && record.productRows1 > 0 && record.productRows1 < matrix.size()) {
-        // В записи произведения обе компоненты подряд — по своим панелям.
-        m_ui->matrixPTE->setPlainText(matrix.mid(0, record.productRows1).join(QLatin1Char('\n')));
-        m_matrix2PTE->setPlainText(matrix.mid(record.productRows1).join(QLatin1Char('\n')));
+        // Запись прежней версии: в ней обе компоненты подряд. В поле —
+        // матрица их произведения, как теперь задаётся код-произведение.
+        m_ui->matrixPTE->setPlainText(Product::kronecker(matrix.mid(0, record.productRows1),
+                                                         matrix.mid(record.productRows1))
+                                          .join(QLatin1Char('\n')));
     } else {
         m_ui->matrixPTE->setPlainText(matrix.join(QLatin1Char('\n')));
     }
@@ -282,36 +278,10 @@ void MainWindow::setupDocks()
         return dock;
     };
 
-    m_matrix2PTE   = new FilterPlainTextEdit(this);
-    m_matrix2PTE->setFont(m_ui->matrixPTE->font());
-    // Как у первой: строка матрицы не переносится, а уходит за край с
-    // прокруткой — перенесённая строка нулей и единиц нечитаема.
-    m_matrix2PTE->setLineWrapMode(m_ui->matrixPTE->lineWrapMode());
-    connect(m_matrix2PTE, &FilterPlainTextEdit::textChanged, this, [this]() { updateMatrixTitles(); });
-
-    m_matrixPages = new QStackedWidget(this);
-    m_matrixPages->addWidget(m_ui->matrixPTE);
-    m_matrixPages->addWidget(m_matrix2PTE);
-    m_matrixDock   = makeDock(m_matrixPages, tr("Матрица"),
+    // Матрица одна при любой структуре кода: у кода-произведения это матрица
+    // самого произведения, компоненты из неё восстанавливает расчёт.
+    m_matrixDock   = makeDock(m_ui->matrixPTE, tr("Матрица"),
                               UiStrings::MATRIX_TOOLTIP,   "matrixDock");
-
-    // Вкладки — в заголовке панели, в одной строке с её кнопками.
-    m_matrixTabBar = new QTabBar;
-    m_matrixTabBar->addTab(tr("Матрица 1"));
-    m_matrixTabBar->addTab(tr("Матрица 2"));
-    m_matrixTabBar->setTabToolTip(1, UiStrings::MATRIX2_TOOLTIP);
-    connect(m_matrixTabBar, &QTabBar::currentChanged, m_matrixPages, &QStackedWidget::setCurrentIndex);
-    static_cast<DockTitleBar*>(m_matrixDock->titleBarWidget())->setTabBar(m_matrixTabBar);
-
-    // На стыке вкладок — кнопка «поменять местами»: компоненты произведения
-    // легко загрузить не в те вкладки. На спектр порядок не влияет.
-    auto* const swap = new TabSwapButton(m_matrixTabBar, tr("Поменять матрицы местами"));
-    connect(swap, &TabSwapButton::clicked, this, [this]() {
-        const QString first  = m_ui->matrixPTE->toPlainText();
-        const QString second = m_matrix2PTE->toPlainText();
-        m_ui->matrixPTE->setPlainText(second);
-        m_matrix2PTE->setPlainText(first);
-    });
     m_spectrumDock = makeDock(m_ui->spectrumPTE, tr("Спектр кодовых слов"),
                               UiStrings::SPECTRUM_TOOLTIP, "spectrumDock");
     m_plotDock     = makeDock(m_ui->spectrumCPT, tr("График спектра"),
@@ -350,7 +320,7 @@ void MainWindow::setupDocks()
     m_ui->centralwidget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
     m_defaultLayout = saveState(Constants::LAYOUT_VERSION);
-    updateMatrixTabs();
+    updateMatrixTitles();
 
     // Меню «Вид»: галочки Qt делает сам, они же возвращают закрытую панель.
     m_ui->viewMNU->addAction(m_matrixDock->toggleViewAction());
@@ -359,20 +329,6 @@ void MainWindow::setupDocks()
     m_ui->viewMNU->addAction(m_statsDock->toggleViewAction());
     m_ui->viewMNU->addSeparator();
     m_ui->viewMNU->addAction(UiStrings::VIEW_RESET_TEXT, this, &MainWindow::resetLayout);
-}
-
-void MainWindow::updateMatrixTabs()
-{
-    if (!m_matrixTabBar)
-        return;
-    const bool product = m_settings.algorithm == ComputationSettings::ProductCode;
-    m_matrixTabBar->setTabVisible(1, product);
-    m_matrixTabBar->setVisible(product);
-    if (!product) {
-        m_matrixTabBar->setCurrentIndex(0);
-        m_matrixPages->setCurrentIndex(0);
-    }
-    updateMatrixTitles();
 }
 
 void MainWindow::resetLayout()
@@ -454,7 +410,6 @@ void MainWindow::connectSettingsDialog()
 
             ComputationSettings probe = requested;
             probe.matrix  = m_ui->matrixPTE->toStringList();
-            probe.matrix2 = m_matrix2PTE->toStringList();
 
             m_workerThread->start();
             QMetaObject::invokeMethod(m_worker, "setSettings", Qt::QueuedConnection,
@@ -467,9 +422,8 @@ void MainWindow::connectSettingsDialog()
             const ComputationSettings::Algorithm before = m_settings.algorithm;
             m_settings = fromDialog;
             m_settings.matrix  = m_ui->matrixPTE->toStringList();
-            m_settings.matrix2 = m_matrix2PTE->toStringList();
             m_spectrumPlot->setMaxBars(m_settings.maxPlotBars);
-            updateMatrixTabs();
+            updateMatrixTitles();
 
             // Поднятая запись — про свой алгоритм. Сменили алгоритм — кнопка
             // «Продолжить» больше не про неё: иначе расчёт стартовал бы как
@@ -522,16 +476,26 @@ QString MainWindow::matrixError() const
         return QString();
     };
 
-    const QString first = check(m_ui->matrixPTE->toStringList(),
-                                m_settings.algorithm == ComputationSettings::ProductCode
-                                    ? tr("Матрица 1") : tr("Матрица"));
-    if (!first.isEmpty())
-        return first;
-    // Код произведения: компоненты проверяются каждая сама по себе, само
-    // произведение в памяти не строится, и его размер ничем не ограничен.
-    if (m_settings.algorithm == ComputationSettings::ProductCode)
-        return check(m_matrix2PTE->toStringList(), tr("Матрица 2 (вторая компонента)"));
-    return QString();
+    const Matrix matrix = m_ui->matrixPTE->toStringList();
+    if (m_settings.algorithm != ComputationSettings::ProductCode)
+        return check(matrix, tr("Матрица"));
+
+    // Код-произведение: в поле — матрица произведения G1 ⊗ G2. Пределы
+    // программы — на компоненты: перебирается каждая сама по себе, а
+    // произведение считается по ним, и его размер ничем не ограничен.
+    if (matrix.isEmpty())
+        return tr("Матрица пустая");
+    for (const QString& row : matrix)
+        if (row.length() != matrix.first().length())
+            return tr("Матрица: все строки должны быть одинаковой длины");
+    QStringList first, second;
+    if (!Product::factor(matrix, first, second))
+        return tr("Матрица не раскладывается в произведение двух кодов. У кода-произведения "
+                  "в поле — кронекерово произведение G1 ⊗ G2 порождающих матриц компонент: "
+                  "строка i1·k2 + i2 — строка i1 матрицы G1, в которой каждая единица заменена "
+                  "строкой i2 матрицы G2, а каждый ноль — нулями");
+    const QString one = check(first, tr("Компонента 1"));
+    return one.isEmpty() ? check(second, tr("Компонента 2")) : one;
 }
 
 void MainWindow::startComputation()
@@ -554,7 +518,6 @@ void MainWindow::startComputation()
 
     emit interfaceEnabledChanged(false);
     m_ui->matrixPTE->setReadOnly(true);
-    m_matrix2PTE->setReadOnly(true);
     m_ui->cancelPBN->setEnabled(true);
     m_matrixMenu->setActionsEnabled(false);
     m_statsPanel->showState(tr("Идёт расчёт"));
@@ -635,7 +598,6 @@ void MainWindow::handleExitClicked()
     emit interfaceEnabledChanged(   true  );
     saveSettings();
     m_ui->matrixPTE->setReadOnly( false );
-    m_matrix2PTE->setReadOnly( false );
     qApp->exit();
 }
 
@@ -651,7 +613,6 @@ void MainWindow::handleCancelClicked()
 
     emit interfaceEnabledChanged(   true  );
     m_ui->matrixPTE->setReadOnly( false );
-    m_matrix2PTE->setReadOnly( false );
     m_ui->cancelPBN->setEnabled(  false );
 }
 
@@ -752,22 +713,28 @@ void MainWindow::handleMatrixChanged()
     updateMatrixTitles();
 }
 
-// «Матрица (n,k)» у произвольного кода; у произведения панель зовётся
-// «Матрицы», а размеры — на вкладках.
+// «Матрица (n,k)»; у кода-произведения — ещё и найденные компоненты:
+// «Код-произведение (42,12) = (7,4) ⊗ (6,3)», чтобы сразу было видно, как
+// программа поняла матрицу.
 void MainWindow::updateMatrixTitles()
 {
-    if (!m_matrixDock || !m_matrixTabBar)
+    if (!m_matrixDock)
         return;
     auto size = [](const Matrix& rows) {
         int maxLen = 0;
         for (const QString& row : rows) maxLen = qMax(maxLen, row.length());
-        return QStringLiteral(" (%1,%2)").arg(maxLen).arg(rows.size());
+        return QStringLiteral("(%1,%2)").arg(maxLen).arg(rows.size());
     };
-    const bool product = m_settings.algorithm == ComputationSettings::ProductCode;
-    m_matrixDock->setWindowTitle(product ? tr("Матрицы")
-                                       : tr("Матрица") + size(m_ui->matrixPTE->toStringList()));
-    m_matrixTabBar->setTabText(0, tr("Матрица 1") + size(m_ui->matrixPTE->toStringList()));
-    m_matrixTabBar->setTabText(1, tr("Матрица 2") + size(m_matrix2PTE->toStringList()));
+    const Matrix matrix = m_ui->matrixPTE->toStringList();
+    if (m_settings.algorithm != ComputationSettings::ProductCode) {
+        m_matrixDock->setWindowTitle(tr("Матрица ") + size(matrix));
+        return;
+    }
+    QStringList first, second;
+    m_matrixDock->setWindowTitle(
+        Product::factor(matrix, first, second)
+            ? tr("Код-произведение %1 = %2 ⊗ %3").arg(size(matrix), size(first), size(second))
+            : tr("Матрица %1 — не произведение двух кодов").arg(size(matrix)));
 }
 void MainWindow::handleErrorOccurred(const QString& message)
 {
@@ -788,7 +755,6 @@ void MainWindow::handleFinished(int elapsedSec)
     m_worker->resume();
     emit interfaceEnabledChanged(   true  );
     m_ui->matrixPTE->setReadOnly( false );
-    m_matrix2PTE->setReadOnly( false );
     m_ui->cancelPBN->setEnabled(  false );
     m_matrixMenu->setActionsEnabled(true);
 
@@ -836,9 +802,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 bool MainWindow::hasCheckpoint() const
 {
     AutosaveRecord record;
-    const Matrix key = m_settings.algorithm == ComputationSettings::ProductCode
-                           ? m_settings.matrix + m_settings.matrix2 : m_settings.matrix;
-    if (!m_autosave.load(key, m_settings.algorithm, record))
+    if (!m_autosave.load(m_settings.matrix, m_settings.algorithm, record))
         return false;
 
     // Запись может оказаться непригодной: она ушла дальше, чем просят сейчас.
@@ -861,7 +825,6 @@ void MainWindow::saveSettings()
     QSettings s;
     s.setValue(SettingsKeys::WINDOW_STATE,    this->saveState(Constants::LAYOUT_VERSION));
     s.setValue(SettingsKeys::CODE_MATRIX,     m_ui->matrixPTE->toPlainText()   );
-    s.setValue(SettingsKeys::CODE_MATRIX2,    m_matrix2PTE->toPlainText()      );
     s.setValue(SettingsKeys::SPECTRUM_TEXT,   m_lastSpectrum.lines().join(QLatin1Char('\n')) );
     s.setValue(SettingsKeys::WIDGET_GEOMETRY, this->saveGeometry()           );
     QVariantList values;
@@ -869,6 +832,35 @@ void MainWindow::saveSettings()
         values << v;
     s.setValue(SettingsKeys::SPECTRUM_VALUES, values);
     s.sync();
+}
+
+// Прежние версии держали код-произведение двумя матрицами — компонентами в
+// двух полях. Теперь поле одно, с матрицей самого произведения: если
+// последним считался код-произведение, компоненты сводятся в неё. Ключ
+// второй матрицы после этого не нужен.
+void MainWindow::migrateProductMatrices(QSettings& s)
+{
+    if (!s.contains(SettingsKeys::CODE_MATRIX2))
+        return;
+    const Matrix second = s.value(SettingsKeys::CODE_MATRIX2).toString()
+                              .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    s.remove(SettingsKeys::CODE_MATRIX2);
+
+    s.beginGroup(QStringLiteral("lastSettings"));
+    const ComputationSettings last = ComputationSettings::fromJson(
+        QJsonDocument::fromJson(s.value(SettingsKeys::COMPUTATION_SETTINGS).toByteArray()).object());
+    s.endGroup();
+
+    const Matrix first = m_ui->matrixPTE->toStringList();
+    if (last.algorithm != ComputationSettings::ProductCode || first.isEmpty() || second.isEmpty())
+        return;
+    // Матрица произведения больших компонент в поле не поместится — тогда
+    // поле остаётся как было.
+    constexpr quint64 MAX_CHARS = 16ULL << 20;
+    const quint64 chars = quint64(first.size()) * quint64(second.size())
+                        * quint64(first.first().length()) * quint64(second.first().length());
+    if (chars <= MAX_CHARS)
+        m_ui->matrixPTE->setPlainText(Product::kronecker(first, second).join(QLatin1Char('\n')));
 }
 
 // Загрузить настройки из реестра
@@ -885,7 +877,7 @@ void MainWindow::loadSettings()
                                                  .split(QLatin1Char('\n'), Qt::SkipEmptyParts));
     showSpectrumText();
     m_ui->matrixPTE->setPlainText(              s.value(SettingsKeys::CODE_MATRIX                    ).toString()          );
-    m_matrix2PTE->setPlainText(                 s.value(SettingsKeys::CODE_MATRIX2                   ).toString()          );
+    migrateProductMatrices(s);
     if (s.contains(SettingsKeys::SPECTRUM_VALUES)) {
         QVariantList values = s.value(SettingsKeys::SPECTRUM_VALUES).toList();
         SpectrumFloat spectrum;

@@ -80,6 +80,11 @@ struct CodeGeometry
     Cyclic::Symmetry      bzOrbit;
     int                   countUpTo       = 0;
 
+    // Код-произведение: компоненты, разложенные из матрицы произведения
+    // (Product::factor), — matrix == productFirst ⊗ productSecond.
+    QStringList           productFirst;
+    QStringList           productSecond;
+
     // Случайный поиск: сколько попыток и сколько слов в каждой; глубина
     // перебора в попытке лежит в maxRows.
     quint64               leonTrials        = 0;
@@ -265,8 +270,6 @@ private:
     // или случайным поиском, если нужны (список слов, но без гарантии).
     Product::Component analyzeComponent(const QStringList& rows, int weightUpTo,
                                         const QString& label, bool wantWords);
-    // Матрица-ключ автосохранения: у произведения обе компоненты подряд.
-    QStringList autosaveKeyMatrix() const;
 
     /* Функции, посылающие сигнал для обновления интерфейса */
     void updateSpectrum(int cols);

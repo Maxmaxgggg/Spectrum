@@ -126,8 +126,8 @@ struct RunConfig
     // Случайный поиск: до какого веса и с какой степенью пропуска.
     int         leonWeight = 0;
     int         leonMissExponent = 12;
-    // Код произведения: вторая компонента, вес (0 — до границы ранга), ранг.
-    QStringList matrix2;
+    // Код произведения: matrix — матрица самого произведения G1 ⊗ G2
+    // (Product::kronecker); вес (0 — до границы ранга), ранг.
     int         productWeight = 0;
     int         productRank   = 2;
     // Чем считать большие компоненты; по умолчанию — случайным поиском.
@@ -150,7 +150,6 @@ static ComputationSettings makeSettings(const RunConfig& cfg)
     s.bzWeight      = cfg.bzWeight > 0 ? cfg.bzWeight : 8;
     s.leonWeight    = cfg.leonWeight > 0 ? cfg.leonWeight : 24;
     s.leonMissExponent = cfg.leonMissExponent;
-    s.matrix2       = cfg.matrix2;
     s.productWeight = cfg.productWeight;
     s.productRank   = cfg.productRank;
     s.productAlgorithm = int(cfg.productAlgorithm);
@@ -1076,7 +1075,6 @@ static void testSettingsCopy()
 
     ComputationSettings s;
     s.matrix        = QStringList{ QStringLiteral("1011"), QStringLiteral("0110") };
-    s.matrix2       = QStringList{ QStringLiteral("111") };
     s.algorithm = Algorithm::ProductCode;
     s.leonMemoryMb  = 512;
 
@@ -1086,7 +1084,7 @@ static void testSettingsCopy()
     const ComputationSettings viaJson = ComputationSettings::fromJson(s.toJson());
 
     auto same = [&s](const ComputationSettings& x) {
-        return x.matrix == s.matrix && x.matrix2 == s.matrix2
+        return x.matrix == s.matrix
             && x.algorithm == s.algorithm && x.leonMemoryMb == s.leonMemoryMb;
     };
     expectStore(QStringLiteral("конструктор копирования переносит матрицы"), same(copied));
@@ -4134,25 +4132,6 @@ static int leonRun(const QString& path, int weight, int missExponent, const QStr
 
 // ------------------------------------------------ коды произведения
 
-// Порождающая матрица C1 ⊗ C2: строка (i, j) — произведение строки i из G1
-// на строку j из G2, позиция (x, y) идёт под номером x·n2 + y.
-static QStringList kronecker(const QStringList& g1, const QStringList& g2)
-{
-    const int n1 = g1.first().length(), n2 = g2.first().length();
-    QStringList out;
-    for (const QString& a : g1)
-        for (const QString& b : g2) {
-            QString row(n1 * n2, QLatin1Char('0'));
-            for (int x = 0; x < n1; ++x)
-                if (a.at(x) == QLatin1Char('1'))
-                    for (int y = 0; y < n2; ++y)
-                        if (b.at(y) == QLatin1Char('1'))
-                            row[x * n2 + y] = QLatin1Char('1');
-            out << row;
-        }
-    return out;
-}
-
 // Спектр произведения по компонентам: ранги 1..maxRank, до веса maxWeight.
 static Spectrum productSpectrum(const QStringList& g1, const QStringList& g2,
                                 int maxRank, quint64 maxWeight, int& exactUpTo)
@@ -4299,7 +4278,7 @@ static void testProductCode()
         { QStringLiteral("Hamming(7,4) x rnd[12,5] = [84,20]"),      Reference::hamming7_4(),    Bz::systematicRandom(5, 12, 3) },
     };
     for (const Case& c : cases) {
-        const QStringList product = kronecker(c.g1, c.g2);
+        const QStringList product = Product::kronecker(c.g1, c.g2);
         const Spectrum exact = Reference::bruteForce(product);
         const int n = product.first().length();
         const int maxRank = std::min(c.g1.size(), c.g2.size());
@@ -4342,14 +4321,13 @@ static void testProductCode()
     // заявленной точности и попадает в запись автосохранения.
     {
         RunConfig cfg;
-        cfg.matrix      = Reference::extHamming8_4();
-        cfg.matrix2     = Reference::extHamming8_4();
+        cfg.matrix      = Product::kronecker(Reference::extHamming8_4(), Reference::extHamming8_4());
         cfg.algorithm   = Algorithm::ProductCode;
         cfg.productRank = 4;
         cfg.device      = ComputeDevice::Cpu;
         clearCheckpoints();
         const Spectrum got   = runWorker(cfg);
-        const Spectrum exact = Reference::bruteForce(kronecker(cfg.matrix, cfg.matrix2));
+        const Spectrum exact = Reference::bruteForce(cfg.matrix);
         const QVector<AutosaveEntry> entries = testStore().list();
         clearCheckpoints();
 
@@ -4374,8 +4352,7 @@ static void testProductCode()
     // и спектр точен до границы Толхёйзена.
     {
         RunConfig cfg;
-        cfg.matrix      = Reference::golay24_12();
-        cfg.matrix2     = Reference::hamming7_4();
+        cfg.matrix      = Product::kronecker(Reference::golay24_12(), Reference::hamming7_4());
         cfg.algorithm   = Algorithm::ProductCode;
         cfg.productRank = 1;
         cfg.device      = ComputeDevice::Cpu;
@@ -4407,8 +4384,7 @@ static void testProductCode()
     // итог обязан совпасть с расчётом по перебранным целиком компонентам.
     {
         RunConfig cfg;
-        cfg.matrix      = Reference::golay24_12();
-        cfg.matrix2     = Reference::hamming7_4();
+        cfg.matrix      = Product::kronecker(Reference::golay24_12(), Reference::hamming7_4());
         cfg.algorithm   = Algorithm::ProductCode;
         cfg.productRank = 2;
         cfg.device      = ComputeDevice::Cpu;
@@ -4442,7 +4418,121 @@ static void testProductCode()
                Product::rankWeightBound(4, 4, 2) == 24 && Product::rankWeightBound(3, 3, 2) == 15);
 }
 
-// Код произведения по двум матрицам из файлов.
+// Код-произведение задаётся одной матрицей — самого произведения; компоненты
+// программа находит разложением (Product::factor).
+static void testProductFactor()
+{
+    g_out << Qt::endl << QStringLiteral("Код-произведение: компоненты по матрице произведения") << Qt::endl;
+
+    // Пример из постановки: [7,4] и [6,3], произведение в обоих порядках.
+    const QStringList g1 = { QStringLiteral("1000101"), QStringLiteral("0100111"),
+                             QStringLiteral("0010110"), QStringLiteral("0001011") };
+    const QStringList g2 = { QStringLiteral("100111"), QStringLiteral("010110"), QStringLiteral("001011") };
+    const QStringList g2g1 = {
+        QStringLiteral("100010100000000000000100010110001011000101"),
+        QStringLiteral("010011100000000000000010011101001110100111"),
+        QStringLiteral("001011000000000000000001011000101100010110"),
+        QStringLiteral("000101100000000000000000101100010110001011"),
+        QStringLiteral("000000010001010000000100010110001010000000"),
+        QStringLiteral("000000001001110000000010011101001110000000"),
+        QStringLiteral("000000000101100000000001011000101100000000"),
+        QStringLiteral("000000000010110000000000101100010110000000"),
+        QStringLiteral("000000000000001000101000000010001011000101"),
+        QStringLiteral("000000000000000100111000000001001110100111"),
+        QStringLiteral("000000000000000010110000000000101100010110"),
+        QStringLiteral("000000000000000001011000000000010110001011"),
+    };
+    const QStringList g1g2 = {
+        QStringLiteral("100111000000000000000000100111000000100111"),
+        QStringLiteral("010110000000000000000000010110000000010110"),
+        QStringLiteral("001011000000000000000000001011000000001011"),
+        QStringLiteral("000000100111000000000000100111100111100111"),
+        QStringLiteral("000000010110000000000000010110010110010110"),
+        QStringLiteral("000000001011000000000000001011001011001011"),
+        QStringLiteral("000000000000100111000000100111100111000000"),
+        QStringLiteral("000000000000010110000000010110010110000000"),
+        QStringLiteral("000000000000001011000000001011001011000000"),
+        QStringLiteral("000000000000000000100111000000100111100111"),
+        QStringLiteral("000000000000000000010110000000010110010110"),
+        QStringLiteral("000000000000000000001011000000001011001011"),
+    };
+    {
+        QStringList a, b, c, d;
+        const bool ok = Product::kronecker(g2, g1) == g2g1 && Product::kronecker(g1, g2) == g1g2
+                     && Product::factor(g2g1, a, b) && a == g2 && b == g1
+                     && Product::factor(g1g2, c, d) && c == g1 && d == g2;
+        expectLeon(QStringLiteral("пример: G2 ⊗ G1 и G1 ⊗ G2 раскладываются обратно в [6,3] и [7,4]"), ok);
+    }
+
+    // Случайные компоненты разных размеров: разложение воспроизводит
+    // матрицу, и компоненты — те самые.
+    {
+        Mixing::Xorshift64 rng{ 0xFAC7ULL };
+        int bad = 0, same = 0, total = 0;
+        for (int trial = 0; trial < 300; ++trial) {
+            const int n1 = 3 + int(rng.next() % 14), n2 = 3 + int(rng.next() % 14);
+            const int k1 = 1 + int(rng.next() % quint64(n1 - 1)), k2 = 1 + int(rng.next() % quint64(n2 - 1));
+            const QStringList a = Bz::scramble(Bz::systematicRandom(k1, n1, trial * 2 + 1), trial % 7);
+            const QStringList b = Bz::scramble(Bz::systematicRandom(k2, n2, trial * 2 + 2), trial % 5);
+            const QStringList m = Product::kronecker(a, b);
+            QStringList fa, fb;
+            ++total;
+            if (!Product::factor(m, fa, fb) || Product::kronecker(fa, fb) != m) { ++bad; continue; }
+            if (fa == a && fb == b) ++same;
+        }
+        expectLeon(QStringLiteral("случайные компоненты: %1 разложений, те же компоненты у %2").arg(total).arg(same),
+                   bad == 0 && same >= total * 9 / 10);
+    }
+
+    // Не произведения: случайная матрица, произведение с одним испорченным
+    // битом, строки разной длины.
+    {
+        QStringList a, b;
+        QStringList spoiled = g1g2;
+        spoiled[5][17] = spoiled[5][17] == QLatin1Char('1') ? QLatin1Char('0') : QLatin1Char('1');
+        const bool ok = !Product::factor(Bz::scramble(Bz::systematicRandom(12, 42, 5), 3), a, b)
+                     && !Product::factor(spoiled, a, b)
+                     && !Product::factor(QStringList{ QStringLiteral("1011"), QStringLiteral("011") }, a, b);
+        expectLeon(QStringLiteral("не произведение — разложения нет"), ok);
+    }
+
+    // Расчёт: порядок компонент в матрице на спектр не влияет; матрица не
+    // произведение — понятная ошибка; запись автосохранения — по матрице
+    // произведения.
+    {
+        RunConfig cfg;
+        cfg.algorithm   = Algorithm::ProductCode;
+        cfg.productRank = 2;
+        cfg.device      = ComputeDevice::Cpu;
+        cfg.matrix      = g2g1;
+        clearCheckpoints();
+        const Spectrum first = runWorker(cfg);
+        const int exactFirst = g_productExactUpTo;
+        AutosaveRecord record;
+        const bool saved = testStore().load(g2g1, Algorithm::ProductCode, record);
+        cfg.matrix = g1g2;
+        clearCheckpoints();
+        const Spectrum second = runWorker(cfg);
+        const Spectrum exact = Reference::bruteForce(g1g2);
+        bool ok = !first.isEmpty() && first == second && exactFirst == g_productExactUpTo && saved
+               && record.productExactUpTo == exactFirst;
+        for (auto it = exact.cbegin(); it != exact.cend(); ++it)
+            if (it.key() <= exactFirst && first.value(it.key(), 0) != it.value())
+                ok = false;
+        expectLeon(QStringLiteral("расчёт по G2 ⊗ G1 и G1 ⊗ G2: спектр один, точно до веса %1, запись по матрице")
+                       .arg(exactFirst), ok,
+                   QStringLiteral("G2 ⊗ G1: %1; G1 ⊗ G2: %2").arg(formatSpectrum(first), formatSpectrum(second)));
+
+        cfg.matrix = Bz::scramble(Bz::systematicRandom(12, 42, 5), 3);
+        const QString error = workerError(cfg);
+        clearCheckpoints();
+        expectLeon(QStringLiteral("не произведение — расчёт не начинается"),
+                   error.contains(QStringLiteral("не раскладывается")), error);
+    }
+}
+
+// Код произведения по двум матрицам компонент из файлов: в расчёт уходит
+// матрица произведения, как из интерфейса.
 //
 // Запуск: SpectrumTests.exe --product-run <файл 1> <файл 2> [<вес>] [<ранг>] [cpu|gpu]
 static int productRun(const QString& path1, const QString& path2, int weight, int rank, const QString& device)
@@ -4451,8 +4541,7 @@ static int productRun(const QString& path1, const QString& path2, int weight, in
     if (!loadMatrixOrCase(path1, c1) || !loadMatrixOrCase(path2, c2))
         return 2;
     RunConfig cfg;
-    cfg.matrix        = c1.matrix;
-    cfg.matrix2       = c2.matrix;
+    cfg.matrix        = Product::kronecker(c1.matrix, c2.matrix);
     cfg.algorithm     = Algorithm::ProductCode;
     cfg.productWeight = weight;
     cfg.productRank   = rank;
@@ -4850,6 +4939,7 @@ int main(int argc, char* argv[])
     testBchCode();
     testHammingCode();
     testProductCode();
+    testProductFactor();
 
     testSettingsCopy();
     testAutosaveStore();

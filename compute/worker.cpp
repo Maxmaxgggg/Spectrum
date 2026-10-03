@@ -335,7 +335,6 @@ void Worker::makeCheckpoint(int cols, bool finished)
     if (m_settings.algorithm == ComputationSettings::ProductCode) {
         record.productWeight    = m_settings.productWeight;
         record.productRank      = m_settings.productRank;
-        record.productRows1     = m_settings.matrix.size();
         record.productExactUpTo = m_productExactUpTo;
         record.productMissExponent = m_productMissExponent;
     }
@@ -345,7 +344,7 @@ void Worker::makeCheckpoint(int cols, bool finished)
     // Ключ — матрица и алгоритм. Сама матрица в запись не попадает: она лежит
     // одним файлом на папку, иначе на коде (1000,997) каждое сохранение тащило
     // бы с собой мегабайт нулей и единиц.
-    m_autosave.save(autosaveKeyMatrix(), record);
+    m_autosave.save(m_settings.matrix, record);
     emit spectrumSaved();
 }
 
@@ -355,12 +354,6 @@ void Worker::setAutosaveRoot(const QString& dir)
     m_autosave = AutosaveStore(dir);
 }
 
-QStringList Worker::autosaveKeyMatrix() const
-{
-    if (m_settings.algorithm == ComputationSettings::ProductCode)
-        return m_settings.matrix + m_settings.matrix2;
-    return m_settings.matrix;
-}
 // Точка входа расчёта. Ловит всё, что может бросить вычислитель: раньше
 // ошибка CUDA звала abort() и приложение молча исчезало, а переполнение в
 // таблице биномов бросало голый const char*, который никто не ловил, — то
@@ -468,13 +461,13 @@ CodeGeometry Worker::describeTask() const
         planInfoSets(g);
 
     if (m_settings.algorithm == ComputationSettings::ProductCode) {
-        // Самого произведения в памяти нет — только его размеры, под спектр.
-        if (m_settings.matrix2.isEmpty())
-            throw std::invalid_argument("код-произведение: не задана вторая компонента");
-        const quint64 n1 = quint64(m_settings.matrix.first().length());
-        const quint64 n2 = quint64(m_settings.matrix2.first().length());
-        g.rows         = quint64(m_settings.matrix.size()) * quint64(m_settings.matrix2.size());
-        g.cols         = n1 * n2;
+        // Матрица — само произведение G1 ⊗ G2; считается оно по компонентам,
+        // перебора матрицы произведения нет.
+        if (!Product::factor(m_settings.matrix, g.productFirst, g.productSecond))
+            throw std::invalid_argument(
+                "код-произведение: матрица не раскладывается в кронекерово произведение G1 ⊗ G2 "
+                "порождающих матриц двух кодов (строка i1·k2 + i2 — строка i1 матрицы G1, где "
+                "каждая единица заменена строкой i2 матрицы G2, а ноль — нулями)");
         g.wordsPerRow  = (g.cols + 63) / 64;
         g.matrixWords  = 0;
         g.spectrumSize = g.cols + 1;

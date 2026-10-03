@@ -83,7 +83,6 @@ QJsonObject AutosaveRecord::toJson() const
     if (algorithm == ComputationSettings::ProductCode) {
         obj["productWeight"]    = productWeight;
         obj["productRank"]      = productRank;
-        obj["productRows1"]     = productRows1;
         obj["productExactUpTo"] = productExactUpTo;
         obj["productMissExponent"] = productMissExponent;
     }

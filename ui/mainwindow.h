@@ -73,17 +73,11 @@ private:
     // Настройки расчёта: из диалога, вместе с матрицами из редакторов.
     ComputationSettings m_settings;
     QDockWidget    *m_matrixDock       = nullptr;
-    // Обе матрицы — страницами одной панели; вкладки живут в заголовке
-    // панели, в одной строке с её кнопками. У произвольного кода страница
-    // одна и вкладок не видно; у кода произведения — две, «Матрица 1» и
-    // «Матрица 2», и на стыке вкладок кнопка «поменять местами».
-    class QTabBar*             m_matrixTabBar = nullptr;
-    class QStackedWidget*      m_matrixPages  = nullptr;
-    class FilterPlainTextEdit* m_matrix2PTE   = nullptr;
-    // Показать или спрятать вторую вкладку по алгоритму.
-    void updateMatrixTabs();
-    // Заголовок панели и вкладок: имя и размер.
+    // Заголовок панели матрицы: имя и размер, у кода-произведения — и
+    // найденные компоненты.
     void updateMatrixTitles();
+    // Две матрицы прежних версий — в одну матрицу произведения.
+    void migrateProductMatrices(class QSettings& s);
     QDockWidget    *m_spectrumDock     = nullptr;
     QDockWidget    *m_plotDock         = nullptr;
     QDockWidget    *m_statsDock        = nullptr;

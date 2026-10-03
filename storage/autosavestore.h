@@ -67,12 +67,15 @@ struct AutosaveRecord
     int     leonMissExponent = 0;
     quint64 leonTrials       = 0;
 
-    // Код произведения: матрица записи — обе компоненты подряд, первые
-    // productRows1 строк — первая. Спектр точен до productExactUpTo.
+    // Код произведения: матрица записи — само произведение G1 ⊗ G2. Спектр
+    // точен до productExactUpTo.
     int productWeight    = 0;
     int productRank      = 0;
-    int productRows1     = 0;
     int productExactUpTo = -1;
+    // Записи прежних версий хранили вместо произведения обе компоненты
+    // подряд: первые productRows1 строк — первая. Только читается — чтобы
+    // показать такую запись с матрицей произведения.
+    int productRows1     = 0;
     // Ноль — все компоненты сертифицированы; иначе хотя бы одна собрана
     // случайным поиском с вероятностью пропуска 10 в минус этой степени.
     int productMissExponent = 0;

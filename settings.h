@@ -55,10 +55,10 @@ enum UpdateInterval {
 
 struct ComputationSettings
 {
-    // Порождающая матрица кода
+    // Порождающая матрица кода. У кода-произведения — матрица самого
+    // произведения G1 ⊗ G2: компоненты расчёт восстанавливает из неё
+    // (Product::factor).
     QStringList matrix;
-    // Вторая компонента кода произведения; matrix — первая.
-    QStringList matrix2;
     // Тип используемого алгоритма (Простой XOR, Код Грея, Дуальный код,
     // Брауэр–Циммерман, случайный поиск по информационным множествам)
     enum Algorithm { SimpleXor = 0, GrayCode = 1, DualCode = 2, BrouwerZimmermann = 3,
@@ -140,8 +140,8 @@ struct ComputationSettings
     } intervals;
 
     // Копирование и перемещение — умолчательные, поле в поле. Самописный
-    // конструктор копирования пропускал matrix и matrix2: копия выходила без
-    // матриц, а fromJson держался только на NRVO. Новое поле в умолчательном
+    // конструктор копирования пропускал матрицы кода: копия выходила без
+    // них, а fromJson держался только на NRVO. Новое поле в умолчательном
     // копировании тоже не потеряется.
     ComputationSettings() noexcept = default;
 
@@ -154,12 +154,6 @@ struct ComputationSettings
                 arr.append(str);
             }
             obj["matrix"] = arr;
-        }
-        if (!matrix2.isEmpty()) {
-            QJsonArray arr;
-            for (const QString& str : matrix2)
-                arr.append(str);
-            obj["matrix2"] = arr;
         }
         obj["algorithmType"] = static_cast<int>(algorithm);
         obj["enumType"] = static_cast<int>(enumType);
@@ -210,10 +204,6 @@ struct ComputationSettings
             }
 
             s.matrix = list;
-        }
-        if (obj.contains("matrix2") && obj["matrix2"].isArray()) {
-            for (const QJsonValue& val : obj["matrix2"].toArray())
-                s.matrix2.append(val.toString());
         }
         s.algorithm = static_cast<Algorithm>(obj["algorithmType"].toInt());
         s.enumType = static_cast<EnumerationType>(obj["enumType"].toInt());

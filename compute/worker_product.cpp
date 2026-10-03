@@ -142,7 +142,6 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
 
     ComputationSettings cs = m_settings;
     cs.matrix        = rows;
-    cs.matrix2.clear();
     cs.algorithm = plan.algorithm;
     // Сдвиги — если компонента циклическая и способ расчёта их умеет:
     // стохастическому поиску хватает круга, Брауэру–Циммерману нужно ещё
@@ -196,8 +195,8 @@ Product::Component Worker::analyzeComponent(const QStringList& rows, int weightU
 // рангам. Отмена по ходу — исключение, как и ошибка компоненты.
 void Worker::computeProduct(const CodeGeometry& g)
 {
-    const QStringList& g1 = m_settings.matrix;
-    const QStringList& g2 = m_settings.matrix2;
+    const QStringList& g1 = g.productFirst;
+    const QStringList& g2 = g.productSecond;
     const int n1 = g1.first().length(), k1 = g1.size();
     const int n2 = g2.first().length(), k2 = g2.size();
     const int maxRank = std::max(1, std::min({ m_settings.productRank, 4, k1, k2 }));

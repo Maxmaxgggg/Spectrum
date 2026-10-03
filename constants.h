@@ -52,6 +52,8 @@ namespace SettingsKeys
     constexpr const char WINDOW_STATE[]             = "windowState";
     constexpr const char COMPUTATION_SETTINGS[]     = "computationSettings";
     constexpr const char CODE_MATRIX[]              = "matrix";
+    // Вторая матрица прежних версий (компонента кода-произведения). Только
+    // читается — один раз, чтобы свести компоненты в матрицу произведения.
     constexpr const char CODE_MATRIX2[]             = "matrix2";
     constexpr const char SPECTRUM_TEXT[]            = "spectrumText";
     constexpr const char SPECTRUM_VALUES[]          = "spectrumValues";
@@ -79,9 +81,6 @@ namespace DefaultValues
 
 namespace UiStrings
 {
-    // Вторая компонента кода произведения.
-    constexpr const char MATRIX2_TOOLTIP[]          = "Порождающая матрица второй компоненты кода-произведения; первая — в панели «Матрица»";
-
     constexpr const char PAUSE_TEXT[]               = "Пауза";
     constexpr const char CONTINUE_TEXT[]            = "Продолжить";
     constexpr const char START_TEXT[]               = "Старт";
@@ -104,7 +103,7 @@ namespace UiStrings
     constexpr const char SPECTRUM_TOOLTIP[]         = "Спектр кода: сколько кодовых слов приходится на каждый вес";
     constexpr const char PLOT_TOOLTIP[]             = "Тот же спектр столбчатой диаграммой";
     constexpr const char VIEW_RESET_TEXT[]          = "Раскладка по умолчанию";
-    constexpr const char MATRIX_TOOLTIP[]           = "Порождающая матрица кода";
+    constexpr const char MATRIX_TOOLTIP[]           = "Порождающая матрица кода; у кода-произведения — матрица самого произведения G1 ⊗ G2, компоненты программа найдёт сама";
     constexpr const char STATS_TOOLTIP[]            = "Чем считаем, сколько идёт и сколько сделано";
 
 }
